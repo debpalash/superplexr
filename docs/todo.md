@@ -111,6 +111,14 @@ not independently verified here.
 
 ---
 
+## Known defects
+
+- `daemon_registry_controls_and_retains_a_real_pty_session` is flaky: it
+  failed 1 run in 4 on an otherwise idle checkout, and reproduces without any
+  local change, so it predates the Fault work. It waits on text appearing in
+  a real PTY, so the race is most likely in the wait/echo timing rather than
+  the assertion. Worth fixing before it trains people to re-run the suite.
+
 ## Known environment issues
 
 - macOS TCC intermittently denies `getcwd` and file reads under

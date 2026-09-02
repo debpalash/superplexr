@@ -23,6 +23,13 @@
 const MAX_COMMAND_BYTES: usize = 4_096;
 /// Longest captured output retained per command block.
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
+/// Headroom above [`MAX_OUTPUT_BYTES`] before the buffer is trimmed back.
+///
+/// This runs once per byte of every terminal's output, so trimming to the cap
+/// on each byte would move the whole buffer per byte: quadratic, and enough to
+/// stall the session actor on a command that prints megabytes. Trimming in
+/// chunks keeps the amortised cost per byte constant.
+const OUTPUT_TRIM_CHUNK: usize = 16 * 1024;
 /// Longest OSC sequence tolerated before the parser gives up on it. It must
 /// comfortably exceed [`MAX_COMMAND_BYTES`], because termi9ne's own shell
 /// integration states the command inside a `C` mark: a cap below that would
@@ -217,7 +224,18 @@ impl CommandBlockTracker {
         }
     }
 
+    /// Drop the oldest output down to the cap. Called on chunk boundaries and
+    /// once more at finish, so the stored slice is exact.
+    fn trim_output(&mut self) {
+        if self.output.len() > MAX_OUTPUT_BYTES {
+            let excess = self.output.len() - MAX_OUTPUT_BYTES;
+            self.output.drain(..excess);
+            self.output_truncated = true;
+        }
+    }
+
     fn finish_block(&mut self, exit_code: Option<i32>) -> CommandBlock {
+        self.trim_output();
         let mut command = String::from_utf8_lossy(&std::mem::take(&mut self.command))
             .trim()
             .to_owned();
@@ -262,11 +280,9 @@ impl CommandBlockTracker {
                     return;
                 }
                 self.output.push(byte);
-                if self.output.len() > MAX_OUTPUT_BYTES {
+                if self.output.len() >= MAX_OUTPUT_BYTES + OUTPUT_TRIM_CHUNK {
                     // Keep the tail: the failing assertion is usually last.
-                    let excess = self.output.len() - MAX_OUTPUT_BYTES;
-                    self.output.drain(..excess);
-                    self.output_truncated = true;
+                    self.trim_output();
                 }
             }
         }
@@ -504,6 +520,36 @@ mod tests {
         assert!(block.output.ends_with("TAIL"), "the tail is kept");
         assert!(block.output.contains("earlier output omitted"));
         assert!(!block.output.contains("HEAD"), "the head is dropped first");
+    }
+
+    #[test]
+    fn high_volume_output_is_cheap_per_byte_and_bounded() {
+        // This tracker sees every byte of every terminal, so the cost per byte
+        // must stay near-constant. Trimming to the cap on each byte once full
+        // copies the whole buffer per byte: still linear, but with a ~64000x
+        // constant that stalls the session actor on a command printing
+        // megabytes. Measured: 8 MiB took 8.2 s that way, versus ~0.02 s here.
+        let mut tracker = CommandBlockTracker::new();
+        tracker.consume(&marks("A"));
+        tracker.consume(&marks("C;noisy"));
+        let chunk = vec![b'x'; 64 * 1024];
+        let started = std::time::Instant::now();
+        for _ in 0..128 {
+            tracker.consume(&chunk);
+            // Memory stays bounded no matter how much arrives.
+            assert!(tracker.output.len() < MAX_OUTPUT_BYTES + OUTPUT_TRIM_CHUNK + 1);
+        }
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_secs(3),
+            "8 MiB of output took {elapsed:?}; the trim is not amortised"
+        );
+
+        let blocks = tracker.consume(&marks("D;1"));
+        assert!(blocks[0].output.starts_with("… earlier output omitted …"));
+        assert!(blocks[0].output.len() <= MAX_OUTPUT_BYTES + 64);
+        assert!(blocks[0].output.len() >= MAX_OUTPUT_BYTES);
+        assert!(blocks[0].output.ends_with('x'));
     }
 
     #[test]
