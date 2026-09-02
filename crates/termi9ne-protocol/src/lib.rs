@@ -278,6 +278,12 @@ pub enum Request {
         fault_id: FaultId,
         note: String,
     },
+    /// Record which Run has been asked to fix a Fault.
+    AssignFaultFix {
+        fault_id: FaultId,
+        mission_id: MissionId,
+        run_id: RunId,
+    },
     /// Mint a time-bounded, scoped capability. The plaintext secret is returned
     /// once and only its digest is persisted.
     CreateShare {
@@ -860,6 +866,9 @@ pub struct FaultSummary {
     #[serde(default)]
     pub repro: Option<ReproReceipt>,
     pub repro_attempts: u32,
+    /// Run currently assigned to fix this Fault, when one has been launched.
+    #[serde(default)]
+    pub fix_run_id: Option<RunId>,
 }
 
 impl FaultSummary {
@@ -876,6 +885,35 @@ impl FaultSummary {
         self.repro
             .as_ref()
             .is_some_and(|receipt| !receipt.reproduced && receipt.error.is_none())
+    }
+
+    /// The objective handed to an actor asked to fix this Fault.
+    ///
+    /// Deliberately states the evidence and the acceptance test, and nothing
+    /// about how to fix it: the replay decides whether the work is done.
+    #[must_use]
+    pub fn fix_objective(&self) -> String {
+        use std::fmt::Write as _;
+        let mut objective = String::new();
+        let _ = writeln!(objective, "Fix this failure: {}", self.summary);
+        let _ = writeln!(objective, "command: {}", self.command);
+        let _ = writeln!(objective, "cwd: {}", self.cwd.display());
+        if let Some(exit_code) = self.exit_code {
+            let _ = writeln!(objective, "exit: {exit_code}");
+        }
+        if let Some(revision) = &self.revision {
+            let _ = writeln!(objective, "revision: {revision}");
+        }
+        let output = self.output.trim();
+        if !output.is_empty() {
+            let _ = writeln!(objective, "\nfailing output:\n{output}");
+        }
+        let _ = write!(
+            objective,
+            "\nDone means `{}` succeeds in that directory. It is verified by replay, not by claiming it.",
+            self.command
+        );
+        objective
     }
 }
 

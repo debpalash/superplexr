@@ -16,7 +16,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use termi9ne_core::{FaultId, MissionId, SessionId};
+use termi9ne_core::{FaultId, MissionId, RunId, SessionId};
 use termi9ne_protocol::{
     FaultInput, FaultSource, FaultState, FaultSummary, ReproReceipt,
 };
@@ -155,6 +155,7 @@ impl FaultStore {
             state: FaultState::Open,
             repro: None,
             repro_attempts: 0,
+            fix_run_id: None,
         };
         validate_summary(&fault)?;
         if self.faults.len() >= MAX_FAULTS {
@@ -212,6 +213,26 @@ impl FaultStore {
             output: truncate_output(&receipt.output),
             ..receipt
         });
+        let updated = fault.clone();
+        self.persist()?;
+        Ok(updated)
+    }
+
+    /// Record which Run has been asked to fix this Fault. Assigning a Run
+    /// makes no claim about the outcome; only a replay can do that.
+    pub(crate) fn assign_fix(
+        &mut self,
+        fault_id: FaultId,
+        run_id: RunId,
+    ) -> Result<FaultSummary, FaultError> {
+        let fault = self
+            .faults
+            .get_mut(&fault_id.to_string())
+            .ok_or(FaultError::Unknown(fault_id))?;
+        if !fault.is_open() {
+            return Err(FaultError::AlreadyClosed(fault_id));
+        }
+        fault.fix_run_id = Some(run_id);
         let updated = fault.clone();
         self.persist()?;
         Ok(updated)
@@ -531,6 +552,60 @@ mod tests {
             store.resolve(fault.fault_id, "trust me".to_owned()),
             Err(FaultError::Unproven(_))
         ));
+    }
+
+    #[test]
+    fn assigning_a_fix_run_records_it_without_claiming_success() {
+        let mut store = FaultStore::transient();
+        let fault = store
+            .report(input("cargo test"), FaultSource::OwnerHook)
+            .expect("fault");
+        assert!(fault.fix_run_id.is_none());
+
+        let run_id = RunId::new();
+        let assigned = store.assign_fix(fault.fault_id, run_id).expect("assign");
+        assert_eq!(assigned.fix_run_id, Some(run_id));
+        // Assignment is not evidence: the Fault stays open and unresolvable.
+        assert!(assigned.is_open());
+        assert!(matches!(
+            store.resolve(fault.fault_id, "the agent said so".to_owned()),
+            Err(FaultError::Unproven(_))
+        ));
+
+        // A second attempt replaces the first.
+        let retry = RunId::new();
+        assert_eq!(
+            store.assign_fix(fault.fault_id, retry).expect("reassign").fix_run_id,
+            Some(retry)
+        );
+
+        // A closed Fault takes no new assignment.
+        store
+            .dismiss(fault.fault_id, "not worth fixing".to_owned())
+            .expect("dismiss");
+        assert!(matches!(
+            store.assign_fix(fault.fault_id, RunId::new()),
+            Err(FaultError::AlreadyClosed(_))
+        ));
+        assert!(matches!(
+            store.assign_fix(FaultId::new(), RunId::new()),
+            Err(FaultError::Unknown(_))
+        ));
+    }
+
+    #[test]
+    fn the_fix_objective_states_the_evidence_and_the_acceptance_test() {
+        let mut store = FaultStore::transient();
+        let fault = store
+            .report(input("cargo test -p thing"), FaultSource::OwnerHook)
+            .expect("fault");
+        let objective = fault.fix_objective();
+        assert!(objective.contains("cargo test -p thing"));
+        assert!(objective.contains("/tmp"));
+        assert!(objective.contains("exit: 1"));
+        assert!(objective.contains("assertion failed"));
+        // The acceptance test is the replay, not the agent's own account.
+        assert!(objective.contains("verified by replay"));
     }
 
     #[test]

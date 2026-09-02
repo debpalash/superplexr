@@ -608,6 +608,25 @@ enum CliCommand {
         #[arg(long)]
         note: String,
     },
+    /// Hand a Fault to an agent: plan a Run with the Fault as its objective,
+    /// link the two, and launch it with the configured engine driver.
+    ///
+    /// The Run is asked to make the Fault's command succeed. Whether it did is
+    /// decided by `fault repro`, never by the agent's own account.
+    FaultFix {
+        fault_id: FaultId,
+        #[arg(long)]
+        mission_id: MissionId,
+        /// Configured engine driver to launch, for example `codex`.
+        #[arg(long)]
+        engine: String,
+        /// Actor name recorded for the Run.
+        #[arg(long, default_value = "fixer")]
+        actor: String,
+        /// Plan and link the Run without launching it.
+        #[arg(long)]
+        plan_only: bool,
+    },
     /// Print one Fault as a plain-text brief ready to hand to an agent.
     ///
     /// Emits the command, directory, revision, replay state, and failing
@@ -1217,6 +1236,23 @@ async fn main() -> Result<(), CliError> {
         CliCommand::ShellInit { shell, install } => {
             return run_shell_init(shell.as_deref(), install);
         }
+        CliCommand::FaultFix {
+            fault_id,
+            mission_id,
+            engine,
+            actor,
+            plan_only,
+        } => {
+            return run_fault_fix(
+                &socket,
+                share_token.clone(),
+                fault_id,
+                mission_id,
+                &engine,
+                &actor,
+                plan_only,
+            );
+        }
         CliCommand::PluginInstallAgentStatus {
             executable,
             plugin_dir,
@@ -1654,6 +1690,94 @@ fn change_claim_keys(
     paths
         .into_iter()
         .map(move |path| ChangeClaimKey { path, operation })
+}
+
+/// Hand a Fault to an agent Run.
+///
+/// Three steps, in order, so a failure never points at work that does not
+/// exist: read the Fault, plan a Run carrying its objective, link them, then
+/// launch the configured driver.
+fn run_fault_fix(
+    socket: &Path,
+    share_token: Option<String>,
+    fault_id: FaultId,
+    mission_id: MissionId,
+    engine: &str,
+    actor: &str,
+    plan_only: bool,
+) -> Result<(), CliError> {
+    let client = match share_token {
+        Some(token) => ControlClient::connect_with_share(socket, token)?,
+        None => ControlClient::connect(socket)?,
+    };
+    let fault = client
+        .fault(fault_id)
+        .map_err(|error| CliError::Usage(error.to_string()))?;
+    if !fault.is_open() {
+        return Err(CliError::Usage(format!(
+            "Fault {fault_id} is already closed"
+        )));
+    }
+
+    let run_id = RunId::new();
+    client
+        .dispatch(
+            mission_id,
+            Command::PlanRun {
+                run_id,
+                parent: None,
+                dependencies: Vec::new(),
+                retry_of: None,
+                actor: Actor::agent(actor, engine)?,
+                objective: fault.fix_objective(),
+                priority: RunPriority::Normal,
+            },
+        )
+        .map_err(|error| CliError::Usage(format!("could not plan the fix Run: {error}")))?;
+
+    let linked = client
+        .assign_fault_fix(fault_id, mission_id, run_id)
+        .map_err(|error| CliError::Usage(format!("could not link the Run: {error}")))?;
+    println!("planned Run {run_id} for Fault {fault_id}");
+
+    if plan_only {
+        println!("{}", serde_json::to_string_pretty(&linked)?);
+        return Ok(());
+    }
+
+    // The configured launch starts the Run itself; starting it here first
+    // would leave nothing pending for the driver to claim.
+    let launched = client
+        .launch_configured_agent_run(
+            mission_id,
+            run_id,
+            SessionId::new(),
+            format!("fix {}", short_command(&fault.command)),
+            fault.cwd.clone(),
+            GridSize::new(120, 36)?,
+        )
+        .map_err(|error| CliError::Usage(format!("could not launch the driver: {error}")))?;
+    let (_events, _mission, session) = launched;
+    println!("{}", serde_json::to_string_pretty(&session)?);
+    println!("When it reports done, verify with: termi9ne fault repro {fault_id}");
+    Ok(())
+}
+
+/// A short, readable stand-in for a command in a Session name.
+fn short_command(command: &str) -> String {
+    let first = command
+        .split_whitespace()
+        .take(3)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if first.len() <= 40 {
+        return first;
+    }
+    let mut end = 40;
+    while end > 0 && !first.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &first[..end])
 }
 
 /// Print the shell integration snippet, or install it into a startup file.
@@ -2785,6 +2909,9 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
         CliCommand::ShellInit { .. } => {
             unreachable!("shell integration is handled before connecting to the runtime")
         }
+        CliCommand::FaultFix { .. } => {
+            unreachable!("fault hand-off runs its own request sequence")
+        }
         CliCommand::PluginInstallAgentStatus { .. } => {
             unreachable!("plugin installation is handled before connecting to the runtime")
         }
@@ -2898,6 +3025,15 @@ mod tests {
     }
 
     #[test]
+    fn session_names_stay_short_without_splitting_characters() {
+        assert_eq!(short_command("cargo test -p thing --all"), "cargo test -p");
+        assert_eq!(short_command("ls"), "ls");
+        let wide = short_command(&"é".repeat(60));
+        assert!(wide.len() <= 44, "{}", wide.len());
+        assert!(wide.ends_with('…'));
+    }
+
+    #[test]
     fn fault_briefs_carry_replay_state_and_the_failing_output() {
         let fault_id = FaultId::new();
         let base = termi9ne_protocol::FaultSummary {
@@ -2917,6 +3053,7 @@ mod tests {
             state: termi9ne_protocol::FaultState::Open,
             repro: None,
             repro_attempts: 0,
+            fix_run_id: None,
         };
 
         let never = fault_brief(&base);

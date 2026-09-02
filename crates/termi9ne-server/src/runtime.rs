@@ -2416,6 +2416,23 @@ async fn handle_request_with_context(
             let fault = state.faults.lock().await.dismiss(fault_id, note)?;
             Ok(ResponseBody::FaultRecorded { fault })
         }
+        Request::AssignFaultFix {
+            fault_id,
+            mission_id,
+            run_id,
+        } => {
+            // The Run must exist before a Fault points at it, so a Fault can
+            // never reference work that was never planned.
+            let mission = state.store.lock().await.get(mission_id)?;
+            if !mission.runs.contains_key(&run_id) {
+                return Err(StoreError::Domain(
+                    termi9ne_core::DomainError::RunNotFound(run_id),
+                )
+                .into());
+            }
+            let fault = state.faults.lock().await.assign_fix(fault_id, run_id)?;
+            Ok(ResponseBody::FaultRecorded { fault })
+        }
         Request::ListRunEvidence { mission_id, run_id } => {
             let mission = state.store.lock().await.get(mission_id)?;
             if !mission.runs.contains_key(&run_id) {

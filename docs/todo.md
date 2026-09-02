@@ -30,10 +30,11 @@ Remaining:
       Needs Candidate patch history, not the Fault store.
 - [ ] **Flaky vs real** — re-run N× in isolated worktrees, classify, record
       the distribution rather than one verdict.
-- [ ] **Fault → Run** — launch a fix Run directly from a Fault with the
-      brief as its objective. **Next.**
+- [x] **Fault → Run** — `fault fix` plans a Run with the Fault as its
+      objective, links the two, and launches the configured engine driver;
+      verified that a Run claiming success still cannot close the Fault
 - [ ] **Regression guard** — re-replay resolved Faults on later revisions so
-      a reintroduced failure reopens itself.
+      a reintroduced failure reopens itself. **Next.**
 - [x] Shell integration installer (`termi9ne shell-init`) for zsh, bash and
       fish; verified end to end against a real interactive zsh
 - [ ] Mobile/web triage surface: read a Fault, replay, hand off. No terminal.

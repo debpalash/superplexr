@@ -430,6 +430,7 @@ mod tests {
             },
             repro: None,
             repro_attempts: 0,
+            fix_run_id: None,
         }
     }
 

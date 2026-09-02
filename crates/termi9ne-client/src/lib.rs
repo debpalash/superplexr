@@ -967,6 +967,23 @@ impl ControlClient {
         }
     }
 
+    /// Record which Run has been asked to fix a Fault.
+    pub fn assign_fault_fix(
+        &self,
+        fault_id: FaultId,
+        mission_id: MissionId,
+        run_id: termi9ne_core::RunId,
+    ) -> Result<FaultSummary, ClientError> {
+        match self.request(Request::AssignFaultFix {
+            fault_id,
+            mission_id,
+            run_id,
+        })? {
+            ResponseBody::FaultRecorded { fault } => Ok(fault),
+            body => Err(ClientError::UnexpectedResponse(Box::new(body))),
+        }
+    }
+
     /// Record one observed failure with the evidence needed to replay it.
     pub fn report_fault(&self, fault: FaultInput) -> Result<FaultSummary, ClientError> {
         match self.request(Request::ReportFault { fault })? {
