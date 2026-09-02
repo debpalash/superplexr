@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "drivers": {
+    "fixture-echo": {
+      "program": "/bin/echo",
+      "args": ["configured-driver"],
+      "append_objective": true,
+      "environment_delta": {
+        "T9_DRIVER_FIXTURE": "1"
+      }
+    }
+  }
+}

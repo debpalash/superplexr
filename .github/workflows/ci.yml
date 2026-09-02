@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-14
+    env:
+      GHOSTTY_SOURCE_DIR: ${{ runner.temp }}/ghostty-source
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install pinned Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+      - name: Provision pinned Ghostty source
+        run: |
+          curl --fail --location --proto '=https' --tlsv1.2 \
+            --output "$RUNNER_TEMP/ghostty.tar.gz" \
+            https://github.com/ghostty-org/ghostty/archive/22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018.tar.gz
+          echo "5fdb21d3744ce76dfaefb0e25fd113540906939752627a4193b88520e126c389  $RUNNER_TEMP/ghostty.tar.gz" \
+            | shasum -a 256 --check
+          mkdir "$GHOSTTY_SOURCE_DIR"
+          tar -xzf "$RUNNER_TEMP/ghostty.tar.gz" --strip-components=1 \
+            --directory "$GHOSTTY_SOURCE_DIR"
+      - name: Record toolchain
+        run: |
+          rustc --version
+          cargo --version
+          zig version
+      - name: Verify workspace
+        run: |
+          cargo fmt --all --check
+          ./ci/audit-normal-licenses.sh .
+          cargo test --workspace --locked
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo fetch --locked
+          cargo build --workspace --release --locked --offline
+          ./ci/package-smoke.sh .
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Verify in pinned Linux image
+        run: docker build --file ci/linux.Dockerfile --tag termi9ne-ci .

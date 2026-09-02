@@ -1,0 +1,150 @@
+# termi9ne source dependency lock
+# This file records non-registry sources whose identity is not fully described
+# by Cargo.lock. Update hashes and audit notes in the same change as a pin.
+
+format = 1
+verified_at = "2026-09-01"
+
+[[dependency]]
+name = "libghostty-rs"
+source = "https://github.com/Uzaaft/libghostty-rs"
+revision = "f4c72b931588cb3e53db0ea8470eaa1b2e5427d9"
+archive_sha256 = "7b10b8b2935f846a64150c0d0fc7bb0bc81e38a76f10bda25c767ce7d7ab5f7a"
+license = "MIT OR Apache-2.0"
+enabled_features = []
+audit = "accepted-m1-behind-owned-seam"
+notes = "Safe terminal and render-state wrappers adopted only behind termi9ne-terminal. All terminal objects are !Send and !Sync; the product adapter contains no unsafe code and copies callback/render data into owned Rust values."
+
+[[dependency]]
+name = "ghostty"
+source = "https://github.com/ghostty-org/ghostty"
+revision = "22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018"
+archive_sha256 = "5fdb21d3744ce76dfaefb0e25fd113540906939752627a4193b88520e126c389"
+license = "MIT"
+enabled_features = ["libghostty-vt", "static"]
+audit = "transitively-pinned-by-libghostty-rs"
+notes = "Public libghostty-vt only; no private application surface."
+
+[[dependency]]
+name = "gpui"
+source = "https://github.com/zed-industries/zed"
+revision = "bce0c5785bfd9172c939aca4083fd70bc4930927"
+archive_sha256 = "271e235389919045ef5bd4e12c7beed42fc30621054d918b3130d5907b8fa75a"
+license = "Apache-2.0; unapproved auxiliary crates replaced by local MIT OR Apache-2.0 compatibility seams"
+enabled_features = ["font-kit", "runtime_shaders", "wayland", "x11"]
+audit = "accepted-m1-behind-desktop-seam"
+notes = "Pre-1.0; GPUI types remain isolated in termi9ne-desktop. Upstream ztracing is GPL-3.0-or-later, while gpui_util and gpui_shared_string have no package license at this revision. Cargo patches all three names to independently implemented local compatibility crates. The CI license gate rejects remote resolution, undeclared licenses, and copyleft-only normal/build dependencies. macOS compiles Metal shaders at app startup so Command Line Tools-only development hosts can build."
+
+[[local_patch]]
+name = "gpui_shared_string"
+path = "crates/gpui-shared-string-compat"
+replaces = "https://github.com/zed-industries/zed@bce0c5785bfd9172c939aca4083fd70bc4930927/crates/gpui_shared_string"
+license = "MIT OR Apache-2.0"
+rationale = "The upstream package declares no license. This independent implementation supplies the immutable shared-string interface used by GPUI."
+verification = "unit equality/hash contract; macOS and Linux GPUI compile/test/package matrix"
+
+[[local_patch]]
+name = "gpui_util"
+path = "crates/gpui-util-compat"
+replaces = "https://github.com/zed-industries/zed@bce0c5785bfd9172c939aca4083fd70bc4930927/crates/gpui_util"
+license = "MIT OR Apache-2.0"
+rationale = "The upstream package declares no license. This independent implementation supplies the bounded utility interfaces used by the selected GPUI closure."
+verification = "unit guard/result contracts; macOS and Linux GPUI compile/test/package matrix"
+
+[[local_patch]]
+name = "ztracing"
+path = "crates/ztracing-compat"
+replaces = "https://github.com/zed-industries/zed@bce0c5785bfd9172c939aca4083fd70bc4930927/crates/ztracing"
+license = "MIT OR Apache-2.0"
+rationale = "The upstream package is GPL-3.0-or-later. The selected GPUI closure only consumes the instrument attribute, independently supplied by re-exporting tracing::instrument."
+verification = "Cargo inverse-tree source assertion; macOS and Linux GPUI compile/test/package matrix"
+
+[[dependency]]
+name = "zed-font-kit"
+source = "https://github.com/zed-industries/font-kit"
+revision = "94b0f28166665e8fd2f53ff6d268a14955c82269"
+archive_sha256 = "902a9466b39fdcaa4a428b487474c4107028cbc92a8d2eee281193879f25f7a0"
+license = "MIT OR Apache-2.0"
+enabled_features = []
+audit = "gpui-transitive-pin"
+notes = "Font discovery backend selected by GPUI font-kit."
+
+[[dependency]]
+name = "zed-scap"
+source = "https://github.com/zed-industries/scap"
+revision = "4afea48c3b002197176fb19cd0f9b180dd36eaac"
+archive_sha256 = "48f60b164435404d1389a090f7a2d06e43acc87c1abba3799109d20f171e7e1d"
+license = "MIT"
+enabled_features = []
+audit = "gpui-transitive-pin"
+notes = "Target-conditional GPUI source present in Cargo.lock; screen capture is not enabled by termi9ne."
+
+[[dependency]]
+name = "wasm_thread"
+source = "https://github.com/zed-industries/wasm_thread"
+revision = "0cf96c7708dfb97ccf3da50347e25edcf75d6937"
+archive_sha256 = "4dc9b3324038ed7f761f8b32811c27eb8e5234a940fa741a6d5214eb88a7abb6"
+license = "Apache-2.0 OR MIT"
+enabled_features = []
+audit = "gpui-transitive-pin"
+notes = "Target-conditional GPUI source present in Cargo.lock; not linked on macOS or Linux."
+
+[[dependency]]
+name = "xim-rs"
+source = "https://github.com/zed-industries/xim-rs"
+revision = "16f35a2c881b815a2b6cdfd6687988e84f8447d8"
+archive_sha256 = "a1a2163b226b6103e1ac39932832439ae7003c1e7bd559ce63dc50b6d68610cc"
+license = "MIT"
+enabled_features = []
+audit = "gpui-transitive-pin"
+notes = "Linux XIM support used by the GPUI X11 backend."
+
+[[dependency]]
+name = "proptest"
+source = "https://github.com/proptest-rs/proptest"
+revision = "3dca198a8fef1b32e3a66f1e1897c955b4dc5b5b"
+archive_sha256 = "bbcee5bc92378ea21fe35392841b372f505e0cb444a1bbaa79647bbf849cd019"
+license = "MIT OR Apache-2.0"
+enabled_features = []
+audit = "test-only-transitive-pin"
+notes = "Pulled only by GPUI test-support for the 200% custom-element paint smoke test; absent from release artifacts."
+
+[[tool]]
+name = "rust"
+version = "1.97.1"
+purpose = "Workspace compiler; matches the toolchain required by the pinned GPUI revision."
+
+[[tool]]
+name = "zig"
+version = "0.16.0"
+purpose = "Build the pinned vendored libghostty-vt static archive."
+
+[[tool]]
+name = "linuxdeploy"
+version = "1-alpha-20251107-1"
+source = "https://github.com/linuxdeploy/linuxdeploy"
+revision = "cc7b86472c3caa3fd729b9dc502fd2aa78394257"
+artifact_sha256_aarch64 = "620095110d693282b8ebeb244a95b5e911cf8f65f76c88b4b47d16ae6346fcff"
+artifact_sha256_x86_64 = "c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d"
+license = "MIT"
+purpose = "Discover and bundle Linux shared-library dependencies into the AppDir."
+
+[[tool]]
+name = "appimagetool"
+version = "1.9.1"
+source = "https://github.com/AppImage/appimagetool"
+revision = "8c8c91f762b412a19f4e8d2c4b35afb98f2d7c81"
+artifact_sha256_aarch64 = "f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158"
+artifact_sha256_x86_64 = "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+license = "MIT"
+purpose = "Turn the dependency-complete AppDir into an AppImage without network access."
+
+[[tool]]
+name = "AppImage type-2 runtime"
+version = "20251108"
+source = "https://github.com/AppImage/type2-runtime"
+revision = "dd6cebedcbddde9c82f89b011e8e1d40b6e43868"
+artifact_sha256_aarch64 = "00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444"
+artifact_sha256_x86_64 = "2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d"
+license = "MIT"
+purpose = "Pinned executable runtime embedded in Linux AppImage artifacts."

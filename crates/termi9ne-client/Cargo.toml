@@ -1,0 +1,16 @@
+[package]
+name = "termi9ne-client"
+description = "Blocking local daemon client for native termi9ne frontends"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+termi9ne-core = { path = "../termi9ne-core" }
+termi9ne-protocol = { path = "../termi9ne-protocol" }
+termi9ne-terminal = { path = "../termi9ne-terminal" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

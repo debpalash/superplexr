@@ -1,0 +1,6 @@
+#!/bin/sh
+set -eu
+
+appdir=${APPDIR:-$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)}
+export PATH="$appdir/usr/bin:$PATH"
+exec "$appdir/usr/bin/termi9ne-desktop" "$@"

@@ -1,0 +1,29 @@
+# termi9ne's packaged Ghostty-compatible terminal description.
+#
+# The base capabilities are resolved by `tic` at package time, producing a
+# self-contained compiled entry. Extended capabilities cover the features the
+# libghostty-vt adapter and input encoder expose to modern applications.
+xterm-ghostty|ghostty|Ghostty-compatible terminal for termi9ne,
+	AX,
+	Su,
+	Tc,
+	RGB,
+	fullkbd,
+	colors#256,
+	pairs#32767,
+	BD=\E[?2004l,
+	BE=\E[?2004h,
+	E3=\E[3J,
+	Ms=\E]52;%p1%s;%p2%s\007,
+	PE=\E[201~,
+	PS=\E[200~,
+	Setulc=\E[58\:2\:\:%p1%{65536}%/%d\:%p1%{256}%/%{255}%&%d\:%p1%{255}%&%d%;m,
+	Smulx=\E[4\:%p1%dm,
+	Sync=\E[?2026%?%p1%{1}%-%tl%eh%;,
+	fd=\E[?1004l,
+	fe=\E[?1004h,
+	rmxx=\E[29m,
+	setrgbb=\E[48\:2\:%p1%d\:%p2%d\:%p3%dm,
+	setrgbf=\E[38\:2\:%p1%d\:%p2%d\:%p3%dm,
+	smxx=\E[9m,
+	use=xterm-256color,

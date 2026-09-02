@@ -1,0 +1,8 @@
+/target/
+/dist/
+/.termi9ne/
+/.termi9ne-dev/
+/.DS_Store
+*.swp
+*.swo
+*.profraw

@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "name": "Control room",
+  "colors": {
+    "deck": "#10151B",
+    "panel": "#19212A",
+    "active": "#24303C",
+    "hairline": "#334252",
+    "chalk": "#E8EDF2",
+    "trace": "#8795A5",
+    "relay": "#79A7D3",
+    "signal": "#D8A85B",
+    "success": "#7DB58B",
+    "fault": "#D7776B"
+  },
+  "fonts": {
+    "product": "Familjen Grotesk",
+    "terminal": "Iosevka Term"
+  }
+}

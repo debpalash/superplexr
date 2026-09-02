@@ -1,0 +1,14 @@
+[package]
+name = "termi9ne-runtime"
+description = "Durable PTY session actors for the termi9ne runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+libc.workspace = true
+portable-pty.workspace = true
+thiserror.workspace = true
+termi9ne-core = { path = "../termi9ne-core" }
+termi9ne-terminal = { path = "../termi9ne-terminal" }

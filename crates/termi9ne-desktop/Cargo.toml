@@ -1,0 +1,33 @@
+[package]
+name = "termi9ne-desktop"
+description = "Native GPUI desktop for termi9ne"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+clap.workspace = true
+gpui = { workspace = true, features = ["profiler"] }
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sysinfo.workspace = true
+termi9ne-client = { path = "../termi9ne-client" }
+termi9ne-core = { path = "../termi9ne-core" }
+termi9ne-protocol = { path = "../termi9ne-protocol" }
+termi9ne-server = { path = "../termi9ne-server" }
+termi9ne-terminal = { path = "../termi9ne-terminal" }
+tokio.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui_apple = { workspace = true, features = ["runtime_shaders"] }
+gpui_platform = { workspace = true, features = ["font-kit"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_platform = { workspace = true, features = ["wayland", "x11"] }
