@@ -31,11 +31,11 @@ Remaining:
 - [ ] **Flaky vs real** — re-run N× in isolated worktrees, classify, record
       the distribution rather than one verdict.
 - [ ] **Fault → Run** — launch a fix Run directly from a Fault with the
-      brief as its objective.
+      brief as its objective. **Next.**
 - [ ] **Regression guard** — re-replay resolved Faults on later revisions so
       a reintroduced failure reopens itself.
-- [ ] Shell integration installer (`termi9ne shell-init`) so OSC 133 marks
-      are emitted without hand-written `printf`.
+- [x] Shell integration installer (`termi9ne shell-init`) for zsh, bash and
+      fish; verified end to end against a real interactive zsh
 - [ ] Mobile/web triage surface: read a Fault, replay, hand off. No terminal.
 
 ---

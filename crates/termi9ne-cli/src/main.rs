@@ -1,3 +1,4 @@
+mod shell_init;
 mod ssh_tunnel;
 
 use std::{
@@ -531,6 +532,19 @@ enum CliCommand {
     /// List current derived activity for every Run in one Mission.
     ProviderList {
         mission_id: MissionId,
+    },
+    /// Print or install shell integration so failing commands become Faults.
+    ///
+    /// Without it termi9ne only sees whole sessions fail; with it, each
+    /// command's exit status is reported. Add `eval "$(termi9ne shell-init)"`
+    /// to your shell startup file, or pass --install to do it for you.
+    ShellInit {
+        /// Shell to emit integration for. Detected from $SHELL when absent.
+        #[arg(long)]
+        shell: Option<String>,
+        /// Write the snippet into the shell's startup file instead of stdout.
+        #[arg(long)]
+        install: bool,
     },
     /// Record one observed failure with the evidence needed to replay it.
     ///
@@ -1200,6 +1214,9 @@ async fn main() -> Result<(), CliError> {
             )
             .await;
         }
+        CliCommand::ShellInit { shell, install } => {
+            return run_shell_init(shell.as_deref(), install);
+        }
         CliCommand::PluginInstallAgentStatus {
             executable,
             plugin_dir,
@@ -1637,6 +1654,64 @@ fn change_claim_keys(
     paths
         .into_iter()
         .map(move |path| ChangeClaimKey { path, operation })
+}
+
+/// Print the shell integration snippet, or install it into a startup file.
+fn run_shell_init(shell: Option<&str>, install: bool) -> Result<(), CliError> {
+    let shell = match shell {
+        Some(name) => name.parse::<shell_init::Shell>().map_err(CliError::Usage)?,
+        None => shell_init::Shell::detect(std::env::var("SHELL").ok().as_deref()),
+    };
+    if !install {
+        print!("{}", shell_init::snippet(shell));
+        return Ok(());
+    }
+
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| CliError::Usage("HOME is not set".to_owned()))?;
+    let path = home.join(shell.startup_file());
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(existing) => existing,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(CliError::Usage(format!(
+                "could not read {}: {error}",
+                path.display()
+            )));
+        }
+    };
+    let (updated, outcome) = shell_init::install_into(&existing, shell);
+    match outcome {
+        shell_init::InstallOutcome::Unchanged => {
+            println!("{} already up to date", path.display());
+            return Ok(());
+        }
+        shell_init::InstallOutcome::Added | shell_init::InstallOutcome::Updated => {}
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            CliError::Usage(format!("could not create {}: {error}", parent.display()))
+        })?;
+    }
+    // Write through a temporary file so an interrupted install cannot leave a
+    // startup file truncated.
+    let temporary = path.with_extension("termi9ne-tmp");
+    std::fs::write(&temporary, updated.as_bytes()).map_err(|error| {
+        CliError::Usage(format!("could not write {}: {error}", temporary.display()))
+    })?;
+    std::fs::rename(&temporary, &path).map_err(|error| {
+        let _ = std::fs::remove_file(&temporary);
+        CliError::Usage(format!("could not update {}: {error}", path.display()))
+    })?;
+    let verb = if outcome == shell_init::InstallOutcome::Added {
+        "installed into"
+    } else {
+        "updated in"
+    };
+    println!("{shell} integration {verb} {}", path.display());
+    println!("Open a new terminal, or source that file, to start reporting failures.");
+    Ok(())
 }
 
 fn into_request(command: CliCommand) -> Result<Request, CliError> {
@@ -2707,6 +2782,9 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
         CliCommand::List => Request::ListMissions,
         CliCommand::Status => Request::RuntimeDiagnostics,
         CliCommand::PluginList => Request::ListPlugins,
+        CliCommand::ShellInit { .. } => {
+            unreachable!("shell integration is handled before connecting to the runtime")
+        }
         CliCommand::PluginInstallAgentStatus { .. } => {
             unreachable!("plugin installation is handled before connecting to the runtime")
         }

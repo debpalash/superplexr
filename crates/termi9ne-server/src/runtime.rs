@@ -3827,11 +3827,17 @@ async fn compensate_failed_launch(
 }
 
 fn start_terminal(
-    spec: TerminalSessionSpec,
+    mut spec: TerminalSessionSpec,
     client_id: uuid::Uuid,
     surface_id: Option<uuid::Uuid>,
     state: &Arc<AppState>,
 ) -> Result<ResponseBody, RequestError> {
+    // Shell integration keys off this: it stays inert in terminals termi9ne
+    // does not own, so a person's shell behaves normally elsewhere.
+    spec.environment_delta.insert(
+        "TERMI9NE_SESSION".to_owned(),
+        Some(spec.session_id.to_string()),
+    );
     {
         let terminals = state
             .terminals

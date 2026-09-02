@@ -13,6 +13,9 @@
 //! - `OSC 133 ; A ST` — prompt start
 //! - `OSC 133 ; B ST` — command start (typed input begins)
 //! - `OSC 133 ; C ST` — command executed (output begins)
+//!   `OSC 133 ; C ; <command> ST` — termi9ne's own integration also states the
+//!   command here, because the echoed line is rewritten by tab completion and
+//!   line editing and is therefore not reliably replayable.
 //! - `OSC 133 ; D [; exit] ST` — command finished
 
 /// Longest command line retained. Longer input is truncated rather than
@@ -20,8 +23,11 @@
 const MAX_COMMAND_BYTES: usize = 4_096;
 /// Longest captured output retained per command block.
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
-/// Longest OSC sequence tolerated before the parser gives up on it.
-const MAX_SEQUENCE_BYTES: usize = 1_024;
+/// Longest OSC sequence tolerated before the parser gives up on it. It must
+/// comfortably exceed [`MAX_COMMAND_BYTES`], because termi9ne's own shell
+/// integration states the command inside a `C` mark: a cap below that would
+/// silently drop long commands instead of truncating them.
+const MAX_SEQUENCE_BYTES: usize = 2 * MAX_COMMAND_BYTES;
 
 /// One completed shell command observed through OSC 133 marks.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -178,6 +184,16 @@ impl CommandBlockTracker {
                 self.reset_buffers();
             }
             Some("C") => {
+                // Everything after `C;` is the command verbatim, including any
+                // semicolons it contains, so shell syntax survives intact.
+                if let Some(stated) = parts.next().map(str::trim).filter(|c| !c.is_empty()) {
+                    self.command = stated.as_bytes().to_vec();
+                    self.command_truncated = false;
+                    if self.command.len() > MAX_COMMAND_BYTES {
+                        self.command.truncate(MAX_COMMAND_BYTES);
+                        self.command_truncated = true;
+                    }
+                }
                 self.phase = Phase::ReadingOutput;
                 self.output.clear();
                 self.output_truncated = false;
@@ -307,6 +323,72 @@ mod tests {
         assert_eq!(block.exit_code, Some(101));
         assert_eq!(block.output, "assertion failed");
         assert!(block.failed());
+    }
+
+    #[test]
+    fn a_stated_command_beats_the_echoed_line() {
+        let mut tracker = CommandBlockTracker::new();
+        tracker.consume(&marks("A"));
+        // The echo is garbled the way tab completion garbles it.
+        tracker.consume(&marks("B"));
+        tracker.consume(b"car\x08\x08rgo te");
+        // The shell states what it is really about to run.
+        tracker.consume(&marks("C;cargo test -p thing"));
+        tracker.consume(b"boom\n");
+        let blocks = tracker.consume(&marks("D;101"));
+        assert_eq!(blocks[0].command, "cargo test -p thing");
+        assert_eq!(blocks[0].output, "boom");
+    }
+
+    #[test]
+    fn a_stated_command_keeps_its_own_semicolons() {
+        let mut tracker = CommandBlockTracker::new();
+        tracker.consume(&marks("A"));
+        tracker.consume(&marks("C;cd /tmp; ls -l | grep x"));
+        let blocks = tracker.consume(&marks("D;2"));
+        assert_eq!(blocks[0].command, "cd /tmp; ls -l | grep x");
+        assert_eq!(blocks[0].exit_code, Some(2));
+    }
+
+    #[test]
+    fn a_stated_command_works_without_a_start_mark() {
+        // termi9ne's integration emits A, then C with the command; there is
+        // no B, because the command is stated rather than read from the echo.
+        let mut tracker = CommandBlockTracker::new();
+        tracker.consume(&marks("A"));
+        tracker.consume(&marks("C;false"));
+        let blocks = tracker.consume(&marks("D;1"));
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].command, "false");
+        assert!(blocks[0].failed());
+    }
+
+    #[test]
+    fn a_long_stated_command_is_delivered_whole_then_truncated() {
+        // A command at the cap arrives intact: the sequence budget is larger
+        // than the command budget precisely so this cannot be dropped.
+        let mut tracker = CommandBlockTracker::new();
+        tracker.consume(&marks("A"));
+        tracker.consume(&marks(&format!("C;{}", "x".repeat(MAX_COMMAND_BYTES))));
+        let blocks = tracker.consume(&marks("D;1"));
+        assert_eq!(blocks[0].command.len(), MAX_COMMAND_BYTES);
+        assert!(!blocks[0].command.ends_with('…'));
+
+        // Beyond the cap it is truncated rather than lost.
+        tracker.consume(&marks("A"));
+        tracker.consume(&marks(&format!(
+            "C;{}",
+            "y".repeat(MAX_COMMAND_BYTES + 500)
+        )));
+        let blocks = tracker.consume(&marks("D;1"));
+        assert_eq!(blocks[0].command.len(), MAX_COMMAND_BYTES + '…'.len_utf8());
+        assert!(blocks[0].command.ends_with('…'));
+
+        // A sequence beyond the parser's budget is abandoned entirely, which
+        // is the documented limit rather than a silent half-record.
+        tracker.consume(&marks("A"));
+        tracker.consume(&marks(&format!("C;{}", "z".repeat(MAX_SEQUENCE_BYTES * 2))));
+        assert!(tracker.consume(&marks("D;1")).is_empty());
     }
 
     #[test]
