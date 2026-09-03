@@ -1,0 +1,12 @@
+# Build the Zig VT library optimized even in dev builds.
+#
+# Its build script defaults to Zig `Debug` whenever cargo sets DEBUG=true, which
+# is every `cargo run` and `cargo test`. That parser sees every byte of every
+# terminal, and unoptimized it manages well under 1 MiB/s: fast-scrolling output
+# outruns the session actor, and rebuilding a screen from a journal at daemon
+# startup takes minutes.
+#
+# Only the vendored Zig is affected. This project's own crates keep the dev
+# profile's opt-level and stay debuggable.
+[env]
+LIBGHOSTTY_VT_SYS_OPTIMIZE = "ReleaseFast"

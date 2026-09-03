@@ -18,7 +18,7 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc::{Receiver, Sender},
+        mpsc::{Receiver, RecvTimeoutError, Sender},
     },
     thread,
     time::{Duration, Instant},
@@ -47,6 +47,29 @@ use termi9ne_terminal::{
 use thiserror::Error;
 use uuid::Uuid;
 
+/// How long a client waits for a daemon response before giving up.
+///
+/// This wait used to be unbounded. A daemon busy in a long startup replay left
+/// every caller parked forever, and because the desktop issues some requests
+/// from its main thread, a slow daemon presented as a permanently frozen app
+/// with no way back. A timeout turns that into a reportable error.
+const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Ceiling for replaying a Fault, which runs a real command.
+///
+/// The daemon caps the replay itself at 900 seconds; this leaves headroom above
+/// that so the daemon's own bounded answer arrives before the client stops
+/// waiting for it.
+const REPRODUCE_FAULT_TIMEOUT: Duration = Duration::from_secs(960);
+
+/// How long this request may take before the wait is treated as a failure.
+fn request_timeout(request: &Request) -> Duration {
+    match request {
+        Request::ReproduceFault { .. } => REPRODUCE_FAULT_TIMEOUT,
+        _ => DEFAULT_REQUEST_TIMEOUT,
+    }
+}
+
 const DAEMON_START_TIMEOUT: Duration = Duration::from_secs(5);
 const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
@@ -72,6 +95,8 @@ pub enum ClientError {
     DaemonStartTimeout,
     #[error("control connection lock was poisoned")]
     ControlPoisoned,
+    #[error("daemon did not answer within {timeout:?}")]
+    RequestTimeout { timeout: Duration },
 }
 
 struct MultiplexedWire {
@@ -176,10 +201,22 @@ impl MultiplexedWire {
             }
             return Err(ProtocolError::from(error).into());
         }
-        receive
-            .recv()
-            .map_err(|_| disconnected_error("daemon response dispatcher stopped"))?
-            .map_err(|message| disconnected_error(&message))
+        let timeout = request_timeout(&request.action);
+        match receive.recv_timeout(timeout) {
+            Ok(response) => response.map_err(|message| disconnected_error(&message)),
+            Err(RecvTimeoutError::Disconnected) => {
+                Err(disconnected_error("daemon response dispatcher stopped"))
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                // Drop the slot, or a late reply would sit in the map forever.
+                // The connection is left open: the daemon is slow, not broken,
+                // and the next request may well succeed.
+                if let Ok(mut pending) = self.pending.lock() {
+                    pending.remove(&request.request_id);
+                }
+                Err(ClientError::RequestTimeout { timeout })
+            }
+        }
     }
 
     fn subscribe(

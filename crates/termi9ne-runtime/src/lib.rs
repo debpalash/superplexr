@@ -39,6 +39,51 @@ const EXIT_DRAIN_TIMEOUT: Duration = Duration::from_millis(500);
 const HUP_GRACE: Duration = Duration::from_secs(2);
 const TERM_GRACE: Duration = Duration::from_secs(3);
 
+/// Bounds on the size of one session's output journal.
+///
+/// The journal was previously append-only and unbounded: a long-lived session
+/// running a repainting TUI produced 600 MB files, and recovery then had to
+/// parse a suffix of that back on daemon startup.
+#[derive(Clone, Copy, Debug)]
+pub struct JournalLimits {
+    /// Size at which the journal is compacted.
+    high_water: u64,
+    /// Bytes kept when compacting.
+    ///
+    /// Only the tail matters: a terminal screen is reconstructed from a suffix
+    /// of its output because applications repaint, so older bytes cannot affect
+    /// the final screen once enough newer output has scrolled past. It must stay
+    /// at or above the largest scrollback window the server replays, or history
+    /// requests would be starved immediately after a compaction.
+    low_water: u64,
+}
+
+impl JournalLimits {
+    /// The shipped bounds. Compaction copies the low water mark once per
+    /// (high - low) bytes written, so the gap sets the write amplification.
+    pub const DEFAULT: Self = Self {
+        high_water: 48 * 1024 * 1024,
+        low_water: 12 * 1024 * 1024,
+    };
+}
+
+impl JournalLimits {
+    /// Bytes guaranteed to remain after a compaction.
+    ///
+    /// The server replays a suffix of the journal to answer scrollback requests,
+    /// and must not ask for more than compaction is guaranteed to leave behind.
+    #[must_use]
+    pub const fn retained_bytes(self) -> u64 {
+        self.low_water
+    }
+}
+
+impl Default for JournalLimits {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
 /// Complete process configuration validated before a PTY child is started.
 #[derive(Clone, Debug)]
 pub struct SessionSpec {
@@ -185,7 +230,7 @@ impl SessionHandle {
     /// Spawn the configured process and actor. Success means the child, PTY,
     /// journal, and canonical terminal model are all ready.
     pub fn spawn(spec: SessionSpec, state_dir: impl AsRef<Path>) -> Result<Self, RuntimeError> {
-        Self::spawn_internal(spec, state_dir.as_ref(), None)
+        Self::spawn_internal(spec, state_dir.as_ref(), None, JournalLimits::DEFAULT)
     }
 
     /// Spawn with an observer installed before the child can publish output or
@@ -194,8 +239,20 @@ impl SessionHandle {
         spec: SessionSpec,
         state_dir: impl AsRef<Path>,
     ) -> Result<(Self, Receiver<SessionEvent>), RuntimeError> {
+        Self::spawn_subscribed_with_limits(spec, state_dir, JournalLimits::DEFAULT)
+    }
+
+    /// As [`Self::spawn_subscribed`], with explicit journal bounds.
+    ///
+    /// Tests use this to exercise compaction without writing tens of megabytes
+    /// through a real PTY.
+    pub fn spawn_subscribed_with_limits(
+        spec: SessionSpec,
+        state_dir: impl AsRef<Path>,
+        limits: JournalLimits,
+    ) -> Result<(Self, Receiver<SessionEvent>), RuntimeError> {
         let (send, receive) = mpsc::sync_channel(SUBSCRIBER_CAPACITY);
-        let handle = Self::spawn_internal(spec, state_dir.as_ref(), Some(send))?;
+        let handle = Self::spawn_internal(spec, state_dir.as_ref(), Some(send), limits)?;
         Ok((handle, receive))
     }
 
@@ -203,6 +260,7 @@ impl SessionHandle {
         spec: SessionSpec,
         state_dir: &Path,
         initial_subscriber: Option<SyncSender<SessionEvent>>,
+        limits: JournalLimits,
     ) -> Result<Self, RuntimeError> {
         spec.validate()?;
         let id = spec.id;
@@ -222,6 +280,7 @@ impl SessionHandle {
                     actor_commands,
                     startup_send.clone(),
                     initial_subscriber,
+                    limits,
                 ) {
                     let _ = startup_send.send(Err(error));
                 }
@@ -390,6 +449,49 @@ struct Startup {
     tty_name: Option<PathBuf>,
 }
 
+/// Replace the journal with its most recent `low_water` bytes.
+///
+/// Returns the new size. The writer is rebound to the compacted file, so the
+/// caller keeps appending to the same path.
+///
+/// The kept tail can begin mid-escape-sequence. That is already true of every
+/// recovery, which seeks into the middle of the file, and a terminal resynchronises
+/// on the next complete sequence.
+fn compact_journal(
+    journal: &mut BufWriter<fs::File>,
+    path: &Path,
+    low_water: u64,
+) -> Result<u64, std::io::Error> {
+    use std::io::{Seek, SeekFrom};
+
+    journal.flush()?;
+    let mut source = fs::File::open(path)?;
+    let length = source.metadata()?.len();
+    let keep = length.min(low_water);
+    source.seek(SeekFrom::Start(length - keep))?;
+    let mut tail = Vec::with_capacity(usize::try_from(keep).unwrap_or(usize::MAX));
+    source.read_to_end(&mut tail)?;
+
+    // Write the tail beside the journal and rename over it, so a crash midway
+    // leaves the previous journal intact rather than a half-written one.
+    let temporary = path.with_extension("raw.compact");
+    let mut replacement = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    replacement.write_all(&tail)?;
+    replacement.sync_all()?;
+    drop(replacement);
+    fs::rename(&temporary, path)?;
+
+    let reopened = OpenOptions::new().append(true).mode(0o600).open(path)?;
+    reopened.set_permissions(fs::Permissions::from_mode(0o600))?;
+    *journal = BufWriter::new(reopened);
+    Ok(tail.len() as u64)
+}
+
 fn run_session_actor(
     spec: SessionSpec,
     session_dir: PathBuf,
@@ -397,15 +499,18 @@ fn run_session_actor(
     commands: Receiver<ActorMessage>,
     startup: SyncSender<Result<Startup, RuntimeError>>,
     initial_subscriber: Option<SyncSender<SessionEvent>>,
+    limits: JournalLimits,
 ) -> Result<(), RuntimeError> {
     fs::create_dir_all(&session_dir)?;
     fs::set_permissions(&session_dir, fs::Permissions::from_mode(0o700))?;
+    let journal_file_path = session_dir.join("output.raw");
     let journal = OpenOptions::new()
         .create(true)
         .append(true)
         .mode(0o600)
-        .open(session_dir.join("output.raw"))?;
+        .open(&journal_file_path)?;
     journal.set_permissions(fs::Permissions::from_mode(0o600))?;
+    let mut journal_bytes = journal.metadata()?.len();
     let mut journal = BufWriter::new(journal);
     let mut model = TerminalModel::new(spec.grid)?;
     let pty_system = native_pty_system();
@@ -507,7 +612,13 @@ fn run_session_actor(
             Ok(ActorMessage::PtyOutput(bytes)) => {
                 last_output = Instant::now();
                 journal.write_all(&bytes)?;
+                journal_bytes = journal_bytes.saturating_add(bytes.len() as u64);
                 journal_dirty = true;
+                if journal_bytes >= limits.high_water {
+                    journal_bytes =
+                        compact_journal(&mut journal, &journal_file_path, limits.low_water)?;
+                    journal_dirty = false;
+                }
                 for block in command_blocks.consume(&bytes) {
                     broadcast(&mut subscribers, SessionEvent::CommandFinished(block));
                 }
@@ -1170,5 +1281,108 @@ mod tests {
             "40 paced writes must be coalesced instead of producing one frame each; got {frames} frames"
         );
         fs::remove_dir_all(&root).expect("test state should be removable");
+    }
+}
+
+#[cfg(test)]
+mod journal_bounds_tests {
+    use super::*;
+
+    /// A session that prints steadily must not grow an unbounded journal.
+    ///
+    /// Before compaction existed, real sessions reached 600 MB, and daemon
+    /// startup then had to parse a suffix of that back to rebuild the screen.
+    /// Small limits are injected so this exercises the actor's compaction path
+    /// without pushing tens of megabytes through a real PTY.
+    #[test]
+    fn a_noisy_session_journal_stays_bounded() {
+        let root = std::env::temp_dir().join(format!("termi9ne-journal-cap-{}", SessionId::new()));
+        let limits = JournalLimits {
+            high_water: 256 * 1024,
+            low_water: 64 * 1024,
+        };
+        let line = "x".repeat(1_024);
+        // Comfortably past the high water mark, so compaction must run repeatedly.
+        let lines = (limits.high_water * 8) / 1_024;
+        let script =
+            format!("i=0; while [ $i -lt {lines} ]; do printf '%s\\n' '{line}'; i=$((i+1)); done");
+        let spec = SessionSpec {
+            id: SessionId::new(),
+            program: PathBuf::from("/bin/sh"),
+            args: vec!["-c".to_owned(), script],
+            cwd: std::env::current_dir().expect("test working directory should exist"),
+            environment_delta: BTreeMap::new(),
+            grid: GridSize::new(80, 24).expect("grid should be valid"),
+        };
+        let (handle, events) = SessionHandle::spawn_subscribed_with_limits(spec, &root, limits)
+            .expect("noisy session should start");
+        for event in events {
+            if matches!(
+                event,
+                SessionEvent::Exited { .. } | SessionEvent::Failed { .. }
+            ) {
+                break;
+            }
+        }
+        let size = std::fs::metadata(handle.journal_path())
+            .expect("journal should exist")
+            .len();
+        assert!(
+            size <= limits.high_water + limits.low_water,
+            "journal reached {size} bytes after {} bytes of output; compaction is not \
+             keeping it bounded",
+            limits.high_water * 8
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Compaction must keep the newest bytes: those are the ones that rebuild
+    /// the screen, and the writer must stay pointed at the compacted file.
+    #[test]
+    fn compaction_keeps_the_tail_and_the_writer_stays_usable() {
+        let root = std::env::temp_dir().join(format!("termi9ne-journal-tail-{}", SessionId::new()));
+        std::fs::create_dir_all(&root).expect("test root should be creatable");
+        let path = root.join("output.raw");
+        let low_water = 64 * 1024;
+        std::fs::write(&path, vec![b'A'; low_water as usize * 2])
+            .expect("journal should be writable");
+        let mut journal = BufWriter::new(
+            OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .expect("journal should reopen"),
+        );
+        journal.write_all(b"TAIL").expect("tail should append");
+
+        let kept =
+            compact_journal(&mut journal, &path, low_water).expect("compaction should succeed");
+        assert_eq!(kept, low_water, "compaction should keep the low water mark");
+        let compacted = std::fs::read(&path).expect("compacted journal should be readable");
+        assert!(
+            compacted.ends_with(b"TAIL"),
+            "compaction dropped the newest bytes, which are the ones that rebuild the screen"
+        );
+
+        journal
+            .write_all(b"MORE")
+            .expect("appending after compaction should work");
+        journal.flush().expect("flush should succeed");
+        let after = std::fs::read(&path).expect("journal should still be readable");
+        assert!(
+            after.ends_with(b"TAILMORE"),
+            "writer was not rebound to the compacted file"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Compaction must leave a usable journal behind.
+    #[test]
+    fn compaction_leaves_a_smaller_journal_than_it_started_with() {
+        let limits = JournalLimits::DEFAULT;
+        assert!(
+            limits.high_water > limits.low_water,
+            "compaction must shrink the journal"
+        );
+        assert_eq!(limits.retained_bytes(), limits.low_water);
     }
 }

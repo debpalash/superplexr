@@ -113,11 +113,14 @@ not independently verified here.
 
 ## Known defects
 
-- `daemon_registry_controls_and_retains_a_real_pty_session` is flaky: it
-  failed 1 run in 4 on an otherwise idle checkout, and reproduces without any
-  local change, so it predates the Fault work. It waits on text appearing in
-  a real PTY, so the race is most likely in the wait/echo timing rather than
-  the assertion. Worth fixing before it trains people to re-run the suite.
+None open.
+
+Fixed 2026-09-03: `daemon_registry_controls_and_retains_a_real_pty_session`
+was flaky at roughly 1 run in 4. The cause was the vendored Zig VT library
+being built unoptimized in every dev build, which made the parser 5000x
+slower than it should be; the test waits on text appearing through a real
+PTY and kept missing its window. It now passes 24 runs out of 24 and
+finishes in 0.2s. See "parser build mode" below.
 
 ## Known environment issues
 
@@ -130,3 +133,11 @@ not independently verified here.
   `rm -rf target/debug/incremental/<crate>-*`. Or give each session its own
   `CARGO_TARGET_DIR`.
 - Daemon socket and state-dir paths must be short (`SUN_LEN`), e.g. `/tmp/t9`.
+- Parser build mode: `libghostty-vt-sys` builds its Zig source in `Debug`
+  whenever cargo sets `DEBUG=true`, so every `cargo run` and `cargo test` got
+  an unoptimized VT parser at well under 1 MiB/s instead of over 400 MiB/s.
+  `.cargo/config.toml` pins `LIBGHOSTTY_VT_SYS_OPTIMIZE=ReleaseFast`, and
+  `crates/termi9ne-terminal/tests/parser_throughput.rs` fails if that is lost.
+- Long-running dev sessions leave orphaned `--internal-daemon` processes and
+  their state directories behind. Each retains terminal journals, so
+  `.termi9ne-dev/` grows without anything reclaiming it.

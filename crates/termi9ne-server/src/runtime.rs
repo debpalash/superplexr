@@ -2739,7 +2739,7 @@ async fn handle_request_with_context(
             terminal_record(state, session_id)?;
             let state_dir = state.terminal_state_dir.clone();
             let frame = tokio::task::spawn_blocking(move || {
-                replay_terminal_model(&state_dir, session_id)?
+                replay_terminal_model(&state_dir, session_id, ReplayBudget::HISTORY)?
                     .frame_at_history_viewport(viewport)
                     .map_err(RequestError::from)
             })
@@ -2833,7 +2833,7 @@ async fn handle_request_with_context(
                 | Err(RequestError::Runtime(RuntimeError::ActorStopped)) => {
                     let state_dir = state.terminal_state_dir.clone();
                     tokio::task::spawn_blocking(move || {
-                        replay_terminal_model(&state_dir, session_id)?
+                        replay_terminal_model(&state_dir, session_id, ReplayBudget::HISTORY)?
                             .search(&query, case_sensitive, limit)
                             .map_err(RequestError::from)
                     })
@@ -3929,11 +3929,60 @@ fn start_terminal(
     Ok(ResponseBody::TerminalStarted { terminal: summary })
 }
 
-const RECOVERY_REPLAY_BYTES: u64 = 64 * 1024 * 1024;
+/// Journal suffix replayed when rebuilding a dead terminal's last screen at
+/// daemon startup.
+///
+/// This used to be 64 MiB, which assumed replay was fast. It is not: escape-dense
+/// output (a repainting TUI) parses at roughly a third of a megabyte per second,
+/// so 64 MiB is about three minutes *per session*. Recovery runs before the daemon
+/// serves anything, so a handful of such sessions made the daemon — and every
+/// client waiting on it — unresponsive for minutes.
+///
+/// A screen only needs a short suffix, because applications repaint.
+const RECOVERY_REPLAY_BYTES: u64 = 1024 * 1024;
+
+/// Journal suffix replayed for an explicit scrollback request.
+///
+/// Larger than recovery: the person asked for history and is waiting on that one
+/// answer, off the async path, rather than on daemon startup.
+const HISTORY_REPLAY_BYTES: u64 = 8 * 1024 * 1024;
+
+/// How much work one journal replay may spend.
+///
+/// Both limits are needed. A byte cap alone cannot bound replay time, because
+/// cost per byte varies by two orders of magnitude with escape density; a
+/// deadline alone would make the recovered screen depend on machine load.
+#[derive(Clone, Copy, Debug)]
+struct ReplayBudget {
+    bytes: u64,
+    deadline: Duration,
+}
+
+impl ReplayBudget {
+    /// Rebuilding a dead terminal's last screen during daemon startup.
+    const RECOVERY: Self = Self {
+        bytes: RECOVERY_REPLAY_BYTES,
+        deadline: Duration::from_secs(1),
+    };
+
+    /// Answering an explicit scrollback or search request.
+    const HISTORY: Self = Self {
+        bytes: HISTORY_REPLAY_BYTES,
+        deadline: Duration::from_secs(10),
+    };
+}
+
+/// Scrollback requests get a larger window than startup recovery: a person is
+/// waiting on that one answer, rather than on the daemon becoming able to serve.
+const _: () = {
+    assert!(ReplayBudget::HISTORY.bytes > ReplayBudget::RECOVERY.bytes);
+    assert!(HISTORY_REPLAY_BYTES <= termi9ne_runtime::JournalLimits::DEFAULT.retained_bytes());
+};
 
 fn replay_terminal_model(
     state_dir: &std::path::Path,
     session_id: SessionId,
+    budget: ReplayBudget,
 ) -> Result<TerminalModel, RequestError> {
     let directory = state_dir.join("sessions").join(session_id.to_string());
     let metadata_path = directory.join("terminal.json");
@@ -3955,17 +4004,23 @@ fn replay_terminal_model(
     }
     let mut journal = std::fs::File::open(journal_path)?;
     let length = journal.metadata()?.len();
-    if length > RECOVERY_REPLAY_BYTES {
-        journal.seek(SeekFrom::Start(length - RECOVERY_REPLAY_BYTES))?;
+    if length > budget.bytes {
+        journal.seek(SeekFrom::Start(length - budget.bytes))?;
     }
     let mut model = TerminalModel::new(spec.grid)?;
     let mut buffer = [0_u8; 64 * 1024];
+    let started = Instant::now();
     loop {
         let read = journal.read(&mut buffer)?;
         if read == 0 {
             break;
         }
         model.advance(TerminalAction::Output(&buffer[..read]))?;
+        if started.elapsed() >= budget.deadline {
+            // Stop with the screen as of here. Stale, but real, and the caller
+            // is either daemon startup or a person waiting on one answer.
+            break;
+        }
     }
     Ok(model)
 }
@@ -4046,7 +4101,7 @@ fn recover_terminal_history(
             .into());
         }
         let spec: TerminalSessionSpec = serde_json::from_slice(&std::fs::read(&metadata_path)?)?;
-        let mut model = replay_terminal_model(state_dir, spec.session_id)?;
+        let mut model = replay_terminal_model(state_dir, spec.session_id, ReplayBudget::RECOVERY)?;
         let frame = model.frame()?;
         let summary = TerminalSessionSummary {
             session_id: spec.session_id,
@@ -5121,6 +5176,66 @@ mod tests {
     use termi9ne_protocol::{SchedulerPolicy, SchedulerSettings, TerminalSessionSpec};
     use termi9ne_terminal::{GridSize, SelectionPoint};
     use uuid::Uuid;
+
+    /// Startup recovery must not depend on how large a session's journal grew.
+    ///
+    /// A 600 MB journal of escape-dense output once took minutes to replay, and
+    /// recovery runs before the daemon serves anything, so every client waiting
+    /// on it appeared frozen. Both the byte window and the deadline are needed:
+    /// cost per byte varies by two orders of magnitude with escape density.
+    #[test]
+    fn recovery_replay_is_bounded_in_both_bytes_and_time() {
+        let root = std::env::temp_dir().join(format!("termi9ne-replay-cap-{}", SessionId::new()));
+        let session_id = SessionId::new();
+        let directory = root.join("sessions").join(session_id.to_string());
+        std::fs::create_dir_all(&directory).expect("session directory should be creatable");
+
+        let spec = TerminalSessionSpec {
+            session_id,
+            mission_id: None,
+            run_id: None,
+            program: std::path::PathBuf::from("/bin/sh"),
+            args: Vec::new(),
+            cwd: std::env::current_dir().expect("working directory should exist"),
+            environment_delta: BTreeMap::new(),
+            grid: GridSize::new(80, 24).expect("grid should be valid"),
+        };
+        std::fs::write(
+            directory.join("terminal.json"),
+            serde_json::to_vec(&spec).expect("spec should serialize"),
+        )
+        .expect("metadata should be writable");
+
+        // A journal far larger than the recovery window, ending in a line that
+        // must survive: recovery replays the tail, never the head.
+        let mut journal = vec![b'.'; usize::try_from(RECOVERY_REPLAY_BYTES).expect("fits") * 4];
+        journal.extend_from_slice(b"\r\nTAILMARKER\r\n");
+        std::fs::write(directory.join("output.raw"), &journal)
+            .expect("journal should be writable");
+
+        let started = Instant::now();
+        let mut model = replay_terminal_model(&root, session_id, ReplayBudget::RECOVERY)
+            .expect("recovery should rebuild a screen");
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < ReplayBudget::RECOVERY.deadline * 3,
+            "recovering a {} byte journal took {elapsed:?}; the replay window is not bounded",
+            journal.len()
+        );
+        let frame = model.frame().expect("recovered screen should render");
+        let text = frame
+            .rows
+            .iter()
+            .map(|row| row.text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("TAILMARKER"),
+            "recovery replayed the wrong end of the journal; the last screen is the tail"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn foreground_process_names_are_bounded_to_the_executable() {
