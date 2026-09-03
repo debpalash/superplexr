@@ -125,10 +125,17 @@ finishes in 0.2s. See "parser build mode" below.
 
 ## Known environment issues
 
-- macOS TCC intermittently denies `getcwd` and file reads under
-  `~/Desktop`, which makes `cargo` fail with
-  `Could not locate working directory`. Grant Full Disk Access to the
-  hosting terminal app, or move the repo outside `~/Desktop`.
+- macOS TCC denies the terminal app (Ghostty here) access to `~/Desktop`,
+  so every process it spawns gets `Operation not permitted` on the repo and
+  `cargo` dies before the app starts:
+  `Could not locate working directory: Operation not permitted (os error 1)`.
+  This is what "the app doesn't run" was on 2026-09-03, after two rounds of
+  real fixes to the app itself. The grant is per folder and a dismissed
+  prompt means denied, so it flips mid-session. Do not keep the repo under
+  `~/Desktop`, `~/Documents` or `~/Downloads`; `~/src/termi9ne` never hits
+  this. If the Desktop copy must be used: System Settings → Privacy &
+  Security → Files and Folders → Ghostty → Desktop Folder, then restart
+  Ghostty.
 - Concurrent agent sessions sharing `target/` can corrupt incremental
   artifacts (`Undefined symbols` at link time). Fix:
   `rm -rf target/debug/incremental/<crate>-*`. Or give each session its own
