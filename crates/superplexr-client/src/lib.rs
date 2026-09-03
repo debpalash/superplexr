@@ -24,7 +24,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use superplexr_core::{Actor, Command, Event, FaultId, Mission, MissionId, SchedulerPlan, SessionId};
+use superplexr_core::{
+    Actor, Command, Event, FaultId, Mission, MissionId, SchedulerPlan, SessionId,
+};
 use superplexr_protocol::{
     ClientRequest, ConfiguredAgentLaunchPreview, FaultInput, FaultSummary, MissionEvent,
     MissionHistoryEntry, MissionSummary, PROTOCOL_VERSION, PluginRuntimeSummary, ProtocolError,

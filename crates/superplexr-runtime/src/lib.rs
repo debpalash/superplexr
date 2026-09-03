@@ -1296,7 +1296,8 @@ mod journal_bounds_tests {
     /// without pushing tens of megabytes through a real PTY.
     #[test]
     fn a_noisy_session_journal_stays_bounded() {
-        let root = std::env::temp_dir().join(format!("superplexr-journal-cap-{}", SessionId::new()));
+        let root =
+            std::env::temp_dir().join(format!("superplexr-journal-cap-{}", SessionId::new()));
         let limits = JournalLimits {
             high_water: 256 * 1024,
             low_water: 64 * 1024,
@@ -1340,7 +1341,8 @@ mod journal_bounds_tests {
     /// the screen, and the writer must stay pointed at the compacted file.
     #[test]
     fn compaction_keeps_the_tail_and_the_writer_stays_usable() {
-        let root = std::env::temp_dir().join(format!("superplexr-journal-tail-{}", SessionId::new()));
+        let root =
+            std::env::temp_dir().join(format!("superplexr-journal-tail-{}", SessionId::new()));
         std::fs::create_dir_all(&root).expect("test root should be creatable");
         let path = root.join("output.raw");
         let low_water = 64 * 1024;

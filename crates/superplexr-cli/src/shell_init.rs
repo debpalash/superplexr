@@ -329,7 +329,10 @@ mod tests {
         );
         let (updated, outcome) = install_into(&legacy, Shell::Zsh);
         assert_eq!(outcome, InstallOutcome::Updated);
-        assert!(!updated.contains(LEGACY_BEGIN_MARKER), "the old block must go");
+        assert!(
+            !updated.contains(LEGACY_BEGIN_MARKER),
+            "the old block must go"
+        );
         assert!(!updated.contains("TERMI9NE_SESSION"));
         assert_eq!(updated.matches(BEGIN_MARKER).count(), 1);
         assert!(updated.starts_with("alias a=b\n"));

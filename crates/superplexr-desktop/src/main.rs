@@ -1845,7 +1845,9 @@ impl SuperplexrDesktop {
                                 superplexr_protocol::SessionGroupEvent::GroupChanged { group } => {
                                     desktop.apply_session_group(group);
                                 }
-                                superplexr_protocol::SessionGroupEvent::GroupDeleted { group_id } => {
+                                superplexr_protocol::SessionGroupEvent::GroupDeleted {
+                                    group_id,
+                                } => {
                                     desktop
                                         .detached_groups
                                         .retain(|group| group.group_id != group_id);
@@ -2319,7 +2321,8 @@ impl SuperplexrDesktop {
                                 changed = true;
                             }
                         }
-                        if !represented && mission.status == superplexr_core::MissionStatus::Active {
+                        if !represented && mission.status == superplexr_core::MissionStatus::Active
+                        {
                             let title = mission.intent.clone();
                             let content = desktop.workspace_view_for_mission(mission.clone());
                             desktop.workspaces.add_background(title, content);
@@ -7406,7 +7409,10 @@ mod tests {
     #[test]
     fn workspaces_are_numbered_among_open_tabs_not_by_a_global_counter() {
         assert_eq!(next_workspace_sequence([], Some("superplexr")), 1);
-        assert_eq!(next_workspace_sequence(["superplexr"], Some("superplexr")), 2);
+        assert_eq!(
+            next_workspace_sequence(["superplexr"], Some("superplexr")),
+            2
+        );
         assert_eq!(
             next_workspace_sequence(["superplexr", "superplexr 2", "notes"], Some("superplexr")),
             3

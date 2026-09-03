@@ -181,8 +181,10 @@ mod tests {
     use super::*;
 
     fn temp_root(name: &str) -> PathBuf {
-        let root =
-            std::env::temp_dir().join(format!("superplexr-worktree-{name}-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "superplexr-worktree-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
         fs::create_dir_all(&root).expect("test root should be creatable");
         root
     }

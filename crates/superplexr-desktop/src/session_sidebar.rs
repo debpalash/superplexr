@@ -1143,7 +1143,9 @@ impl SuperplexrDesktop {
             }
             match self.surface_statuses.get(surface_index) {
                 Some(superplexr_protocol::TerminalSessionStatus::Running) => SessionStatus::Idle,
-                Some(superplexr_protocol::TerminalSessionStatus::Failed) => SessionStatus::Terminated,
+                Some(superplexr_protocol::TerminalSessionStatus::Failed) => {
+                    SessionStatus::Terminated
+                }
                 Some(superplexr_protocol::TerminalSessionStatus::Exited) | None => {
                     SessionStatus::Closed
                 }
@@ -2885,7 +2887,10 @@ mod tests {
                 // The runtime reports where it started: repo and branch.
                 desktop.surface_cwds[surface_index] = Some(repo.clone());
                 let session = desktop.workspace().sessions[0].clone();
-                assert_eq!(desktop.session_display_title(&session, cx), "superplexr@main");
+                assert_eq!(
+                    desktop.session_display_title(&session, cx),
+                    "superplexr@main"
+                );
                 assert_eq!(
                     desktop
                         .session_worktree(&session, cx)

@@ -25,7 +25,9 @@ use superplexr_protocol::{
     TerminalWaitCondition, default_socket_path,
     wire_v3::{AsyncWireReader, AsyncWireWriter, FrameKind, Hello, client_handshake},
 };
-use superplexr_terminal::{GridSize, HistoryViewport, SelectionPoint, TerminalError, ViewportScroll};
+use superplexr_terminal::{
+    GridSize, HistoryViewport, SelectionPoint, TerminalError, ViewportScroll,
+};
 use thiserror::Error;
 use tokio::{io::BufReader, net::UnixStream};
 use uuid::Uuid;
