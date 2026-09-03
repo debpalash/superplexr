@@ -7657,6 +7657,8 @@ mod tests {
             }),
             repro_attempts: 1,
             fix_run_id: None,
+            proof: None,
+            regressions: 0,
         };
         let closed = FaultSummary {
             fault_id: termi9ne_core::FaultId::new(),

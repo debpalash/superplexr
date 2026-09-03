@@ -278,6 +278,19 @@ pub enum Request {
         fault_id: FaultId,
         note: String,
     },
+    /// Re-run the replay of Faults that were resolved, and reopen any that
+    /// fail again. This executes their recorded commands.
+    ///
+    /// A Fault that closes only on a passing replay is worth little if it can
+    /// come back unnoticed; this is what makes resolution stay true.
+    GuardFaults {
+        /// Most Faults to check in one pass, oldest proof first.
+        #[serde(default)]
+        limit: Option<u16>,
+        /// Abort each replay after this many seconds.
+        #[serde(default)]
+        timeout_seconds: Option<u16>,
+    },
     /// Record which Run has been asked to fix a Fault.
     AssignFaultFix {
         fault_id: FaultId,
@@ -869,6 +882,19 @@ pub struct FaultSummary {
     /// Run currently assigned to fix this Fault, when one has been launched.
     #[serde(default)]
     pub fix_run_id: Option<RunId>,
+    /// The replay that proved this Fault fixed, kept when it was resolved.
+    ///
+    /// `repro` holds the most recent attempt and is overwritten by the
+    /// regression guard, so without this the evidence that closed the Fault
+    /// would be lost exactly when a regression makes it interesting.
+    #[serde(default)]
+    pub proof: Option<ReproReceipt>,
+    /// Times this Fault was resolved and later failed again.
+    ///
+    /// A failure that keeps coming back is a different problem from one that
+    /// happened once, and only a count distinguishes them.
+    #[serde(default)]
+    pub regressions: u32,
 }
 
 impl FaultSummary {
@@ -1044,6 +1070,13 @@ pub enum ResponseBody {
     },
     Faults {
         faults: Vec<FaultSummary>,
+    },
+    /// Outcome of one regression-guard pass.
+    FaultsGuarded {
+        /// Every Fault whose replay was re-run.
+        checked: Vec<FaultId>,
+        /// Those that failed again and are open once more.
+        reopened: Vec<FaultSummary>,
     },
     ShareCreated {
         share: ShareSummary,

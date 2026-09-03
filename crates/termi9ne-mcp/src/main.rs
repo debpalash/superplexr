@@ -37,6 +37,11 @@ trait FaultBackend {
         fault_id: FaultId,
         timeout_seconds: Option<u16>,
     ) -> Result<FaultSummary, String>;
+    fn guard(
+        &self,
+        limit: Option<u16>,
+        timeout_seconds: Option<u16>,
+    ) -> Result<(Vec<FaultId>, Vec<FaultSummary>), String>;
     fn resolve(&self, fault_id: FaultId, note: String) -> Result<FaultSummary, String>;
     fn dismiss(&self, fault_id: FaultId, note: String) -> Result<FaultSummary, String>;
     fn report(&self, fault: FaultInput) -> Result<FaultSummary, String>;
@@ -64,6 +69,16 @@ impl FaultBackend for ControlBackend {
     ) -> Result<FaultSummary, String> {
         self.client
             .reproduce_fault(fault_id, timeout_seconds)
+            .map_err(|error| error.to_string())
+    }
+
+    fn guard(
+        &self,
+        limit: Option<u16>,
+        timeout_seconds: Option<u16>,
+    ) -> Result<(Vec<FaultId>, Vec<FaultSummary>), String> {
+        self.client
+            .guard_faults(limit, timeout_seconds)
             .map_err(|error| error.to_string())
     }
 
@@ -203,6 +218,17 @@ fn tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "fault_guard",
+            "description": "Re-run the replay of Faults that were previously resolved and reopen any that fail again. Runs their recorded commands. Use this after changing code to check that nothing you fixed has come back.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200},
+                    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 900}
+                }
+            }
+        }),
+        json!({
             "name": "fault_resolve",
             "description": "Close a Fault as fixed. Refused unless its latest replay passed, so run fault_repro first.",
             "inputSchema": {
@@ -301,6 +327,22 @@ fn run_tool(backend: &impl FaultBackend, name: &str, arguments: &Value) -> Resul
             Ok(json!({
                 "fault": fault,
                 "still_fails": !fault.repro_passes(),
+            }))
+        }
+        "fault_guard" => {
+            let limit = arguments
+                .get("limit")
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok());
+            let timeout_seconds = arguments
+                .get("timeout_seconds")
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok());
+            let (checked, reopened) = backend.guard(limit, timeout_seconds)?;
+            Ok(json!({
+                "checked": checked.len(),
+                "regressed": reopened.len(),
+                "reopened": reopened,
             }))
         }
         "fault_resolve" => {
@@ -431,6 +473,8 @@ mod tests {
             repro: None,
             repro_attempts: 0,
             fix_run_id: None,
+            proof: None,
+            regressions: 0,
         }
     }
 
@@ -461,6 +505,38 @@ mod tests {
                 .find(|fault| fault.fault_id == fault_id)
                 .cloned()
                 .ok_or_else(|| format!("no Fault {fault_id}"))
+        }
+
+        fn guard(
+            &self,
+            limit: Option<u16>,
+            timeout_seconds: Option<u16>,
+        ) -> Result<(Vec<FaultId>, Vec<FaultSummary>), String> {
+            self.calls
+                .borrow_mut()
+                .push(format!("guard:{limit:?}:{timeout_seconds:?}"));
+            if let Some(error) = &self.fail_with {
+                return Err(error.clone());
+            }
+            // Stand in for a regression: every closed Fault fails again.
+            let reopened = self
+                .faults
+                .iter()
+                .filter(|fault| !fault.is_open())
+                .cloned()
+                .map(|mut fault| {
+                    fault.state = termi9ne_protocol::FaultState::Open;
+                    fault.regressions = 1;
+                    fault
+                })
+                .collect::<Vec<_>>();
+            let checked = self
+                .faults
+                .iter()
+                .filter(|fault| !fault.is_open())
+                .map(|fault| fault.fault_id)
+                .collect();
+            Ok((checked, reopened))
         }
 
         fn reproduce(
@@ -529,6 +605,47 @@ mod tests {
             .to_owned()
     }
 
+    /// The guard tool reports what came back, so an agent can act on it.
+    #[test]
+    fn the_guard_tool_reports_which_faults_regressed() {
+        let closed = sample(false);
+        let backend = FakeBackend {
+            faults: vec![closed.clone()],
+            ..FakeBackend::default()
+        };
+
+        let line = json!({
+            "jsonrpc": "2.0",
+            "id": 9,
+            "method": "tools/call",
+            "params": {
+                "name": "fault_guard",
+                "arguments": {"limit": 5, "timeout_seconds": 30}
+            }
+        })
+        .to_string();
+        let response: Value =
+            serde_json::from_str(&handle_line(&backend, &line).expect("response")).unwrap();
+        let payload: Value = serde_json::from_str(
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .expect("tool result text"),
+        )
+        .expect("tool result should be JSON");
+
+        assert_eq!(payload["checked"], json!(1));
+        assert_eq!(payload["regressed"], json!(1));
+        assert_eq!(
+            payload["reopened"][0]["fault_id"],
+            json!(closed.fault_id.to_string())
+        );
+        assert_eq!(
+            backend.calls.borrow().as_slice(),
+            ["guard:Some(5):Some(30)"],
+            "the tool must pass the caller's bounds through"
+        );
+    }
+
     #[test]
     fn initialize_and_tools_list_describe_only_fault_operations() {
         let backend = FakeBackend::default();
@@ -553,6 +670,7 @@ mod tests {
                 "fault_list",
                 "fault_show",
                 "fault_repro",
+                "fault_guard",
                 "fault_resolve",
                 "fault_dismiss",
                 "fault_report"

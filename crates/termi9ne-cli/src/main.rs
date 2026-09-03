@@ -596,6 +596,18 @@ enum CliCommand {
         #[arg(long)]
         timeout_seconds: Option<u16>,
     },
+    /// Re-run the replay of resolved Faults and reopen any that fail again.
+    ///
+    /// Runs their recorded commands. This is what keeps a resolution true: a
+    /// Fault that closed on a passing replay is worth little if it can come
+    /// back unnoticed.
+    FaultGuard {
+        /// Most Faults to check in one pass, oldest proof first.
+        #[arg(long)]
+        limit: Option<u16>,
+        #[arg(long)]
+        timeout_seconds: Option<u16>,
+    },
     /// Close a Fault as fixed. Refused unless its latest replay passed.
     FaultResolve {
         fault_id: FaultId,
@@ -2520,6 +2532,13 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
             fault_id,
             timeout_seconds,
         },
+        CliCommand::FaultGuard {
+            limit,
+            timeout_seconds,
+        } => Request::GuardFaults {
+            limit,
+            timeout_seconds,
+        },
         CliCommand::FaultResolve { fault_id, note } => Request::ResolveFault { fault_id, note },
         CliCommand::FaultDismiss { fault_id, note } => Request::DismissFault { fault_id, note },
         CliCommand::EvidenceCheck {
@@ -3064,6 +3083,8 @@ mod tests {
             repro: None,
             repro_attempts: 0,
             fix_run_id: None,
+            proof: None,
+            regressions: 0,
         };
 
         let never = fault_brief(&base);

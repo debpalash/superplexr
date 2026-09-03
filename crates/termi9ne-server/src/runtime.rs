@@ -2408,6 +2408,36 @@ async fn handle_request_with_context(
             let fault = state.faults.lock().await.record_repro(fault_id, receipt)?;
             Ok(ResponseBody::FaultRecorded { fault })
         }
+        Request::GuardFaults {
+            limit,
+            timeout_seconds,
+        } => {
+            // Candidates are chosen under the lock, then replayed without it:
+            // each one runs a real command and may take seconds.
+            let candidates = state
+                .faults
+                .lock()
+                .await
+                .guard_candidates(usize::from(limit.unwrap_or(DEFAULT_GUARD_LIMIT)).min(
+                    usize::from(MAX_GUARD_LIMIT),
+                ));
+            let mut checked = Vec::with_capacity(candidates.len());
+            let mut reopened = Vec::new();
+            for fault in candidates {
+                let fault_id = fault.fault_id;
+                let receipt = reproduce_fault(&fault, timeout_seconds).await;
+                let (updated, regressed) = state
+                    .faults
+                    .lock()
+                    .await
+                    .record_guard_replay(fault_id, receipt)?;
+                checked.push(fault_id);
+                if regressed {
+                    reopened.push(updated);
+                }
+            }
+            Ok(ResponseBody::FaultsGuarded { checked, reopened })
+        }
         Request::ResolveFault { fault_id, note } => {
             let fault = state.faults.lock().await.resolve(fault_id, note)?;
             Ok(ResponseBody::FaultRecorded { fault })
@@ -4457,6 +4487,15 @@ const MAX_REPRO_TIMEOUT_SECONDS: u16 = 900;
 /// Replay a Fault's exact command in its recorded directory and report what
 /// happened. A replay that cannot run at all is recorded as an error, never as
 /// a pass: only a command that actually ran and succeeded clears a Fault.
+/// Resolved Faults re-checked in one guard pass when the caller names no limit.
+///
+/// Each check runs a real command, so a pass is deliberately a bounded slice of
+/// the resolved set rather than all of it. Oldest proof first means the least
+/// recently confirmed Faults come round again first.
+const DEFAULT_GUARD_LIMIT: u16 = 20;
+/// Ceiling on one guard pass, whatever the caller asks for.
+const MAX_GUARD_LIMIT: u16 = 200;
+
 async fn reproduce_fault(
     fault: &termi9ne_protocol::FaultSummary,
     timeout_seconds: Option<u16>,
@@ -5404,6 +5443,183 @@ mod tests {
 
         assert!(frame_tail(&test_frame(Vec::new())).is_empty());
         assert!(frame_tail(&test_frame(vec![row("  ")])).is_empty());
+    }
+
+    /// A Fault that was proven fixed must not be able to come back unnoticed.
+    ///
+    /// This runs the whole loop against real processes: report, replay, resolve
+    /// on passing evidence, break it again, then guard.
+    #[tokio::test]
+    async fn the_guard_reopens_a_resolved_fault_that_breaks_again() {
+        let root = std::env::temp_dir().join(format!("termi9ne-fault-guard-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("test root should be creatable");
+        let state = Arc::new(AppState {
+            store: Mutex::new(
+                MissionStore::open(root.join("missions"))
+                    .await
+                    .expect("mission store should open"),
+            ),
+            scheduler_policies: Mutex::new(
+                SchedulerPolicyStore::open(root.join("scheduler-policies.json"))
+                    .expect("scheduler policy store should open"),
+            ),
+            shares: Mutex::new(
+                ShareStore::open(root.join("shares.json")).expect("share store should open"),
+            ),
+            run_checkouts: Mutex::new(
+                RunCheckoutStore::open(root.join("run-checkouts.json"), root.join("run-checkouts"))
+                    .expect("Run checkout store should open"),
+            ),
+            checkout_gate: Mutex::new(()),
+            agent_launch_gate: Mutex::new(()),
+            terminals: RwLock::new(HashMap::new()),
+            terminal_state_dir: root.clone(),
+            agent_socket_path: root.join("agent.sock"),
+            mission_events: broadcast::channel(256).0,
+            activity_events: broadcast::channel(512).0,
+            terminal_events: broadcast::channel(256).0,
+            session_group_events: broadcast::channel(256).0,
+            share_revocations: broadcast::channel(64).0,
+            started_at: Instant::now(),
+            open_connections: AtomicUsize::new(0),
+            agent_connections: AtomicUsize::new(0),
+            active_waits: AtomicUsize::new(0),
+            plugins: PluginPublisher::disabled(),
+            provider_status: Mutex::new(ProviderStatusStore::transient()),
+            run_evidence: Mutex::new(RunEvidenceStore::transient()),
+            faults: Mutex::new(FaultStore::transient()),
+            session_groups: Mutex::new(
+                SessionGroupStore::open(root.join("session-groups.json"))
+                    .expect("Session group store should open"),
+            ),
+        });
+
+        // The same marker trick as the resolution test: the replayed command
+        // fails exactly while the marker exists.
+        let marker = root.join("broken");
+        std::fs::write(&marker, b"broken").expect("marker should be writable");
+        let command = format!("test ! -f {}", marker.display());
+
+        let reported = match handle_request(
+            Request::ReportFault {
+                fault: termi9ne_protocol::FaultInput {
+                    kind: termi9ne_protocol::FaultKind::TestFailed,
+                    command: command.clone(),
+                    cwd: root.clone(),
+                    exit_code: Some(1),
+                    revision: None,
+                    summary: "marker present".to_owned(),
+                    output: "failing".to_owned(),
+                    session_id: None,
+                    mission_id: None,
+                    run_id: None,
+                },
+            },
+            Uuid::new_v4(),
+            &state,
+        )
+        .await
+        .expect("owner should report a Fault")
+        {
+            ResponseBody::FaultRecorded { fault } => fault,
+            body => panic!("unexpected report response: {body:?}"),
+        };
+
+        // Fix it for real, prove it, and close it.
+        std::fs::remove_file(&marker).expect("marker should be removable");
+        match handle_request(
+            Request::ReproduceFault {
+                fault_id: reported.fault_id,
+                timeout_seconds: Some(30),
+            },
+            Uuid::new_v4(),
+            &state,
+        )
+        .await
+        .expect("owner should replay a Fault")
+        {
+            ResponseBody::FaultRecorded { fault } => assert!(fault.repro_passes()),
+            body => panic!("unexpected replay response: {body:?}"),
+        }
+        match handle_request(
+            Request::ResolveFault {
+                fault_id: reported.fault_id,
+                note: "marker removed".to_owned(),
+            },
+            Uuid::new_v4(),
+            &state,
+        )
+        .await
+        .expect("a proven Fault should resolve")
+        {
+            ResponseBody::FaultRecorded { fault } => {
+                assert!(!fault.is_open());
+                assert_eq!(fault.regressions, 0);
+            }
+            body => panic!("unexpected resolve response: {body:?}"),
+        }
+
+        // While it stays fixed, a guard pass must leave it closed.
+        match handle_request(
+            Request::GuardFaults {
+                limit: None,
+                timeout_seconds: Some(30),
+            },
+            Uuid::new_v4(),
+            &state,
+        )
+        .await
+        .expect("owner should guard Faults")
+        {
+            ResponseBody::FaultsGuarded { checked, reopened } => {
+                assert_eq!(checked, vec![reported.fault_id]);
+                assert!(reopened.is_empty(), "a Fault that still passes stays closed");
+            }
+            body => panic!("unexpected guard response: {body:?}"),
+        }
+
+        // Now reintroduce the failure. The guard must find it.
+        std::fs::write(&marker, b"broken again").expect("marker should be writable");
+        match handle_request(
+            Request::GuardFaults {
+                limit: None,
+                timeout_seconds: Some(30),
+            },
+            Uuid::new_v4(),
+            &state,
+        )
+        .await
+        .expect("owner should guard Faults")
+        {
+            ResponseBody::FaultsGuarded { checked, reopened } => {
+                assert_eq!(checked, vec![reported.fault_id]);
+                assert_eq!(reopened.len(), 1, "the reintroduced failure must reopen");
+                assert_eq!(reopened[0].fault_id, reported.fault_id);
+                assert!(reopened[0].is_open());
+                assert_eq!(reopened[0].regressions, 1);
+                assert!(
+                    reopened[0].proof.is_some(),
+                    "the evidence that closed it is kept"
+                );
+            }
+            body => panic!("unexpected guard response: {body:?}"),
+        }
+
+        // Reopened means reopened: it cannot be closed again by assertion.
+        assert!(matches!(
+            handle_request(
+                Request::ResolveFault {
+                    fault_id: reported.fault_id,
+                    note: "it is fine really".to_owned(),
+                },
+                Uuid::new_v4(),
+                &state,
+            )
+            .await,
+            Err(RequestError::Fault(fault_store::FaultError::Unproven(_)))
+        ));
+
+        std::fs::remove_dir_all(&root).expect("test root should be removable");
     }
 
     #[tokio::test]

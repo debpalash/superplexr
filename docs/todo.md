@@ -1,6 +1,6 @@
 # TODO
 
-Updated: 2026-09-02. Companion to
+Updated: 2026-09-03. Companion to
 [termi9ne-unified-roadmap.md](termi9ne-unified-roadmap.md), which stays the
 authoritative capability catalog. This file is the short, ordered list.
 
@@ -29,12 +29,13 @@ Remaining:
 - [ ] **Bisect a Fault across Candidates** — find which Run introduced it.
       Needs Candidate patch history, not the Fault store.
 - [ ] **Flaky vs real** — re-run N× in isolated worktrees, classify, record
-      the distribution rather than one verdict.
+      the distribution rather than one verdict. **Next.**
 - [x] **Fault → Run** — `fault fix` plans a Run with the Fault as its
       objective, links the two, and launches the configured engine driver;
       verified that a Run claiming success still cannot close the Fault
-- [ ] **Regression guard** — re-replay resolved Faults on later revisions so
-      a reintroduced failure reopens itself. **Next.**
+- [x] **Regression guard** — `fault guard` re-replays resolved Faults and
+      reopens any that fail again, keeping the replay that closed them so the
+      regression can be read against it; verified end to end on a real daemon
 - [x] Shell integration installer (`termi9ne shell-init`) for zsh, bash and
       fish; verified end to end against a real interactive zsh
 - [ ] Mobile/web triage surface: read a Fault, replay, hand off. No terminal.

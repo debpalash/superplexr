@@ -58,6 +58,8 @@ pub(crate) enum FaultError {
     InvalidNote,
     #[error("Fault revision is too long")]
     InvalidRevision,
+    #[error("Fault {0} is not resolved, so there is nothing to guard")]
+    NotResolved(FaultId),
     #[error("Fault store key does not match its record")]
     MismatchedKey,
     #[error("no Fault {0}")]
@@ -156,6 +158,8 @@ impl FaultStore {
             repro: None,
             repro_attempts: 0,
             fix_run_id: None,
+            proof: None,
+            regressions: 0,
         };
         validate_summary(&fault)?;
         if self.faults.len() >= MAX_FAULTS {
@@ -257,6 +261,10 @@ impl FaultStore {
         if !fault.repro_passes() {
             return Err(FaultError::Unproven(fault_id));
         }
+        // Keep the replay that proved it. The guard overwrites `repro` on every
+        // later attempt, and a regression is only legible against the evidence
+        // that closed the Fault in the first place.
+        fault.proof = fault.repro.clone();
         fault.state = FaultState::Resolved {
             note,
             at_unix_micros,
@@ -264,6 +272,68 @@ impl FaultStore {
         let updated = fault.clone();
         self.persist()?;
         Ok(updated)
+    }
+
+    /// Faults eligible for a regression check, oldest proof first.
+    ///
+    /// Only resolved Faults qualify. A dismissed Fault was closed by a person's
+    /// judgement rather than by evidence, so re-running it would argue with
+    /// them; an open one is already open.
+    pub(crate) fn guard_candidates(&self, limit: usize) -> Vec<FaultSummary> {
+        let mut candidates = self
+            .faults
+            .values()
+            .filter(|fault| matches!(fault.state, FaultState::Resolved { .. }))
+            .cloned()
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|fault| {
+            (
+                fault
+                    .proof
+                    .as_ref()
+                    .map_or(fault.observed_at_unix_micros, |proof| {
+                        proof.attempted_at_unix_micros
+                    }),
+                fault.fault_id.to_string(),
+            )
+        });
+        candidates.truncate(limit);
+        candidates
+    }
+
+    /// Attach a regression-guard replay to a resolved Fault, reopening it if the
+    /// failure came back.
+    ///
+    /// Returns the Fault and whether this reopened it. A replay that could not
+    /// run proves nothing and leaves the Fault resolved, for the same reason it
+    /// cannot close an open one.
+    pub(crate) fn record_guard_replay(
+        &mut self,
+        fault_id: FaultId,
+        receipt: ReproReceipt,
+    ) -> Result<(FaultSummary, bool), FaultError> {
+        let fault = self
+            .faults
+            .get_mut(&fault_id.to_string())
+            .ok_or(FaultError::Unknown(fault_id))?;
+        if !matches!(fault.state, FaultState::Resolved { .. }) {
+            return Err(FaultError::NotResolved(fault_id));
+        }
+        let regressed = receipt.reproduced && receipt.error.is_none();
+        fault.repro_attempts = fault.repro_attempts.saturating_add(1);
+        fault.repro = Some(ReproReceipt {
+            output: truncate_output(&receipt.output),
+            ..receipt
+        });
+        if regressed {
+            fault.state = FaultState::Open;
+            fault.regressions = fault.regressions.saturating_add(1);
+            // The Run that fixed it last time did not fix this one.
+            fault.fix_run_id = None;
+        }
+        let updated = fault.clone();
+        self.persist()?;
+        Ok((updated, regressed))
     }
 
     /// Close a Fault without repro evidence, recording the owner's reason.
@@ -606,6 +676,145 @@ mod tests {
         assert!(objective.contains("assertion failed"));
         // The acceptance test is the replay, not the agent's own account.
         assert!(objective.contains("verified by replay"));
+    }
+
+    /// A resolution is only worth something while it stays true.
+    #[test]
+    fn a_resolved_fault_reopens_when_its_replay_fails_again() {
+        let mut store = FaultStore::transient();
+        let fault = store
+            .report(input("cargo test"), FaultSource::OwnerHook)
+            .expect("fault");
+        store
+            .record_repro(fault.fault_id, receipt(false))
+            .expect("passing replay");
+        let resolved = store
+            .resolve(fault.fault_id, "fixed by run 4".to_owned())
+            .expect("resolve");
+        assert!(!resolved.is_open());
+        assert_eq!(resolved.regressions, 0);
+        assert!(
+            resolved.proof.is_some(),
+            "the replay that closed it must be kept"
+        );
+
+        // It fails again on a later revision.
+        let (reopened, regressed) = store
+            .record_guard_replay(fault.fault_id, receipt(true))
+            .expect("guard replay recorded");
+        assert!(regressed, "a failing replay must reopen a resolved Fault");
+        assert!(reopened.is_open());
+        assert_eq!(reopened.regressions, 1);
+        assert!(
+            reopened.proof.is_some(),
+            "the original proof stays, so the regression can be read against it"
+        );
+        assert!(
+            reopened.repro.as_ref().is_some_and(|repro| repro.reproduced),
+            "the failing replay becomes the current evidence"
+        );
+        assert!(
+            reopened.fix_run_id.is_none(),
+            "the Run that fixed it before did not fix this"
+        );
+
+        // And it can be closed again only by fresh passing evidence.
+        assert!(matches!(
+            store.resolve(fault.fault_id, "again".to_owned()),
+            Err(FaultError::Unproven(_))
+        ));
+    }
+
+    /// The guard must not disturb a Fault that is still fixed, and must not
+    /// treat a replay that never ran as evidence of anything.
+    #[test]
+    fn a_still_passing_or_unrunnable_replay_leaves_a_fault_resolved() {
+        let mut store = FaultStore::transient();
+        let fault = store
+            .report(input("cargo test"), FaultSource::OwnerHook)
+            .expect("fault");
+        store
+            .record_repro(fault.fault_id, receipt(false))
+            .expect("passing replay");
+        store
+            .resolve(fault.fault_id, "fixed".to_owned())
+            .expect("resolve");
+
+        let (still_fixed, regressed) = store
+            .record_guard_replay(fault.fault_id, receipt(false))
+            .expect("guard replay recorded");
+        assert!(!regressed);
+        assert!(!still_fixed.is_open());
+        assert_eq!(still_fixed.regressions, 0);
+
+        let could_not_run = ReproReceipt {
+            reproduced: true,
+            error: Some("working directory is gone".to_owned()),
+            ..receipt(true)
+        };
+        let (unchanged, regressed) = store
+            .record_guard_replay(fault.fault_id, could_not_run)
+            .expect("guard replay recorded");
+        assert!(
+            !regressed,
+            "a replay that could not run proves nothing, so it cannot reopen"
+        );
+        assert!(!unchanged.is_open());
+        assert_eq!(unchanged.regressions, 0);
+    }
+
+    /// Only resolved Faults are candidates, oldest proof first, and a pass is
+    /// a bounded slice rather than the whole set.
+    #[test]
+    fn guard_candidates_are_resolved_faults_oldest_proof_first() {
+        let mut store = FaultStore::transient();
+        let open = store
+            .report(input("still broken"), FaultSource::OwnerHook)
+            .expect("fault");
+        let dismissed = store
+            .report(input("wont fix"), FaultSource::OwnerHook)
+            .expect("fault");
+        store
+            .dismiss(dismissed.fault_id, "not ours".to_owned())
+            .expect("dismiss");
+
+        let mut resolved = Vec::new();
+        for (index, command) in ["first fixed", "second fixed"].iter().enumerate() {
+            let fault = store
+                .report(input(command), FaultSource::OwnerHook)
+                .expect("fault");
+            let proof = ReproReceipt {
+                attempted_at_unix_micros: 100 + index as u64,
+                ..receipt(false)
+            };
+            store
+                .record_repro(fault.fault_id, proof)
+                .expect("passing replay");
+            store
+                .resolve(fault.fault_id, "fixed".to_owned())
+                .expect("resolve");
+            resolved.push(fault.fault_id);
+        }
+
+        let candidates = store.guard_candidates(10);
+        let ids = candidates
+            .iter()
+            .map(|fault| fault.fault_id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, resolved, "oldest proof must come round again first");
+        assert!(!ids.contains(&open.fault_id), "an open Fault is already open");
+        assert!(
+            !ids.contains(&dismissed.fault_id),
+            "a dismissal is a person's judgement; replaying it would argue with them"
+        );
+        assert_eq!(store.guard_candidates(1).len(), 1, "a pass is bounded");
+
+        // Guarding something that was never resolved is refused rather than
+        // silently treated as a regression.
+        assert!(matches!(
+            store.record_guard_replay(open.fault_id, receipt(true)),
+            Err(FaultError::NotResolved(_))
+        ));
     }
 
     #[test]

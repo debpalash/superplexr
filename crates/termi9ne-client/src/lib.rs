@@ -62,6 +62,10 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// waiting for it.
 const REPRODUCE_FAULT_TIMEOUT: Duration = Duration::from_secs(960);
 
+/// The daemon's own default guard batch size, used only to size the wait when
+/// the caller names no limit. The daemon remains the authority on the batch.
+const DEFAULT_GUARD_LIMIT_HINT: u16 = 20;
+
 /// Headroom above a deadline the daemon has already been told to honour.
 ///
 /// The daemon answers such requests itself when its own limit expires, so the
@@ -78,6 +82,10 @@ pub fn request_timeout(request: &Request) -> Duration {
     match request {
         // Replay runs a real command; the daemon caps it at 900 seconds.
         Request::ReproduceFault { .. } => REPRODUCE_FAULT_TIMEOUT,
+        // A guard pass is many such replays in series, so it needs room for
+        // all of them rather than for one.
+        Request::GuardFaults { limit, .. } => REPRODUCE_FAULT_TIMEOUT
+            .saturating_mul(u32::from(limit.unwrap_or(DEFAULT_GUARD_LIMIT_HINT)).max(1)),
         // The caller chose how long to wait for the terminal condition.
         Request::TerminalWait { timeout_millis, .. } => {
             Duration::from_millis(*timeout_millis).saturating_add(RESPONSE_HEADROOM)
@@ -1071,6 +1079,23 @@ impl ControlClient {
 
     /// Replay a Fault's command and attach the receipt. This runs the recorded
     /// command, so it may take as long as that command takes.
+    /// Re-run the replay of resolved Faults and reopen any that fail again.
+    ///
+    /// Returns every Fault checked, and those that regressed.
+    pub fn guard_faults(
+        &self,
+        limit: Option<u16>,
+        timeout_seconds: Option<u16>,
+    ) -> Result<(Vec<FaultId>, Vec<FaultSummary>), ClientError> {
+        match self.request(Request::GuardFaults {
+            limit,
+            timeout_seconds,
+        })? {
+            ResponseBody::FaultsGuarded { checked, reopened } => Ok((checked, reopened)),
+            body => Err(ClientError::UnexpectedResponse(Box::new(body))),
+        }
+    }
+
     pub fn reproduce_fault(
         &self,
         fault_id: FaultId,
