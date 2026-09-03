@@ -88,6 +88,9 @@ not independently verified here.
 - [ ] 200% zoom visual and accessibility pass
 - [ ] Linux keyboard-shortcut smoke test
 - [~] Resizable sidebar and terminal splitters (built; needs platform pass)
+- [x] Sessions titled by the agent's own title, else `repo@branch` from the
+      terminal's directory (runtime cwd, or OSC 7 from `shell-init`); a name a
+      person chose always wins; derived at render so it never freezes
 - [ ] OSC 133 command blocks in the UI: jump, search, copy, rerun
 
 ---

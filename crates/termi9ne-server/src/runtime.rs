@@ -3918,6 +3918,7 @@ fn start_terminal(
     };
     persist_terminal_spec(&spec, &state.terminal_state_dir)?;
     let session_id = spec.session_id;
+    let spawn_cwd = spec.cwd.clone();
     let (handle, events) = SessionHandle::spawn_subscribed(
         SessionSpec {
             id: session_id,
@@ -3944,6 +3945,7 @@ fn start_terminal(
         controller_surface_id: surface_id,
         controller_share_id: None,
         control_epoch: 1,
+        cwd: Some(spawn_cwd),
     };
     let projection = Arc::new(RwLock::new(TerminalProjection {
         summary: summary.clone(),
@@ -4160,6 +4162,7 @@ fn recover_terminal_history(
             controller_surface_id: None,
             controller_share_id: None,
             control_epoch: 0,
+            cwd: Some(spec.cwd.clone()),
         };
         records.insert(
             spec.session_id,
@@ -5285,6 +5288,7 @@ mod tests {
                     controller_surface_id: None,
                     controller_share_id: None,
                     control_epoch: 0,
+                    cwd: None,
                 },
                 frame: Some(Arc::new(frame)),
                 final_event: None,
@@ -5990,6 +5994,7 @@ mod tests {
                             controller_surface_id: None,
                             controller_share_id: None,
                             control_epoch: 4,
+                            cwd: None,
                         },
                         frame: None,
                         final_event: None,
@@ -6235,6 +6240,7 @@ mod tests {
             controller_surface_id: None,
             controller_share_id: None,
             control_epoch: 0,
+            cwd: None,
         };
         let state = Arc::new(AppState {
             store: Mutex::new(store),
@@ -6426,6 +6432,7 @@ mod tests {
                             controller_surface_id: None,
                             controller_share_id: None,
                             control_epoch: 0,
+                            cwd: None,
                         },
                         frame: None,
                         final_event: None,

@@ -15,6 +15,7 @@ mod terminal_surface;
 mod theme;
 mod workspace_store;
 mod workspace_tabs;
+mod worktree;
 
 use std::time::{Duration, Instant};
 #[cfg(not(test))]
@@ -389,6 +390,10 @@ impl Render for DraggedWorkspaceTab {
 struct Termi9neDesktop {
     surfaces: Vec<Entity<TerminalSurface>>,
     surface_foreground_processes: Vec<Option<TerminalForegroundProcess>>,
+    /// Where each surface's process was started, from the runtime. A live
+    /// `cd` arrives through the frame instead and takes precedence.
+    surface_cwds: Vec<Option<std::path::PathBuf>>,
+    worktree_cache: worktree::WorktreeCache,
     workspaces: WorkspaceTabs<WorkspaceView>,
     session_sidebar: SessionSidebarState,
     active_surface: Option<usize>,
@@ -505,6 +510,7 @@ struct LiveSurface {
     run_id: Option<RunId>,
     status: TerminalSessionStatus,
     foreground_process: Option<TerminalForegroundProcess>,
+    cwd: Option<std::path::PathBuf>,
     surface: Entity<TerminalSurface>,
 }
 
@@ -984,10 +990,13 @@ impl Termi9neDesktop {
         .expect("initial workspaces must not be empty");
         let command_focus = search_focus.clone();
         let surface_foreground_processes = vec![None; surfaces.len()];
+        let surface_cwds = vec![None; surfaces.len()];
 
         Self {
             surfaces,
             surface_foreground_processes,
+            surface_cwds,
+            worktree_cache: worktree::WorktreeCache::default(),
             workspaces,
             session_sidebar: SessionSidebarState::new(search_focus),
             active_surface: Some(0),
@@ -1092,6 +1101,10 @@ impl Termi9neDesktop {
         let surface_foreground_processes = live_surfaces
             .iter()
             .map(|live| live.foreground_process.clone())
+            .collect::<Vec<_>>();
+        let surface_cwds = live_surfaces
+            .iter()
+            .map(|live| live.cwd.clone())
             .collect::<Vec<_>>();
         let surface_sessions = live_surfaces
             .iter()
@@ -1361,6 +1374,8 @@ impl Termi9neDesktop {
         let mut desktop = Self {
             surfaces,
             surface_foreground_processes,
+            surface_cwds,
+            worktree_cache: worktree::WorktreeCache::default(),
             workspaces,
             session_sidebar: SessionSidebarState::new(search_focus),
             active_surface,
@@ -1713,6 +1728,7 @@ impl Termi9neDesktop {
                         {
                             desktop.surface_foreground_processes[index] =
                                 terminal.foreground_process.clone();
+                            desktop.surface_cwds[index] = terminal.cwd.clone();
                             if let Some(status) = desktop.surface_statuses.get_mut(index) {
                                 *status = terminal.status;
                             }
@@ -1970,6 +1986,7 @@ impl Termi9neDesktop {
                 .position(|session_id| *session_id == terminal.session_id)
             {
                 self.surface_foreground_processes[index] = terminal.foreground_process.clone();
+                self.surface_cwds[index] = terminal.cwd.clone();
                 if let Some(status) = self.surface_statuses.get_mut(index) {
                     *status = terminal.status;
                 }
@@ -2017,6 +2034,7 @@ impl Termi9neDesktop {
             self.surfaces.push(surface);
             self.surface_foreground_processes
                 .push(terminal.foreground_process.clone());
+            self.surface_cwds.push(terminal.cwd.clone());
             self.surface_sessions.push(session_id);
             self.surface_missions.push(terminal.mission_id);
             self.surface_runs.push(terminal.run_id);
@@ -2030,6 +2048,7 @@ impl Termi9neDesktop {
                 self.pending_terminal_updates.push(terminal);
                 self.surfaces.pop();
                 self.surface_foreground_processes.pop();
+                self.surface_cwds.pop();
                 self.surface_sessions.pop();
                 self.surface_missions.pop();
                 self.surface_runs.pop();
@@ -2385,9 +2404,6 @@ impl Termi9neDesktop {
                     *status = TerminalSessionStatus::Running;
                 }
                 self.refresh_session_statuses();
-                if self.refresh_shell_session_identity(surface_index, cx) {
-                    self.persist_workspaces();
-                }
 
                 cx.spawn(async move |this, cx| {
                     let mut observed_generation = generation;
@@ -2521,49 +2537,6 @@ impl Termi9neDesktop {
                 };
             }
         }
-    }
-
-    #[cfg(not(test))]
-    fn refresh_shell_session_identity(&mut self, surface_index: usize, cx: &App) -> bool {
-        let Some(surface) = self.surfaces.get(surface_index) else {
-            return false;
-        };
-        let (title, directory) = {
-            let surface = surface.read(cx);
-            (
-                surface.terminal_title().map(str::to_owned),
-                surface.current_directory().map(str::to_owned),
-            )
-        };
-        // The working directory is a stable identity; the title changes with
-        // every foreground program, so it is only a fallback.
-        let suggested = directory
-            .and_then(|directory| {
-                directory
-                    .trim_end_matches('/')
-                    .rsplit('/')
-                    .next()
-                    .filter(|name| !name.is_empty())
-                    .map(str::to_owned)
-            })
-            .or(title);
-        let Some(suggested) = suggested else {
-            return false;
-        };
-        let mut changed = false;
-        for workspace in self.workspaces.tabs_mut() {
-            for session in &mut workspace.content_mut().sessions {
-                let generated_name = session.name == "shell" || session.name.starts_with("shell-");
-                if generated_name
-                    && session.terminals.contains(&surface_index)
-                    && session.name != suggested
-                {
-                    session.name.clone_from(&suggested);
-                    changed = true;
-                }
-            }
-        }
-        changed
     }
 
     #[cfg(not(test))]
@@ -4721,6 +4694,7 @@ impl Termi9neDesktop {
         ));
         self.surfaces.push(surface);
         self.surface_foreground_processes.push(None);
+        self.surface_cwds.push(None);
         #[cfg(not(test))]
         self.surface_sessions.push(session_id);
         #[cfg(not(test))]
@@ -7044,11 +7018,12 @@ fn create_surfaces(window: &mut Window, cx: &mut App, control: &ControlClient) -
                 terminal.mission_id,
                 terminal.run_id,
                 terminal.foreground_process,
+                terminal.cwd,
                 control.terminal(terminal.session_id),
             )
         })
         .collect::<Vec<_>>();
-    sessions.sort_by_key(|(session_id, _, _, _, _, _)| session_id.to_string());
+    sessions.sort_by_key(|(session_id, _, _, _, _, _, _)| session_id.to_string());
     sessions.truncate(64);
     if sessions.is_empty() && !control.is_shared() {
         let session = spawn_shell(control);
@@ -7058,6 +7033,7 @@ fn create_surfaces(window: &mut Window, cx: &mut App, control: &ControlClient) -
             None,
             None,
             None,
+            std::env::current_dir().ok(),
             session,
         ));
     }
@@ -7066,7 +7042,10 @@ fn create_surfaces(window: &mut Window, cx: &mut App, control: &ControlClient) -
         .into_iter()
         .enumerate()
         .map(
-            |(index, (session_id, status, mission_id, run_id, foreground_process, session))| {
+            |(
+                index,
+                (session_id, status, mission_id, run_id, foreground_process, cwd, session),
+            )| {
                 let id = format!("terminal-{}", index + 1);
                 let surface = cx.new(|surface_cx| {
                     TerminalSurface::live(
@@ -7084,6 +7063,7 @@ fn create_surfaces(window: &mut Window, cx: &mut App, control: &ControlClient) -
                     run_id,
                     status,
                     foreground_process,
+                    cwd,
                     surface,
                 }
             },

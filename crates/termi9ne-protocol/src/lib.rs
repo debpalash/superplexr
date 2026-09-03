@@ -522,6 +522,15 @@ pub struct TerminalSessionSummary {
     pub controller_share_id: Option<Uuid>,
     #[serde(default)]
     pub control_epoch: u64,
+    /// Directory the process was started in.
+    ///
+    /// The runtime always knows this and persists it, so a client can name a
+    /// terminal by where it runs even when the shell never reports its
+    /// directory itself (only integrated shells emit OSC 7). A live `cd` is
+    /// reported through the frame's `current_directory`, which is fresher when
+    /// present.
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

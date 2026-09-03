@@ -104,6 +104,8 @@ if [[ -n "$TERMI9NE_SESSION" ]] && [[ -o interactive ]]; then
   __termi9ne_precmd() {
     local __termi9ne_status=$?
     printf '\e]133;D;%s\a' "$__termi9ne_status"
+    # Report the directory too, so the session can be named by where it runs.
+    printf '\e]7;file://%s%s\a' "$HOST" "$PWD"
     printf '\e]133;A\a'
     return $__termi9ne_status
   }
@@ -131,6 +133,8 @@ if [ -n "$TERMI9NE_SESSION" ] && [ -n "$PS1" ]; then
   __termi9ne_precmd() {
     local __termi9ne_status=$?
     printf '\e]133;D;%s\a' "$__termi9ne_status"
+    # Report the directory too, so the session can be named by where it runs.
+    printf '\e]7;file://%s%s\a' "$HOSTNAME" "$PWD"
     printf '\e]133;A\a'
     __termi9ne_armed=1
     return $__termi9ne_status
@@ -157,6 +161,8 @@ if set -q TERMI9NE_SESSION; and status is-interactive
     function __termi9ne_postexec --on-event fish_postexec
         set -l __termi9ne_status $status
         printf '\e]133;D;%s\a' $__termi9ne_status
+        # Report the directory too, so the session can be named by where it runs.
+        printf '\e]7;file://%s%s\a' (hostname) "$PWD"
         printf '\e]133;A\a'
     end
 end
@@ -238,6 +244,9 @@ mod tests {
             assert!(snippet.contains(r"\e]133;C;%s\a"), "{shell}");
             assert!(snippet.contains(r"\e]133;D;%s\a"), "{shell}");
             assert!(snippet.contains(r"\e]133;A\a"), "{shell}");
+            // The directory is reported at every prompt, so a Session can be
+            // named by where it runs even before any command finishes.
+            assert!(snippet.contains(r"\e]7;file://%s%s\a"), "{shell}");
             // Inert outside termi9ne.
             assert!(snippet.contains("TERMI9NE_SESSION"), "{shell}");
         }
