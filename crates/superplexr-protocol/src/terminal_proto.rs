@@ -211,8 +211,14 @@ pub struct FullFrameV1 {
 pub struct RowReplacement {
     #[prost(uint32, tag = "1")]
     pub visible_index: u32,
+    /// The replaced cells. With `span` set these cover `start_column..`
+    /// rather than the whole row.
     #[prost(message, optional, tag = "2")]
     pub row: Option<Row>,
+    #[prost(uint32, tag = "3")]
+    pub start_column: u32,
+    #[prost(bool, tag = "4")]
+    pub span: bool,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]

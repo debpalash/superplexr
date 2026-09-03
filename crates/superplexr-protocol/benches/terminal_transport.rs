@@ -2,7 +2,7 @@ use std::{env, hint::black_box, process, time::Instant};
 
 use superplexr_core::SessionId;
 use superplexr_protocol::{ChangedRow, FrameDelta, ServerEvent, encode_terminal_event};
-use superplexr_terminal::{Cell, CellStyle, GridSize, Rgb, Row, UnderlineStyle};
+use superplexr_terminal::{Cell, CellStyle, GridSize, Rgb, UnderlineStyle};
 
 const DEFAULT_ITERATIONS: usize = 10_000;
 
@@ -78,17 +78,16 @@ fn terminal_delta_fixture() -> ServerEvent {
     let changed_rows = (0_u16..8)
         .map(|index| ChangedRow {
             index,
-            row: Row {
-                wrapped: false,
-                cells: (0..160)
-                    .map(|column| Cell {
-                        grapheme: char::from(b'a' + (column % 26) as u8).to_string(),
-                        width: 1,
-                        style_index: 0,
-                        hyperlink: None,
-                    })
-                    .collect(),
-            },
+            start: 0,
+            wrapped: false,
+            cells: (0..160)
+                .map(|column| Cell {
+                    grapheme: char::from(b'a' + (column % 26) as u8).to_string(),
+                    width: 1,
+                    style_index: 0,
+                    hyperlink: None,
+                })
+                .collect(),
         })
         .collect();
     let session_id = SessionId::new();

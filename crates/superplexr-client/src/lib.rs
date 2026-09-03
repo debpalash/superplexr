@@ -637,6 +637,7 @@ impl ControlClient {
                 surface_id,
                 control_epoch: Arc::new(AtomicU64::new(terminal.control_epoch)),
                 control: self.clone(),
+                max_hz: None,
             }),
             body => Err(ClientError::UnexpectedResponse(Box::new(body))),
         }
@@ -648,6 +649,7 @@ impl ControlClient {
             surface_id: Uuid::new_v4(),
             control_epoch: Arc::new(AtomicU64::new(0)),
             control: self.clone(),
+            max_hz: None,
         }
     }
 
@@ -1492,6 +1494,8 @@ pub struct DaemonSession {
     surface_id: Uuid,
     control_epoch: Arc<AtomicU64>,
     control: ControlClient,
+    /// Most frames per second to ask the runtime for; `None` takes its default.
+    max_hz: Option<u16>,
 }
 
 impl DaemonSession {
@@ -1819,10 +1823,21 @@ impl DaemonSession {
         })
     }
 
+    /// Ask the runtime for at most this many frames per second. A remote
+    /// viewer on a slow link wants fewer, larger deltas rather than every
+    /// publish; nothing is lost, each delta carries every change since the
+    /// last one sent.
+    #[must_use]
+    pub fn with_max_hz(mut self, max_hz: u16) -> Self {
+        self.max_hz = Some(max_hz);
+        self
+    }
+
     fn open_subscription(&self) -> Result<MultiplexedSubscription, ClientError> {
         let stream = self.control.subscription_wire()?;
         let request = self.control.client_request(Request::SubscribeTerminal {
             session_id: self.session_id,
+            max_hz: self.max_hz,
         });
         let response = stream.exchange(&request)?;
         match decode_response(&request, response)? {

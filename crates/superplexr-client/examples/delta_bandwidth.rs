@@ -18,8 +18,13 @@ fn main() {
         .parse()
         .expect("valid session id");
     let seconds: u64 = args.next().and_then(|s| s.parse().ok()).unwrap_or(8);
+    let max_hz: Option<u16> = args.next().and_then(|s| s.parse().ok());
     let client = ControlClient::connect(std::path::Path::new(&socket)).expect("connect");
-    let events = client.terminal(session).subscribe().expect("subscribe");
+    let mut terminal = client.terminal(session);
+    if let Some(hz) = max_hz {
+        terminal = terminal.with_max_hz(hz);
+    }
+    let events = terminal.subscribe().expect("subscribe");
     let deadline = Instant::now() + Duration::from_secs(seconds);
     let (mut frames, mut deltas, mut frame_bytes, mut delta_bytes) = (0u64, 0u64, 0u64, 0u64);
     // What the wire actually carries for frames is the protobuf data plane;

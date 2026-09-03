@@ -1,3 +1,4 @@
+mod attach;
 mod shell_init;
 mod ssh_tunnel;
 
@@ -59,6 +60,21 @@ enum CliCommand {
     Events {
         #[arg(long, value_enum, default_value_t = EventScopeArg::All)]
         scope: EventScopeArg,
+    },
+    /// Attach this terminal to a session: frames in, keystrokes out. Ctrl-]
+    /// detaches; the session keeps running. Works over plain SSH with
+    /// nothing installed on the far side but the daemon.
+    Attach {
+        session_id: SessionId,
+        /// Most frames per second to ask for; useful on a slow link.
+        #[arg(long)]
+        max_hz: Option<u16>,
+        /// Watch without taking control, even if control is free.
+        #[arg(long)]
+        observe: bool,
+        /// Take control even if another client holds it. They are told.
+        #[arg(long, conflicts_with = "observe")]
+        take: bool,
     },
     /// Mint a scoped Share token. The secret is printed once.
     ShareCreate {
@@ -1214,6 +1230,22 @@ async fn main() -> Result<(), CliError> {
     let command = match command {
         CliCommand::Events { scope } => {
             return stream_events(&socket, share_token, scope).await;
+        }
+        CliCommand::Attach {
+            session_id,
+            max_hz,
+            observe,
+            take,
+        } => {
+            // Interactive and blocking by nature; it owns the terminal until
+            // the person detaches.
+            return tokio::task::block_in_place(|| {
+                attach::run(&socket, session_id, max_hz, observe, take)
+            })
+            .map_err(|message| CliError::Remote {
+                code: "attach".to_owned(),
+                message,
+            });
         }
         CliCommand::RemoteForward {
             destination,
@@ -2983,6 +3015,11 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
         }
         CliCommand::Events { .. } => {
             unreachable!("event streaming is executed before one-shot protocol conversion")
+        }
+        CliCommand::Attach { .. } => {
+            unreachable!(
+                "attach owns the terminal until detach; it never builds a one-shot request"
+            )
         }
         CliCommand::List => Request::ListMissions,
         CliCommand::Status => Request::RuntimeDiagnostics,

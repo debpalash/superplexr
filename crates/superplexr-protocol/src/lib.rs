@@ -19,14 +19,14 @@ use superplexr_core::{
     Actor, Command, Event, FaultId, Mission, MissionId, RunId, SchedulerPlan, SessionId,
 };
 use superplexr_terminal::{
-    CellStyle, Cursor, FullFrame, GridSize, HistoryViewport, KeyInput, MouseInput,
+    Cell, CellStyle, Cursor, FullFrame, GridSize, HistoryViewport, KeyInput, MouseInput,
     PasteConfirmation, Rgb, Row, SearchMatch, SelectionPoint, ViewportScroll,
 };
 use thiserror::Error;
 use tokio::io::AsyncWrite;
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 25;
+pub const PROTOCOL_VERSION: u16 = 26;
 
 /// Stable identity for an owner-arranged collection of terminal Sessions.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -480,6 +480,11 @@ pub enum Request {
     },
     SubscribeTerminal {
         session_id: SessionId,
+        /// Most frames per second this subscriber wants. The runtime holds
+        /// the newest frame and sends one delta per interval, so a remote
+        /// viewer on a slow link asks for less without losing correctness.
+        #[serde(default)]
+        max_hz: Option<u16>,
     },
 }
 
@@ -1428,7 +1433,13 @@ pub enum ServerEvent {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ChangedRow {
     pub index: u16,
-    pub row: Row,
+    /// First column the replacement covers. Only the cells that actually
+    /// changed travel: on a repaint that rewrites one number per line, that
+    /// is a handful of cells rather than the whole row.
+    #[serde(default)]
+    pub start: u16,
+    pub cells: Vec<Cell>,
+    pub wrapped: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1475,15 +1486,45 @@ impl FrameDelta {
                     .unwrap_or(true)
             })
         };
+        let same_cell = |old: &Cell, new: &Cell| {
+            old == new
+                && !style_changed
+                    .get(new.style_index as usize)
+                    .copied()
+                    .unwrap_or(true)
+        };
         let changed_rows = base
             .rows
             .iter()
             .zip(&next.rows)
             .enumerate()
             .filter(|(_, (old, new))| (!Arc::ptr_eq(old, new) && old != new) || restyled(new))
-            .map(|(index, (_, new))| ChangedRow {
-                index: u16::try_from(index).expect("terminal row limits fit in u16"),
-                row: (**new).clone(),
+            .map(|(index, (old, new))| {
+                // Trim the cells that are the same at both ends; a row whose
+                // length changed is sent whole.
+                let (start, end) = if old.cells.len() == new.cells.len() {
+                    let prefix = old
+                        .cells
+                        .iter()
+                        .zip(&new.cells)
+                        .take_while(|(a, b)| same_cell(a, b))
+                        .count();
+                    let suffix = old.cells[prefix..]
+                        .iter()
+                        .rev()
+                        .zip(new.cells[prefix..].iter().rev())
+                        .take_while(|(a, b)| same_cell(a, b))
+                        .count();
+                    (prefix, new.cells.len() - suffix)
+                } else {
+                    (0, new.cells.len())
+                };
+                ChangedRow {
+                    index: u16::try_from(index).expect("terminal row limits fit in u16"),
+                    start: u16::try_from(start).expect("terminal column limits fit in u16"),
+                    cells: new.cells[start..end].to_vec(),
+                    wrapped: new.wrapped,
+                }
             })
             .collect();
         Some(Self {
@@ -1516,7 +1557,15 @@ impl FrameDelta {
                 .rows
                 .get_mut(usize::from(changed.index))
                 .ok_or(ProtocolError::InvalidDeltaRow(changed.index))?;
-            *row = Arc::new(changed.row.clone());
+            let start = usize::from(changed.start);
+            let end = start + changed.cells.len();
+            if end > row.cells.len() {
+                return Err(ProtocolError::InvalidDeltaRow(changed.index));
+            }
+            let mut updated = (**row).clone();
+            updated.cells[start..end].clone_from_slice(&changed.cells);
+            updated.wrapped = changed.wrapped;
+            *row = Arc::new(updated);
         }
         frame.sequence = self.sequence;
         frame.styles.clone_from(&self.styles);
@@ -1711,6 +1760,107 @@ mod tests {
         ));
     }
 
+    /// Only the cells that changed travel, and applying them reproduces the
+    /// next frame exactly.
+    #[test]
+    fn a_delta_carries_only_the_changed_span_of_a_row() {
+        use superplexr_terminal::{Cell, CellStyle, Rgb, Row, UnderlineStyle};
+        let style = CellStyle {
+            foreground: Rgb {
+                red: 200,
+                green: 200,
+                blue: 200,
+            },
+            background: Rgb {
+                red: 0,
+                green: 0,
+                blue: 0,
+            },
+            bold: false,
+            italic: false,
+            faint: false,
+            blink: false,
+            inverse: false,
+            invisible: false,
+            strikethrough: false,
+            overline: false,
+            underline: UnderlineStyle::None,
+        };
+        let cell = |c: char| Cell {
+            grapheme: c.to_string(),
+            width: 1,
+            style_index: 0,
+            hyperlink: None,
+        };
+        let row = |text: &str| {
+            Arc::new(Row {
+                wrapped: false,
+                cells: text.chars().map(cell).collect(),
+            })
+        };
+        let frame = |sequence: u64, text: &str| FullFrame {
+            sequence,
+            grid: GridSize::new(12, 1).expect("grid"),
+            rows: vec![row(text)],
+            styles: vec![style],
+            cursor: None,
+            default_foreground: Rgb {
+                red: 200,
+                green: 200,
+                blue: 200,
+            },
+            default_background: Rgb {
+                red: 0,
+                green: 0,
+                blue: 0,
+            },
+            mouse_tracking: false,
+            title: None,
+            current_directory: None,
+        };
+        let mut base = frame(1, "frame 0041  ");
+        let next = frame(2, "frame 0042  ");
+        let delta = FrameDelta::between(&base, &next).expect("same grid should delta");
+        assert_eq!(delta.changed_rows.len(), 1);
+        let changed = &delta.changed_rows[0];
+        assert_eq!(
+            (changed.start, changed.cells.len()),
+            (9, 1),
+            "only the digit that changed travels"
+        );
+        assert_eq!(changed.cells[0].grapheme, "2");
+        delta.apply_to(&mut base).expect("delta should apply");
+        assert_eq!(
+            base, next,
+            "applying the span reproduces the next frame exactly"
+        );
+
+        // A span that would run past the row is refused, not applied.
+        let mut short = frame(2, "frame 0042  ");
+        let bad = FrameDelta {
+            base_sequence: 2,
+            sequence: 3,
+            grid: short.grid,
+            changed_rows: vec![ChangedRow {
+                index: 0,
+                start: 11,
+                cells: vec![cell('x'); 3],
+                wrapped: false,
+            }],
+            styles: short.styles.clone(),
+            cursor: None,
+            default_foreground: short.default_foreground,
+            default_background: short.default_background,
+            mouse_tracking: false,
+            title: None,
+            current_directory: None,
+        };
+        assert!(matches!(
+            bad.apply_to(&mut short),
+            Err(ProtocolError::InvalidDeltaRow(0))
+        ));
+    }
+
     /// A row whose cells are byte-identical is still changed when the style
     /// table underneath it changed.
     ///
@@ -1797,6 +1947,11 @@ mod tests {
             delta.changed_rows.len(),
             1,
             "the row must be resent: its cells resolve to different styles now"
+        );
+        assert_eq!(
+            delta.changed_rows[0].cells.len(),
+            4,
+            "every cell restyled, so all travel"
         );
         delta.apply_to(&mut base).expect("delta should apply");
         assert_eq!(

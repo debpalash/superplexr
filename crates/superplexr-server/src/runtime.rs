@@ -367,6 +367,13 @@ async fn run_server(args: Args) -> Result<(), ServerError> {
             secure_directory(parent)?;
         }
     }
+    if let Some(previous) = carry_forward_state(&args.state_dir)? {
+        eprintln!(
+            "superplexr: carried state forward from {} into {}",
+            previous.display(),
+            args.state_dir.display()
+        );
+    }
     tokio::fs::create_dir_all(&args.state_dir).await?;
     secure_directory(&args.state_dir)?;
     secure_existing_state(&args.state_dir)?;
@@ -695,6 +702,75 @@ fn secure_terminal_history(state_dir: &std::path::Path) -> Result<(), std::io::E
     Ok(())
 }
 
+/// When a protocol version bump moves the state directory from `vN-1` to
+/// `vN`, copy the previous version's state forward on first start, so a wire
+/// change never costs a person their sessions, Faults or workspaces.
+///
+/// Sockets and the daemon log are not copied. Nothing is removed from the
+/// old directory, so the older runtime can still be run beside this one.
+fn carry_forward_state(state_dir: &std::path::Path) -> Result<Option<PathBuf>, std::io::Error> {
+    // The desktop creates the directory (for the socket) before the daemon
+    // starts, so existence says nothing; state does.
+    if holds_state(state_dir)? {
+        return Ok(None);
+    }
+    let Some(name) = state_dir.file_name().and_then(|name| name.to_str()) else {
+        return Ok(None);
+    };
+    let Some(version) = name.strip_prefix('v').and_then(|v| v.parse::<u16>().ok()) else {
+        return Ok(None);
+    };
+    let Some(parent) = state_dir.parent() else {
+        return Ok(None);
+    };
+    let previous = parent.join(format!("v{}", version.saturating_sub(1)));
+    if version == 0 || !previous.is_dir() {
+        return Ok(None);
+    }
+    copy_state_tree(&previous, state_dir)?;
+    Ok(Some(previous))
+}
+
+/// True when a state directory already holds anything worth keeping: every
+/// entry that is not a socket or the log counts.
+fn holds_state(dir: &std::path::Path) -> Result<bool, std::io::Error> {
+    if !dir.exists() {
+        return Ok(false);
+    }
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name == "daemon.log" || name.ends_with(".sock") {
+            continue;
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn copy_state_tree(from: &std::path::Path, to: &std::path::Path) -> Result<(), std::io::Error> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let name = entry.file_name();
+        let target = to.join(&name);
+        if file_type.is_symlink() || file_type.is_socket() {
+            continue;
+        }
+        if name == "daemon.log" || name.to_string_lossy().ends_with(".sock") {
+            continue;
+        }
+        if file_type.is_dir() {
+            copy_state_tree(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 fn verify_peer(stream: &UnixStream) -> Result<(), std::io::Error> {
     let mut uid = 0;
@@ -957,7 +1033,7 @@ fn authorize_request(
         | Request::TerminalWait { session_id, .. }
         | Request::TerminalHistoryFrame { session_id, .. }
         | Request::TerminalSearch { session_id, .. }
-        | Request::SubscribeTerminal { session_id } => {
+        | Request::SubscribeTerminal { session_id, .. } => {
             terminal_in_share(state, share, *session_id)?
         }
         _ => false,
@@ -1181,7 +1257,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
                 .await?;
                 continue;
             }
-            Request::SubscribeTerminal { session_id } => {
+            Request::SubscribeTerminal { session_id, max_hz } => {
                 let stream_id = next_stream_id;
                 next_stream_id = next_stream_id.saturating_add(1);
                 let writer = SubscriptionWriter {
@@ -1196,6 +1272,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
                         let _ = handle_subscription(
                             request.request_id,
                             session_id,
+                            max_hz,
                             authority,
                             state,
                             writer,
@@ -1843,9 +1920,99 @@ fn plugin_list(plugins: &PluginPublisher) -> ResponseBody {
     }
 }
 
+/// Frames per second a subscriber receives when it names no preference.
+///
+/// The session actor publishes at up to 125 Hz; no display shows more than
+/// this, and a remote viewer asks for less.
+const DEFAULT_SUBSCRIBER_HZ: u16 = 60;
+const MAX_SUBSCRIBER_HZ: u16 = 125;
+
+fn subscriber_interval(max_hz: Option<u16>) -> Duration {
+    let hz = max_hz
+        .unwrap_or(DEFAULT_SUBSCRIBER_HZ)
+        .clamp(1, MAX_SUBSCRIBER_HZ);
+    Duration::from_micros(1_000_000 / u64::from(hz))
+}
+
+/// Caps how often one subscriber is sent a frame.
+///
+/// Deltas are computed against the last frame *sent*, so a frame that
+/// arrives inside the interval is simply held and the next send carries every
+/// change since. Only the newest held frame matters; older ones are dropped
+/// unseen, which is the point.
+struct RateGate {
+    interval: Duration,
+    last_sent: Instant,
+    pending: Option<Arc<superplexr_terminal::FullFrame>>,
+}
+
+impl RateGate {
+    fn new(interval: Duration, now: Instant) -> Self {
+        Self {
+            interval,
+            last_sent: now.checked_sub(interval).unwrap_or(now),
+            pending: None,
+        }
+    }
+
+    /// Offer a new frame. Returns it if it should go out now.
+    fn offer(
+        &mut self,
+        frame: Arc<superplexr_terminal::FullFrame>,
+        now: Instant,
+    ) -> Option<Arc<superplexr_terminal::FullFrame>> {
+        if now.duration_since(self.last_sent) >= self.interval {
+            self.pending = None;
+            self.last_sent = now;
+            Some(frame)
+        } else {
+            self.pending = Some(frame);
+            None
+        }
+    }
+
+    /// Release the held frame unconditionally: the interval elapsed, or an
+    /// event that must not overtake it is about to be sent.
+    fn flush(&mut self, now: Instant) -> Option<Arc<superplexr_terminal::FullFrame>> {
+        let frame = self.pending.take()?;
+        self.last_sent = now;
+        Some(frame)
+    }
+
+    fn holding(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    fn deadline(&self) -> Instant {
+        self.last_sent + self.interval
+    }
+}
+
+/// The event that carries `frame` to a subscriber whose last frame was
+/// `previous`: a delta when one can be computed, else the full frame.
+fn frame_event(
+    session_id: SessionId,
+    previous: Option<&superplexr_terminal::FullFrame>,
+    frame: &Arc<superplexr_terminal::FullFrame>,
+) -> ServerEvent {
+    previous
+        .and_then(|previous| FrameDelta::between(previous, frame))
+        .map_or_else(
+            || ServerEvent::TerminalFrame {
+                session_id,
+                frame: Box::new((**frame).clone()),
+            },
+            |delta| ServerEvent::TerminalDelta {
+                session_id,
+                delta: Box::new(delta),
+            },
+        )
+}
+
 async fn handle_subscription(
     request_id: uuid::Uuid,
     session_id: SessionId,
+    max_hz: Option<u16>,
     authority: ClientAuthority,
     state: Arc<AppState>,
     writer: SubscriptionWriter,
@@ -1923,6 +2090,7 @@ async fn handle_subscription(
             }
         })?;
 
+    let mut gate = RateGate::new(subscriber_interval(max_hz), Instant::now());
     loop {
         let event = tokio::select! {
             event = event_receive.recv() => event,
@@ -1930,11 +2098,30 @@ async fn handle_subscription(
                 if share_was_revoked(&authority, revoked) { return Ok(()); }
                 continue;
             }
+            () = tokio::time::sleep_until(tokio::time::Instant::from_std(gate.deadline())),
+                if gate.holding() =>
+            {
+                if let Some(frame) = gate.flush(Instant::now()) {
+                    let outbound = frame_event(session_id, previous_frame.as_deref(), &frame);
+                    previous_frame = Some(frame);
+                    writer.terminal(&outbound).await?;
+                }
+                continue;
+            }
         };
         let Some(event) = event else {
             return Ok(());
         };
         let terminal = is_terminal_event(&event);
+        // Nothing but a newer frame may overtake a held frame: flush it before
+        // any other kind of event. A newer frame simply replaces it.
+        if !matches!(event, SessionEvent::Frame(_))
+            && let Some(frame) = gate.flush(Instant::now())
+        {
+            let outbound = frame_event(session_id, previous_frame.as_deref(), &frame);
+            previous_frame = Some(frame);
+            writer.terminal(&outbound).await?;
+        }
         match event {
             SessionEvent::Frame(frame) => {
                 if previous_frame
@@ -1943,21 +2130,11 @@ async fn handle_subscription(
                 {
                     continue;
                 }
-                let outbound = previous_frame
-                    .as_ref()
-                    .and_then(|previous| FrameDelta::between(previous, &frame))
-                    .map_or_else(
-                        || ServerEvent::TerminalFrame {
-                            session_id,
-                            frame: Box::new((*frame).clone()),
-                        },
-                        |delta| ServerEvent::TerminalDelta {
-                            session_id,
-                            delta: Box::new(delta),
-                        },
-                    );
-                previous_frame = Some(frame);
-                writer.terminal(&outbound).await?;
+                if let Some(frame) = gate.offer(frame, Instant::now()) {
+                    let outbound = frame_event(session_id, previous_frame.as_deref(), &frame);
+                    previous_frame = Some(frame);
+                    writer.terminal(&outbound).await?;
+                }
                 continue;
             }
             SessionEvent::ForegroundProcessChanged { .. } => continue,
@@ -5646,6 +5823,97 @@ mod tests {
             text.contains("TAILMARKER"),
             "recovery replayed the wrong end of the journal; the last screen is the tail"
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// At 30 Hz, 117 frames a second become at most 30 sends, and the send
+    /// always carries the newest frame. The bug this guards: flushing the
+    /// held frame on the *next frame's* arrival, which sent every frame one
+    /// behind and coalesced nothing.
+    #[test]
+    fn the_rate_gate_sends_at_most_one_frame_per_interval_and_keeps_the_newest() {
+        let grid = GridSize::new(4, 1).expect("grid");
+        let frame = |sequence: u64| {
+            let mut model = superplexr_terminal::TerminalModel::new(grid).expect("model");
+            let mut f = model.frame().expect("frame");
+            f.sequence = sequence;
+            Arc::new(f)
+        };
+        let start = Instant::now();
+        let mut gate = RateGate::new(Duration::from_millis(33), start);
+        let mut sent = Vec::new();
+        for tick in 0..117_u64 {
+            let now = start + Duration::from_micros(tick * 8_547);
+            if let Some(frame) = gate.offer(frame(tick + 1), now) {
+                sent.push((frame.sequence, now));
+            }
+            // What the loop's timer does when a frame is held past the deadline.
+            if gate.holding()
+                && now >= gate.deadline()
+                && let Some(frame) = gate.flush(now)
+            {
+                sent.push((frame.sequence, now));
+            }
+        }
+        if let Some(frame) = gate.flush(start + Duration::from_secs(1)) {
+            sent.push((frame.sequence, start + Duration::from_secs(1)));
+        }
+        assert!(
+            sent.len() <= 32,
+            "117 offers over a second must become at most ~30 sends, got {}",
+            sent.len()
+        );
+        assert_eq!(sent.last().map(|(s, _)| *s), Some(117), "the newest frame is what goes out");
+        for pair in sent.windows(2) {
+            assert!(pair[1].1 - pair[0].1 >= Duration::from_millis(33), "no two sends inside one interval");
+        }
+    }
+
+    /// A version bump moves the state directory; the previous version's
+    /// state comes with it, sockets and logs excepted.
+    #[test]
+    fn a_new_state_directory_inherits_the_previous_version() {
+        let root = std::env::temp_dir().join(format!("superplexr-carry-{}", Uuid::new_v4()));
+        let old = root.join("v25");
+        std::fs::create_dir_all(old.join("sessions/abc")).expect("old state");
+        std::fs::write(old.join("sessions/abc/output.raw"), b"journal").expect("journal");
+        std::fs::write(old.join("workspaces.json"), b"{}").expect("workspaces");
+        std::fs::write(old.join("daemon.log"), b"noise").expect("log");
+        std::fs::write(old.join("control.sock"), b"not really a socket").expect("sock");
+
+        // The desktop has usually created the directory already, holding
+        // nothing but the socket it is about to listen on.
+        let new = root.join("v26");
+        std::fs::create_dir_all(&new).expect("pre-created dir");
+        std::fs::write(new.join("control.sock"), b"").expect("socket placeholder");
+        let carried = carry_forward_state(&new).expect("carry forward");
+        assert_eq!(carried.as_deref(), Some(old.as_path()));
+        assert_eq!(
+            std::fs::read(new.join("sessions/abc/output.raw")).expect("copied"),
+            b"journal"
+        );
+        assert!(new.join("workspaces.json").is_file());
+        assert!(!new.join("daemon.log").exists(), "logs are not state");
+        assert_eq!(
+            std::fs::read(new.join("control.sock")).expect("placeholder kept"),
+            b"",
+            "the old socket entry is never copied over the live one"
+        );
+        assert!(
+            old.join("sessions/abc/output.raw").is_file(),
+            "the old directory is left intact"
+        );
+
+        // Second start: nothing to do, nothing overwritten.
+        std::fs::write(new.join("workspaces.json"), b"{\"edited\":1}").expect("edit");
+        assert!(carry_forward_state(&new).expect("no-op").is_none());
+        assert_eq!(
+            std::fs::read(new.join("workspaces.json")).expect("kept"),
+            b"{\"edited\":1}"
+        );
+
+        // No predecessor: a fresh directory, no error.
+        assert!(carry_forward_state(&root.join("v1")).expect("fresh").is_none());
         let _ = std::fs::remove_dir_all(&root);
     }
 

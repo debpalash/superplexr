@@ -81,20 +81,27 @@ not independently verified here.
 
 ---
 
-## 3b. Wire cost of a terminal subscription (measured 2026-09-03)
+## 3b. Wire cost of a terminal subscription (measured 2026-09-03/04)
 
 `crates/superplexr-client/examples/delta_bandwidth` against a live daemon, on
-the protobuf data plane the desktop actually uses: a repainting agent screen
-is **2.27 MB/s** at ~117 deltas/s (~20 KB each), scrolling build output
-**0.97 MB/s**, one full 120×36 frame **21 KB** (~5 B/cell). The same events
-as JSON would be 11× larger; an earlier note here said 25.8 MB/s "on the
-wire", which was the JSON size, not the wire. Still ~45× the web budget.
+the protobuf data plane the desktop actually uses. Before: a repainting agent
+screen was **2.27 MB/s** at ~117 deltas/s (~20 KB each), scrolling build
+output **0.97 MB/s**, one full 120×36 frame **21 KB** (~5 B/cell).
 
-- [ ] Coalesce publishes per remote subscriber to ≤ 30 Hz (actor publishes
-      at up to 125 Hz): ÷4
-- [ ] Within a changed row, send only the changed cell span: ÷3–4 on repaints
-- [ ] Run-length styles within a row: ÷2–3
-- [ ] Re-measure; target ≤ 50 KB/s on the same repaint workload
+- [x] Within a changed row, send only the changed cell span (protocol 26):
+      repaint **162 KB/s**, scroll **121 KB/s**, average delta 1.4 KB — a
+      14× and 8× reduction with no change in what the viewer sees
+- [x] Coalesce publishes per subscriber (`SubscribeTerminal.max_hz`, default
+      60, actor publishes at up to 125), as a tested `RateGate`: the first
+      version flushed the held frame on the next frame's arrival and
+      coalesced nothing
+- [x] Re-measured 2026-09-04: repaint **86 KB/s @60 Hz, 47 KB/s @30 Hz**;
+      scroll **75 KB/s @60, 43 KB/s @30**. Target met at the remote rate
+      (≤ 50 KB/s): 48× below where this started
+- [ ] Run-length styles within a row — not needed for the target; keep for
+      mobile (≤ 20 KB/s) if measurement there demands it
+- [x] Protocol version policy written (`docs/protocol-versioning.md`);
+      a bump carries the previous version's state forward
 
 ## 4. Terminal and desktop certification (Gate E)
 
@@ -112,6 +119,9 @@ wire", which was the JSON size, not the wire. Still ~45× the web budget.
       holds, no daemon request, so it works on agent-owned, observed and
       finished terminals; Shift bypasses an app's mouse reporting, ⌥ drags a
       rectangle, a plain click clears
+- [x] TUI shell: `superplexr attach <session>` paints frames into any
+      terminal and forwards keys (Ctrl-] detaches, `--observe`, `--take`,
+      `--max-hz`); no VT parsing client-side; verified under a real pty
 - [ ] OSC 133 command blocks in the UI: jump, search, copy, rerun
 
 ---

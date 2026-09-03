@@ -96,7 +96,7 @@ changes. Invalid colors, fonts, fields, versions, file types, sizes, or contrast
 leave the previous theme active. Theme parsing and file I/O never occur in
 terminal paint paths.
 
-Debug desktops use `.superplexr-dev/v25` so they can run beside an older packaged
+Debug desktops use `.superplexr-dev/v26` so they can run beside an older packaged
 runtime without taking over its socket or state. Release builds use `.superplexr`.
 An explicit incompatible `--socket` fails before GPUI starts, reports both wire
 versions, and never replaces a daemon that may own live PTYs.
@@ -112,9 +112,9 @@ durable runtime; closing only the desktop does not stop it:
 cargo build -p superplexr-plugin --bin superplexr-agent-status-plugin
 cargo run -p superplexr-cli -- plugin-install-agent-status \
   target/debug/superplexr-agent-status-plugin \
-  --plugin-dir .superplexr-dev/v25/plugins
+  --plugin-dir .superplexr-dev/v26/plugins
 cargo run -p superplexr-cli -- \
-  --socket .superplexr-dev/v25/control.sock plugin-list
+  --socket .superplexr-dev/v26/control.sock plugin-list
 ```
 
 The shown path targets `cargo run -p superplexr-desktop`; packaged builds use

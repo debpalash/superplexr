@@ -111,7 +111,15 @@ fn encode_full_frame(session_id: SessionId, frame: &FullFrame) -> proto::FullFra
 }
 
 fn encode_delta(session_id: SessionId, delta: &FrameDelta) -> proto::FrameDeltaV1 {
-    let (rows, hyperlinks) = encode_rows(delta.changed_rows.iter().map(|changed| &changed.row));
+    let spans = delta
+        .changed_rows
+        .iter()
+        .map(|changed| Row {
+            wrapped: changed.wrapped,
+            cells: changed.cells.clone(),
+        })
+        .collect::<Vec<_>>();
+    let (rows, hyperlinks) = encode_rows(spans.iter());
     let changed_rows = delta
         .changed_rows
         .iter()
@@ -119,6 +127,8 @@ fn encode_delta(session_id: SessionId, delta: &FrameDelta) -> proto::FrameDeltaV
         .map(|(changed, row)| proto::RowReplacement {
             visible_index: u32::from(changed.index),
             row: Some(row),
+            start_column: u32::from(changed.start),
+            span: true,
         })
         .collect();
     proto::FrameDeltaV1 {
@@ -329,9 +339,21 @@ fn decode_delta(message: proto::FrameDeltaV1) -> Result<ServerEvent, ProtocolErr
             let row = replacement.row.ok_or_else(|| {
                 ProtocolError::InvalidTerminalProtobuf("changed row is missing".to_owned())
             })?;
+            let start = if replacement.span {
+                u16::try_from(replacement.start_column).map_err(|_| {
+                    ProtocolError::InvalidTerminalProtobuf(
+                        "changed row start does not fit uint16".to_owned(),
+                    )
+                })?
+            } else {
+                0
+            };
+            let row = decode_row(row, &hyperlinks, styles.len())?;
             Ok(ChangedRow {
                 index,
-                row: decode_row(row, &hyperlinks, styles.len())?,
+                start,
+                cells: row.cells,
+                wrapped: row.wrapped,
             })
         })
         .collect::<Result<Vec<_>, ProtocolError>>()?;
