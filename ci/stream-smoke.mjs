@@ -11,7 +11,10 @@ const { decodeFullFrame, decodeFrameDelta, applyDelta } = await modOf("frames.js
 const step = (s) => console.log(`▸ ${s}`);
 const fail = (s) => { console.log(`   FAIL: ${s}`); process.exit(1); };
 process.on("unhandledRejection", (e) => fail(`${e.code ?? ""} ${e.message ?? JSON.stringify(e)}`));
-const host = (args) => JSON.parse(execSync(`${bin} --socket ${socket} ${args}`).toString());
+const host = (args) => {
+  try { return JSON.parse(execSync(`${bin} --socket ${socket} ${args}`, { stdio: ["ignore", "pipe", "pipe"] }).toString()); }
+  catch (e) { fail(`host command \`${args}\`: ${e.stderr?.toString().trim() || e.message}`); }
+};
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function connect({ shareToken = null, deviceId = uuid(), token = null } = {}) {

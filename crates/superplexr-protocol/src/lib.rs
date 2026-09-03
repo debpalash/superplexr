@@ -345,6 +345,25 @@ pub enum Request {
     TerminalViewers {
         session_id: SessionId,
     },
+    /// Raise a hand: ask the holder of control for it. Idempotent.
+    RequestTerminalControl {
+        session_id: SessionId,
+    },
+    /// The holder offers control to one participant, or to anyone who asked
+    /// when `to` is empty. Only the holder may offer.
+    OfferTerminalControl {
+        session_id: SessionId,
+        #[serde(default)]
+        to: Option<Participant>,
+    },
+    /// Take control that was offered to this participant. Never seizes.
+    AcceptTerminalControl {
+        session_id: SessionId,
+    },
+    /// The holder withdraws an open offer; anyone else lowers their hand.
+    WithdrawTerminalControl {
+        session_id: SessionId,
+    },
     /// Atomically bind a ready planned Run to a durable PTY launch.
     LaunchAgentRun {
         mission_id: MissionId,
@@ -561,6 +580,12 @@ pub struct TerminalSessionSummary {
     pub controller_share_id: Option<Uuid>,
     #[serde(default)]
     pub control_epoch: u64,
+    /// Control the holder has offered, if any. Cleared by any control change.
+    #[serde(default)]
+    pub control_offer: Option<ControlOffer>,
+    /// Hands raised: participants who asked for control and have not got it.
+    #[serde(default)]
+    pub control_requests: Vec<Participant>,
     /// Directory the process was started in.
     ///
     /// The runtime always knows this and persists it, so a client can name a
@@ -1092,6 +1117,8 @@ pub struct ViewerSummary {
     pub label: String,
     pub role: ViewerRole,
     pub since_micros: u64,
+    /// The identity an offer of control can name.
+    pub participant: Participant,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1107,6 +1134,39 @@ pub enum ViewerRole {
     Owner,
     Observer,
     Controller,
+}
+
+/// Who someone is in a room, as far as control is concerned: an owner
+/// screen (client and surface) or a Share. Labels are for people; identity
+/// is the ids.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Participant {
+    pub client_id: Uuid,
+    #[serde(default)]
+    pub surface_id: Option<Uuid>,
+    #[serde(default)]
+    pub share_id: Option<Uuid>,
+    #[serde(default)]
+    pub label: String,
+}
+
+impl Participant {
+    #[must_use]
+    pub fn same_identity(&self, other: &Self) -> bool {
+        self.client_id == other.client_id
+            && self.surface_id == other.surface_id
+            && self.share_id == other.share_id
+    }
+}
+
+/// Control on offer: the holder has said who may take it (or anyone who
+/// asked, when `to` is empty). Bound to the control epoch it was made in,
+/// so an offer never outlives the control it was about.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ControlOffer {
+    pub from: Participant,
+    pub to: Option<Participant>,
+    pub control_epoch: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

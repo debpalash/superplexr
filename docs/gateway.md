@@ -103,6 +103,36 @@ and painted, its limits (no keys, no token-less request, no owner request),
 presence seen by the owner, fifty viewers on one scrolling session with
 bytes per viewer measured, revocation ending the viewer.
 
+## Rooms
+
+A session with several participants — the owner's screens and viewers on
+links — is a room, and control in a room is handed, never seized. The
+moves are exactly these: a participant who may hold control raises a hand
+(`request_terminal_control`); the holder offers control to one hand or to
+anyone who asked (`offer_terminal_control`); the one it was offered to
+accepts (`accept_terminal_control`); either side withdraws
+(`withdraw_terminal_control`). Only the owner may still take by force, as
+before. Observer links can do none of it.
+
+An offer is bound to the control epoch it was made in, so it cannot
+outlive the control it was about: any claim, release, accept or exit
+clears it. Accepting is the only transfer without force and is refused as
+"not offered to this participant" for anyone the offer did not name.
+
+Identity is a participant — client, surface, Share — with a label people
+can read; `terminal-viewers` shows one per viewer so an offer can name the
+screen that asked. Hands and offers ride the session summary on the
+terminal index stream, so every screen sees the room change as it
+happens. The browser's control panel shows only the moves open to this
+participant now; the CLI has `terminal-control-request`, `-offer`,
+`-accept` and `-withdraw`.
+
+`ci/rooms-smoke.sh` walks it: an owner screen and a pair-programmer link,
+a hand raised, an observer refused, an accept before any offer refused,
+control handed to the hand and back again with the owner's keys refused in
+between, and one command typed by two participants across two hand-offs
+arriving as one line.
+
 ## What it is not
 
 - Not a relay or a cloud: the device connects to the runtime directly. NAT

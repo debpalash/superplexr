@@ -251,6 +251,7 @@ function connect({ pairingCode = null } = {}) {
         refreshSessions();
         clearInterval(app.listTimer);
         app.listTimer = setInterval(refreshSessions, 4000);
+        watchSessions();
         const last = app.open?.sessionId ?? safeGet(LAST_SESSION_KEY);
         if (last) openSession(last).catch(() => {});
       }
@@ -328,6 +329,49 @@ async function refreshSessions() {
   }
 }
 
+/** Every change to a session's summary — control, hands, offers — as it happens. */
+async function watchSessions() {
+  try {
+    const accepted = await app.connection.request({ type: "subscribe_terminals" });
+    app.connection.streams.set(accepted.stream_id, (frame) => {
+      if (frame.kind !== Kind.EventBatch) return;
+      const event = json(frame);
+      if (event.type !== "terminal_changed") return;
+      const terminal = event.terminal;
+      if (app.share?.session_ids?.length && !app.share.session_ids.includes(terminal.session_id)) return;
+      const index = app.sessions.findIndex((s) => s.session_id === terminal.session_id);
+      if (index >= 0) app.sessions[index] = terminal; else app.sessions.push(terminal);
+      renderSessions();
+      if (app.open?.sessionId === terminal.session_id) onSummary(terminal);
+    });
+  } catch (error) {
+    console.warn("subscribe_terminals", error);
+  }
+}
+
+function me() {
+  return { client_id: app.connection?.clientId, surface_id: app.open?.surfaceId ?? null, share_id: app.share?.share_id ?? null };
+}
+
+function sameIdentity(a, b) {
+  return !!a && !!b && a.client_id === b.client_id && (a.surface_id ?? null) === (b.surface_id ?? null) && (a.share_id ?? null) === (b.share_id ?? null);
+}
+
+/** The room's control state for the open session, from its summary. */
+function onSummary(summary) {
+  const open = app.open;
+  if (!open) return;
+  const mine = summary.controller_client_id === app.connection.clientId && (summary.controller_surface_id ?? null) === open.surfaceId;
+  if (mine) open.controlEpoch = summary.control_epoch;
+  if (open.writable !== mine) {
+    open.writable = mine;
+    if (mine) fitSession();
+    schedulePaint();
+  }
+  open.summary = summary;
+  updateControlBadge();
+}
+
 function sessionName(s) {
   const exe = s.foreground_process?.executable;
   if (exe) return exe.split("/").pop();
@@ -386,19 +430,56 @@ function setStatus(text) {
   el.status.textContent = text;
 }
 
-function updateControlBadge() {
-  if (!app.open) { el.control.hidden = true; return; }
-  el.control.hidden = false;
-  el.control.dataset.writable = String(app.open.writable);
-  const canTake = !SHARE_TOKEN || app.share?.role === "controller";
-  el.control.textContent = app.open.writable ? "in control" : canTake ? "watching · click to take control" : "watching";
+function button(text, onClick, quiet = false) {
+  const b = document.createElement("button");
+  b.className = quiet ? "button quiet" : "button";
+  b.textContent = text;
+  b.onclick = onClick;
+  return b;
 }
 
-el.control.onclick = async () => {
-  if (!app.open || app.open.writable) return;
-  // A Share may claim only what nobody holds; the owner may take.
-  await claimControl(!SHARE_TOKEN);
-};
+function controlRequest(action, extra = {}) {
+  const open = app.open;
+  return app.connection.request({ type: action, session_id: open.sessionId, ...extra }, { surfaceId: open.surfaceId, controlEpoch: open.controlEpoch })
+    .catch((error) => setStatus(`${action}: ${error.message}`));
+}
+
+/** Control is handed, never seized, except by the owner. The panel shows
+ *  exactly the moves open to this participant right now. */
+function updateControlBadge() {
+  const open = app.open;
+  if (!open) { el.control.hidden = true; return; }
+  el.control.hidden = false;
+  el.control.dataset.writable = String(open.writable);
+  const summary = open.summary ?? {};
+  const hands = summary.control_requests ?? [];
+  const offer = summary.control_offer ?? null;
+  const i = me();
+  const canHold = !SHARE_TOKEN || app.share?.role === "controller";
+  const children = [];
+  if (open.writable) {
+    children.push(document.createTextNode(offer ? `offering to ${offer.to?.label ?? "anyone"}` : "in control"));
+    if (offer) children.push(button("withdraw", () => controlRequest("withdraw_terminal_control"), true));
+    for (const hand of hands) children.push(button(`✋ hand to ${hand.label}`, () => controlRequest("offer_terminal_control", { to: hand })));
+    if (!offer && !hands.length) children.push(button("offer to anyone", () => controlRequest("offer_terminal_control", { to: null }), true));
+    children.push(button("release", () => controlRequest("release_terminal_control"), true));
+  } else {
+    const offeredToMe = offer && (!offer.to || sameIdentity(offer.to, i));
+    const raised = hands.some((hand) => sameIdentity(hand, i));
+    const holder = summary.controller_client_id ? "watching" : "nobody holds control";
+    children.push(document.createTextNode(holder));
+    if (canHold && offeredToMe) children.push(button("accept control", async () => {
+      const body = await controlRequest("accept_terminal_control");
+      if (body?.control_epoch !== undefined) { open.controlEpoch = body.control_epoch; open.writable = true; fitSession(); updateControlBadge(); }
+    }));
+    else if (canHold && raised) children.push(button("✋ raised · lower", () => controlRequest("withdraw_terminal_control"), true));
+    else if (canHold && summary.controller_client_id) children.push(button("✋ raise hand", () => controlRequest("request_terminal_control")));
+    else if (canHold) children.push(button("take control", () => claimControl(false)));
+    if (!SHARE_TOKEN && summary.controller_client_id) children.push(button("take", () => claimControl(true), true));
+    if (hands.length) { const h = document.createElement("span"); h.className = "hands"; h.textContent = `✋ ${hands.length}`; children.push(h); }
+  }
+  el.control.replaceChildren(...children);
+}
 
 async function claimControl(force) {
   const open = app.open;
@@ -415,6 +496,7 @@ async function claimControl(force) {
     open.writable = false;
     if (force) setStatus(`could not take control: ${error.message}`);
   }
+  open.summary = app.sessions.find((s) => s.session_id === open.sessionId) ?? open.summary;
   updateControlBadge();
 }
 
@@ -435,6 +517,7 @@ async function openSession(sessionId, { surfaceId = null } = {}) {
     frame: null,
     selection: null,
     dirty: false,
+    summary: app.sessions.find((s) => s.session_id === sessionId) ?? null,
   };
   app.open = open;
   try { localStorage.setItem(LAST_SESSION_KEY, sessionId); } catch {}

@@ -170,6 +170,8 @@ enum RequestError {
     WaitStreamClosed,
     #[error("runtime terminal wait limit is occupied")]
     TooManyWaits,
+    #[error("control of terminal session {session_id} was not offered to this participant")]
+    ControlNotOffered { session_id: SessionId },
     #[error("client {client_id} does not control terminal session {session_id}")]
     NotController {
         session_id: SessionId,
@@ -256,8 +258,13 @@ struct ViewerGuard {
 }
 
 impl ViewerGuard {
-    fn register(record: &TerminalRecord, authority: &ClientAuthority) -> Self {
-        use superplexr_protocol::{ViewerKind, ViewerRole, ViewerSummary};
+    fn register(
+        record: &TerminalRecord,
+        authority: &ClientAuthority,
+        client_id: uuid::Uuid,
+        surface_id: Option<uuid::Uuid>,
+    ) -> Self {
+        use superplexr_protocol::{Participant, ViewerKind, ViewerRole, ViewerSummary};
         let (kind, label, role) = match authority {
             ClientAuthority::Owner => (ViewerKind::Owner, "owner".to_owned(), ViewerRole::Owner),
             ClientAuthority::Shared(share) => (
@@ -278,9 +285,18 @@ impl ViewerGuard {
             viewers.push(ViewerSummary {
                 viewer_id,
                 kind,
-                label,
+                label: label.clone(),
                 role,
                 since_micros,
+                participant: Participant {
+                    client_id,
+                    surface_id,
+                    share_id: match authority {
+                        ClientAuthority::Owner => None,
+                        ClientAuthority::Shared(share) => Some(share.share_id),
+                    },
+                    label,
+                },
             });
         }
         Self {
@@ -1172,6 +1188,12 @@ fn authorize_request(
             Request::ClaimTerminalControl { session_id, force } => {
                 !force && terminal_in_share(state, share, *session_id)?
             }
+            Request::RequestTerminalControl { session_id }
+            | Request::OfferTerminalControl { session_id, .. }
+            | Request::AcceptTerminalControl { session_id }
+            | Request::WithdrawTerminalControl { session_id } => {
+                terminal_in_share(state, share, *session_id)?
+            }
             _ => false,
         };
     if read_allowed || controller_allowed {
@@ -1445,7 +1467,11 @@ async fn handle_connection_over(
                             request.request_id,
                             session_id,
                             max_hz,
-                            authority,
+                            Subscriber {
+                                client_id: request.client_id,
+                                surface_id: request.surface_id,
+                                authority,
+                            },
                             state,
                             writer,
                         )
@@ -2340,11 +2366,19 @@ fn frame_event(
         )
 }
 
+/// Who a subscription belongs to: the connection's authority and the screen
+/// (client and surface) that asked, which is what an offer of control names.
+struct Subscriber {
+    client_id: uuid::Uuid,
+    surface_id: Option<uuid::Uuid>,
+    authority: ClientAuthority,
+}
+
 async fn handle_subscription(
     request_id: uuid::Uuid,
     session_id: SessionId,
     max_hz: Option<u16>,
-    authority: ClientAuthority,
+    subscriber: Subscriber,
     state: Arc<AppState>,
     writer: SubscriptionWriter,
 ) -> Result<(), ServerError> {
@@ -2362,7 +2396,12 @@ async fn handle_subscription(
         }
     };
     // Present for as long as this task lives, whatever ends it.
-    let _viewer = ViewerGuard::register(&record, &authority);
+    let Subscriber {
+        client_id,
+        surface_id,
+        authority,
+    } = subscriber;
+    let _viewer = ViewerGuard::register(&record, &authority, client_id, surface_id);
 
     writer
         .accept(
@@ -2513,6 +2552,99 @@ async fn handle_request_with_context(
         agent_identity,
     } = context;
     match request {
+        Request::RequestTerminalControl { session_id } => {
+            let record = terminal_record(state, session_id)?;
+            record.live_handle(session_id)?;
+            let me = participant_of(state, client_id, surface_id, share_id).await;
+            let mut projection = record
+                .projection
+                .write()
+                .map_err(|_| RequestError::RegistryPoisoned)?;
+            let holds = projection.summary.controller_client_id == Some(client_id)
+                && projection.summary.controller_surface_id == surface_id;
+            if !holds
+                && !projection
+                    .summary
+                    .control_requests
+                    .iter()
+                    .any(|hand| hand.same_identity(&me))
+            {
+                projection.summary.control_requests.push(me);
+            }
+            publish_terminal(state, &projection.summary);
+            Ok(accepted(session_id))
+        }
+        Request::OfferTerminalControl { session_id, to } => {
+            let record = terminal_record(state, session_id)?;
+            record.live_handle(session_id)?;
+            require_controller(&record, session_id, client_id, surface_id, control_epoch)?;
+            let from = participant_of(state, client_id, surface_id, share_id).await;
+            let mut projection = record
+                .projection
+                .write()
+                .map_err(|_| RequestError::RegistryPoisoned)?;
+            projection.summary.control_offer = Some(superplexr_protocol::ControlOffer {
+                from,
+                to,
+                control_epoch: projection.summary.control_epoch,
+            });
+            publish_terminal(state, &projection.summary);
+            Ok(accepted(session_id))
+        }
+        Request::AcceptTerminalControl { session_id } => {
+            let record = terminal_record(state, session_id)?;
+            record.live_handle(session_id)?;
+            let me = participant_of(state, client_id, surface_id, share_id).await;
+            let mut projection = record
+                .projection
+                .write()
+                .map_err(|_| RequestError::RegistryPoisoned)?;
+            let offered = projection
+                .summary
+                .control_offer
+                .as_ref()
+                .is_some_and(|offer| {
+                    offer.control_epoch == projection.summary.control_epoch
+                        && offer.to.as_ref().is_none_or(|to| to.same_identity(&me))
+                });
+            if !offered {
+                return Err(RequestError::ControlNotOffered { session_id });
+            }
+            projection.summary.control_epoch = next_control_epoch(projection.summary.control_epoch);
+            projection.summary.controller_client_id = Some(client_id);
+            projection.summary.controller_surface_id = surface_id;
+            projection.summary.controller_share_id = share_id;
+            projection.summary.control_offer = None;
+            projection
+                .summary
+                .control_requests
+                .retain(|hand| !hand.same_identity(&me));
+            publish_terminal(state, &projection.summary);
+            Ok(ResponseBody::TerminalControlChanged {
+                session_id,
+                control_epoch: projection.summary.control_epoch,
+            })
+        }
+        Request::WithdrawTerminalControl { session_id } => {
+            let record = terminal_record(state, session_id)?;
+            let me = participant_of(state, client_id, surface_id, share_id).await;
+            let mut projection = record
+                .projection
+                .write()
+                .map_err(|_| RequestError::RegistryPoisoned)?;
+            let holds = projection.summary.controller_client_id == Some(client_id)
+                && projection.summary.controller_surface_id == surface_id;
+            if holds {
+                projection.summary.control_offer = None;
+            } else {
+                projection
+                    .summary
+                    .control_requests
+                    .retain(|hand| !hand.same_identity(&me));
+            }
+            publish_terminal(state, &projection.summary);
+            Ok(accepted(session_id))
+        }
         Request::GatewayInfo => Ok(ResponseBody::GatewayInfo {
             advertised: state.gateway.as_ref().map(|gateway| gateway.advertised.clone()),
             fingerprint: state.gateway.as_ref().map(|gateway| gateway.fingerprint.clone()),
@@ -3525,6 +3657,11 @@ async fn handle_request_with_context(
                 projection.summary.controller_client_id = Some(client_id);
                 projection.summary.controller_surface_id = surface_id;
                 projection.summary.controller_share_id = share_id;
+                projection.summary.control_offer = None;
+                projection
+                    .summary
+                    .control_requests
+                    .retain(|hand| hand.client_id != client_id || hand.surface_id != surface_id);
             }
             publish_terminal(state, &projection.summary);
             Ok(ResponseBody::TerminalControlChanged {
@@ -3543,6 +3680,7 @@ async fn handle_request_with_context(
             projection.summary.controller_client_id = None;
             projection.summary.controller_surface_id = None;
             projection.summary.controller_share_id = None;
+            projection.summary.control_offer = None;
             projection.summary.control_epoch = next_control_epoch(projection.summary.control_epoch);
             publish_terminal(state, &projection.summary);
             Ok(ResponseBody::TerminalControlChanged {
@@ -4537,6 +4675,8 @@ fn start_terminal(
         controller_surface_id: surface_id,
         controller_share_id: None,
         control_epoch: 1,
+        control_offer: None,
+        control_requests: Vec::new(),
         cwd: Some(spawn_cwd),
     };
     let projection = Arc::new(RwLock::new(TerminalProjection {
@@ -4755,6 +4895,8 @@ fn recover_terminal_history(
             controller_surface_id: None,
             controller_share_id: None,
             control_epoch: 0,
+            control_offer: None,
+            control_requests: Vec::new(),
             cwd: Some(spec.cwd.clone()),
         };
         records.insert(
@@ -4776,6 +4918,33 @@ fn recover_terminal_history(
         );
     }
     Ok(records)
+}
+
+/// The identity a request acts as, with a label people can read: the
+/// Share's label for a viewer, "owner" for the owner's own screens.
+async fn participant_of(
+    state: &AppState,
+    client_id: uuid::Uuid,
+    surface_id: Option<uuid::Uuid>,
+    share_id: Option<uuid::Uuid>,
+) -> superplexr_protocol::Participant {
+    let label = match share_id {
+        Some(share_id) => state
+            .shares
+            .lock()
+            .await
+            .list()
+            .into_iter()
+            .find(|share| share.share_id == share_id)
+            .map_or_else(|| "share".to_owned(), |share| share.label),
+        None => "owner".to_owned(),
+    };
+    superplexr_protocol::Participant {
+        client_id,
+        surface_id,
+        share_id,
+        label,
+    }
 }
 
 fn require_controller(
@@ -4825,6 +4994,7 @@ fn release_client_controllers(state: &AppState, client_id: uuid::Uuid) {
             projection.summary.controller_client_id = None;
             projection.summary.controller_surface_id = None;
             projection.summary.controller_share_id = None;
+            projection.summary.control_offer = None;
             projection.summary.control_epoch = next_control_epoch(projection.summary.control_epoch);
             publish_terminal(state, &projection.summary);
         }
@@ -4842,6 +5012,7 @@ fn release_share_controllers(state: &AppState, share_id: uuid::Uuid) {
             projection.summary.controller_client_id = None;
             projection.summary.controller_surface_id = None;
             projection.summary.controller_share_id = None;
+            projection.summary.control_offer = None;
             projection.summary.control_epoch = next_control_epoch(projection.summary.control_epoch);
             publish_terminal(state, &projection.summary);
         }
@@ -5647,6 +5818,8 @@ async fn reconcile_recovered_agent_runs(state: &Arc<AppState>) -> usize {
 }
 
 fn clear_projection_control(projection: &mut TerminalProjection) {
+    projection.summary.control_offer = None;
+    projection.summary.control_requests.clear();
     let had_controller = projection.summary.controller_client_id.is_some()
         || projection.summary.controller_surface_id.is_some();
     projection.summary.controller_client_id = None;
@@ -6170,6 +6343,8 @@ mod tests {
                     controller_surface_id: None,
                     controller_share_id: None,
                     control_epoch: 0,
+                    control_offer: None,
+                    control_requests: Vec::new(),
                     cwd: None,
                 },
                 frame: Some(Arc::new(frame)),
@@ -7247,6 +7422,8 @@ mod tests {
                             controller_surface_id: None,
                             controller_share_id: None,
                             control_epoch: 4,
+                            control_offer: None,
+                            control_requests: Vec::new(),
                             cwd: None,
                         },
                         frame: None,
@@ -7495,6 +7672,8 @@ mod tests {
             controller_surface_id: None,
             controller_share_id: None,
             control_epoch: 0,
+            control_offer: None,
+            control_requests: Vec::new(),
             cwd: None,
         };
         let state = Arc::new(AppState {
@@ -7691,6 +7870,8 @@ mod tests {
                             controller_surface_id: None,
                             controller_share_id: None,
                             control_epoch: 0,
+                            control_offer: None,
+                            control_requests: Vec::new(),
                             cwd: None,
                         },
                         frame: None,

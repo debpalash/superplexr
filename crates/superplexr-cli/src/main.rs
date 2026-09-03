@@ -337,6 +337,29 @@ enum CliCommand {
     TerminalViewers {
         session_id: SessionId,
     },
+    /// Raise a hand: ask whoever holds control of a session for it.
+    TerminalControlRequest {
+        session_id: SessionId,
+    },
+    /// As the holder of control, offer it to one participant (by the ids
+    /// `terminal-viewers` shows) or, with no target, to anyone who asked.
+    TerminalControlOffer {
+        session_id: SessionId,
+        #[arg(long)]
+        to_client: Option<Uuid>,
+        #[arg(long)]
+        to_surface: Option<Uuid>,
+        #[arg(long)]
+        to_share: Option<Uuid>,
+    },
+    /// Take control that was offered to this client.
+    TerminalControlAccept {
+        session_id: SessionId,
+    },
+    /// Withdraw an open offer, or lower a raised hand.
+    TerminalControlWithdraw {
+        session_id: SessionId,
+    },
     /// Terminate a runtime-owned process.
     TerminalKill {
         session_id: SessionId,
@@ -3272,6 +3295,29 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
             unreachable!("plugin installation is handled before connecting to the runtime")
         }
         CliCommand::TerminalViewers { session_id } => Request::TerminalViewers { session_id },
+        CliCommand::TerminalControlRequest { session_id } => {
+            Request::RequestTerminalControl { session_id }
+        }
+        CliCommand::TerminalControlOffer {
+            session_id,
+            to_client,
+            to_surface,
+            to_share,
+        } => Request::OfferTerminalControl {
+            session_id,
+            to: to_client.map(|client_id| superplexr_protocol::Participant {
+                client_id,
+                surface_id: to_surface,
+                share_id: to_share,
+                label: String::new(),
+            }),
+        },
+        CliCommand::TerminalControlAccept { session_id } => {
+            Request::AcceptTerminalControl { session_id }
+        }
+        CliCommand::TerminalControlWithdraw { session_id } => {
+            Request::WithdrawTerminalControl { session_id }
+        }
         CliCommand::DevicePair { label } => Request::CreateDevicePairing { label },
         CliCommand::DeviceList => Request::ListDevices,
         CliCommand::DeviceRevoke { device_id } => Request::RevokeDevice { device_id },

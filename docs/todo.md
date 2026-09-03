@@ -168,9 +168,13 @@ scoped access uses share tokens over the same listener.
       20 lines/s, each subscribed at 30 Hz → 16.1 KB/s per viewer (max
       16.1), 15.3 frames/s each, presence exact at 51 — under the plan's
       20 KB/s gate without compression (the browser has no zstd)
-- [ ] Rooms: control handed, never seized — an explicit offer/accept
-      between participants on top of claim/release; per-participant
-      cursor and selection
+- [x] Rooms: control handed, never seized — raise hand / offer / accept /
+      withdraw on top of claim/release, offers bound to the control epoch,
+      participants named in presence, room state on the index stream, the
+      browser's control panel; `ci/rooms-smoke.sh` (two hand-offs, no
+      keystroke lost)
+- [ ] Rooms in the desktop: show hands and offers, offer from the pane
+- [ ] Per-participant cursor and selection shown to the others
 - [ ] Replay: journal playback at speed with Faults, Runs and hand-offs as
       chapters
 
