@@ -128,7 +128,30 @@ scoped access uses share tokens over the same listener.
 - [ ] Per-connection request rate limits
 - [ ] Outside security review of pairing and token scope before any public
       exposure (the phase gate)
-- [ ] WebSocket framing of the same protocol, for the browser (phase 4)
+
+## 3d. Web shell (platform plan, phase 4 — built 2026-09-04)
+
+- [x] One port: the gateway listener sniffs wire magic vs HTTP and serves
+      the page, its scripts and `wss://…/ws` beside the native wire
+- [x] WebSocket hand-rolled in `crates/superplexr-server/src/web.rs` (RFC
+      6455 framing, masking, origin check; unit tests against the RFC's own
+      vectors) — no web framework, no new crates beyond `ring` for SHA-1
+- [x] Browser client in `web/` as plain ES modules: wire_v3 header and JSON
+      control plane, a hand-written protobuf reader for the terminal data
+      plane, a canvas renderer, pairing with the same code, keys, resize,
+      paste, selection and copy, reconnect with backoff
+- [x] `start_terminal` with an empty program/cwd means the login shell at
+      home, so screens that do not know the machine can say "new shell"
+- [x] End-to-end (`ci/web-smoke.sh`) green: page + CSP, unpaired refused, pair,
+      shell started from the browser, frames decoded and applied, echo seen,
+      off-host origin refused
+- [x] Found by the smoke test: the subscriber task hit an `unreachable!` on
+      a finished command block (OSC 133), freezing that viewer's frames —
+      the desktop's too — after the first command; `protocol_event` is
+      total now, with a test
+- [ ] Mouse reporting to the session when the program asks for it
+- [ ] Scrollback in the browser (history pages over the wire)
+- [ ] IME / composition input
 
 ## 4. Terminal and desktop certification (Gate E)
 

@@ -5587,6 +5587,7 @@ dependencies = [
  "clap",
  "libc",
  "rcgen",
+ "ring",
  "rustls",
  "serde",
  "serde_json",

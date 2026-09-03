@@ -3,6 +3,7 @@ mod device_store;
 mod engine_driver;
 mod fault_store;
 mod gateway;
+mod web;
 mod provider_status;
 mod realized_change;
 mod review_artifact;
@@ -490,15 +491,9 @@ async fn run_server(args: Args) -> Result<(), ServerError> {
                 tokio::spawn(async move {
                     match acceptor.accept(tcp).await {
                         Ok(tls) => {
-                            let (read, write) = tokio::io::split(tls);
-                            if let Err(error) = handle_connection_over(
-                                Box::new(read),
-                                Box::new(write),
-                                state,
-                                Transport::Gateway,
-                            )
-                            .await
-                            {
+                            // The wire, or a browser: web::serve reads the
+                            // first bytes and chooses.
+                            if let Err(error) = web::serve(tls, state, peer).await {
                                 eprintln!("gateway connection from {peer} ended: {error}");
                             }
                         }
@@ -2351,9 +2346,11 @@ async fn handle_subscription(
             }
             SessionEvent::ForegroundProcessChanged { .. } => continue,
             event => {
-                writer
-                    .terminal(&protocol_event(session_id, event))
-                    .await?
+                // Command blocks and foreground changes ride other streams; a
+                // kind this stream does not carry must never end it.
+                if let Some(event) = protocol_event(session_id, event) {
+                    writer.terminal(&event).await?;
+                }
             }
         }
         if terminal {
@@ -4322,12 +4319,29 @@ async fn compensate_failed_launch(
     }
 }
 
+/// A shell that does not know this machine — a browser, a phone — leaves
+/// the program and directory empty and gets the runtime user's login shell
+/// in their home, which is what "new shell" means on every other screen.
+fn fill_in_shell_defaults(spec: &mut TerminalSessionSpec) {
+    if spec.program.as_os_str().is_empty() {
+        spec.program = std::env::var_os("SHELL")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/bin/sh"));
+    }
+    if spec.cwd.as_os_str().is_empty() {
+        spec.cwd = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"));
+    }
+}
+
 fn start_terminal(
     mut spec: TerminalSessionSpec,
     client_id: uuid::Uuid,
     surface_id: Option<uuid::Uuid>,
     state: &Arc<AppState>,
 ) -> Result<ResponseBody, RequestError> {
+    fill_in_shell_defaults(&mut spec);
     // Shell integration keys off this: it stays inert in terminals superplexr
     // does not own, so a person's shell behaves normally elsewhere.
     spec.environment_delta.insert(
@@ -4736,14 +4750,14 @@ fn observe_terminal(
                             projection.summary.foreground_process = None;
                             clear_projection_control(&mut projection);
                             projection.final_event =
-                                Some(protocol_event(session_id, event.clone()));
+                                protocol_event(session_id, event.clone());
                         }
                         SessionEvent::Failed { .. } => {
                             projection.summary.status = TerminalSessionStatus::Failed;
                             projection.summary.foreground_process = None;
                             clear_projection_control(&mut projection);
                             projection.final_event =
-                                Some(protocol_event(session_id, event.clone()));
+                                protocol_event(session_id, event.clone());
                         }
                         SessionEvent::Bell { .. }
                         | SessionEvent::CommandFinished(_)
@@ -5890,17 +5904,19 @@ const fn is_terminal_event(event: &SessionEvent) -> bool {
     matches!(event, SessionEvent::Exited(_) | SessionEvent::Failed { .. })
 }
 
-fn protocol_event(session_id: SessionId, event: SessionEvent) -> ServerEvent {
-    match event {
+/// The wire event for a session event, or `None` for the kinds a terminal
+/// stream does not carry: foreground changes go out on the terminal index
+/// stream and finished command blocks become Faults. Total on purpose — a
+/// subscriber task that panicked here used to freeze its viewer without a
+/// word, after the first command a shell with OSC 133 finished.
+fn protocol_event(session_id: SessionId, event: SessionEvent) -> Option<ServerEvent> {
+    Some(match event {
         SessionEvent::Frame(frame) => ServerEvent::TerminalFrame {
             session_id,
             frame: Box::new((*frame).clone()),
         },
-        SessionEvent::ForegroundProcessChanged { .. } => {
-            unreachable!("foreground process changes use the terminal index stream")
-        }
-        SessionEvent::CommandFinished(_) => {
-            unreachable!("command blocks become Faults instead of terminal events")
+        SessionEvent::ForegroundProcessChanged { .. } | SessionEvent::CommandFinished(_) => {
+            return None;
         }
         SessionEvent::Bell { count } => ServerEvent::TerminalBell { session_id, count },
         SessionEvent::PasteConfirmation(confirmation) => ServerEvent::PasteConfirmation {
@@ -5920,11 +5936,52 @@ fn protocol_event(session_id: SessionId, event: SessionEvent) -> ServerEvent {
             session_id,
             message,
         },
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn events_other_streams_carry_do_not_end_a_terminal_subscription() {
+        let session_id = SessionId::new();
+        assert!(
+            protocol_event(
+                session_id,
+                SessionEvent::ForegroundProcessChanged { process_id: 1 }
+            )
+            .is_none()
+        );
+        assert!(matches!(
+            protocol_event(session_id, SessionEvent::Bell { count: 2 }),
+            Some(ServerEvent::TerminalBell { count: 2, .. })
+        ));
+    }
+
+    #[test]
+    fn empty_program_and_cwd_become_the_login_shell_at_home() {
+        let mut spec = TerminalSessionSpec {
+            session_id: SessionId::new(),
+            mission_id: None,
+            run_id: None,
+            program: PathBuf::new(),
+            args: Vec::new(),
+            cwd: PathBuf::new(),
+            environment_delta: Default::default(),
+            grid: superplexr_terminal::GridSize::new(80, 24).expect("grid"),
+        };
+        fill_in_shell_defaults(&mut spec);
+        assert!(!spec.program.as_os_str().is_empty());
+        assert!(spec.cwd.is_absolute());
+        let mut chosen = TerminalSessionSpec {
+            program: PathBuf::from("/bin/echo"),
+            cwd: PathBuf::from("/tmp"),
+            ..spec
+        };
+        fill_in_shell_defaults(&mut chosen);
+        assert_eq!(chosen.program, PathBuf::from("/bin/echo"));
+        assert_eq!(chosen.cwd, PathBuf::from("/tmp"));
+    }
+
     use super::*;
     use std::{collections::BTreeMap, time::Duration};
     use superplexr_core::{

@@ -1,0 +1,605 @@
+// The web shell. One WebSocket carries the same wire the desktop and TUI use;
+// this file is the state machine around it: pairing, the session list, one
+// open terminal with keys in and frames out, selection and copy.
+
+import { Kind, FrameReader, Sequencer, encodeJson, hello, json, uuid, PROTOCOL_VERSION } from "/wire.js";
+import { decodeFullFrame, decodeFrameDelta, decodeLifecycle, applyDelta } from "/frames.js";
+import { Renderer, selectedText } from "/render.js";
+
+const $ = (id) => document.getElementById(id);
+const el = {
+  link: $("link"),
+  control: $("control"),
+  newShell: $("new-shell"),
+  forget: $("forget"),
+  pair: $("pair"),
+  pairForm: $("pair-form"),
+  pairCode: $("pair-code"),
+  pairError: $("pair-error"),
+  main: $("main"),
+  sessions: $("sessions"),
+  screen: $("screen"),
+  empty: $("empty"),
+  status: $("status"),
+};
+
+// ---- what this browser remembers -------------------------------------------
+
+const DEVICE_KEY = "superplexr.device";
+const LAST_SESSION_KEY = "superplexr.last-session";
+
+function loadDevice() {
+  try {
+    const raw = localStorage.getItem(DEVICE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return { id: uuid(), token: null };
+}
+
+function saveDevice(device) {
+  try { localStorage.setItem(DEVICE_KEY, JSON.stringify(device)); } catch {}
+}
+
+function forgetDevice() {
+  try { localStorage.removeItem(DEVICE_KEY); localStorage.removeItem(LAST_SESSION_KEY); } catch {}
+}
+
+// ---- the connection --------------------------------------------------------
+
+class Connection {
+  constructor(device, { pairingCode = null, onEvent, onState, onClose }) {
+    this.device = device;
+    this.pairingCode = pairingCode;
+    this.onEvent = onEvent;
+    this.onState = onState;
+    this.onClose = onClose;
+    this.clientId = uuid();
+    this.reader = new FrameReader();
+    this.sequencer = new Sequencer();
+    this.pending = new Map();
+    this.streams = new Map();
+    this.welcome = null;
+    this.refused = null;
+    const scheme = location.protocol === "https:" ? "wss" : "ws";
+    this.ws = new WebSocket(`${scheme}://${location.host}/ws`);
+    this.ws.binaryType = "arraybuffer";
+    this.ws.onopen = () => {
+      this.send(encodeJson(Kind.Hello, 0, hello(this.clientId, device.id, { deviceToken: device.token, pairingCode }), this.sequencer));
+    };
+    this.ws.onmessage = (event) => {
+      this.reader.push(new Uint8Array(event.data));
+      try {
+        for (const frame of this.reader.take()) this.dispatch(frame);
+      } catch (error) {
+        console.error(error);
+        this.ws.close(1002, String(error.message ?? error));
+      }
+    };
+    this.ws.onclose = (event) => {
+      for (const { reject } of this.pending.values()) reject(new Error("connection closed"));
+      this.pending.clear();
+      this.onClose({ refused: this.refused, code: event.code, reason: event.reason });
+    };
+    this.ws.onerror = () => {};
+  }
+
+  send(bytes) {
+    if (this.ws.readyState === WebSocket.OPEN) this.ws.send(bytes);
+  }
+
+  dispatch(frame) {
+    if (!this.welcome) {
+      if (frame.kind === Kind.Welcome) {
+        this.welcome = json(frame);
+        if (this.welcome.device_token) {
+          this.device.token = this.welcome.device_token;
+          saveDevice(this.device);
+        }
+        this.onState("live", this.welcome);
+      } else if (frame.kind === Kind.Close) {
+        this.refused = json(frame);
+      } else {
+        throw new Error(`handshake answered with kind ${frame.kind}`);
+      }
+      return;
+    }
+    if (frame.streamId === 0) {
+      if (frame.kind === Kind.Response) {
+        const response = json(frame);
+        const waiter = this.pending.get(response.request_id);
+        if (!waiter) return;
+        this.pending.delete(response.request_id);
+        if (response.result.status === "success") waiter.resolve(response.result.body);
+        else waiter.reject(Object.assign(new Error(response.result.message), { code: response.result.code }));
+      } else if (frame.kind === Kind.Close) {
+        this.refused = json(frame);
+      } else if (frame.kind === Kind.EventBatch) {
+        this.onEvent(json(frame));
+      }
+      return;
+    }
+    const handler = this.streams.get(frame.streamId);
+    if (handler) handler(frame);
+  }
+
+  request(action, { surfaceId = null, controlEpoch = null, timeoutMs = 30000 } = {}) {
+    const requestId = uuid();
+    const envelope = {
+      version: PROTOCOL_VERSION,
+      client_id: this.clientId,
+      request_id: requestId,
+      surface_id: surfaceId,
+      control_epoch: controlEpoch,
+      action,
+    };
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(requestId);
+        reject(new Error(`no answer to ${action.type} within ${timeoutMs / 1000}s`));
+      }, timeoutMs);
+      this.pending.set(requestId, {
+        resolve: (body) => { clearTimeout(timer); resolve(body); },
+        reject: (error) => { clearTimeout(timer); reject(error); },
+      });
+      this.send(encodeJson(Kind.Request, 0, envelope, this.sequencer));
+    });
+  }
+
+  close() {
+    this.ws.close(1000, "done");
+  }
+}
+
+// ---- keys ------------------------------------------------------------------
+
+const NAMED_KEYS = {
+  Enter: "enter", Backspace: "backspace", Delete: "delete", Tab: "tab", Escape: "escape",
+  ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down",
+  Home: "home", End: "end", Insert: "insert", PageUp: "pageup", PageDown: "pagedown", " ": "space",
+};
+const CODE_KEYS = {
+  Minus: "-", Equal: "=", BracketLeft: "[", BracketRight: "]", Backslash: "\\", Semicolon: ";",
+  Quote: "'", Comma: ",", Period: ".", Slash: "/", Backquote: "`", Space: "space",
+};
+
+function physicalFromCode(code) {
+  if (/^Key[A-Z]$/.test(code)) return code[3].toLowerCase();
+  if (/^Digit[0-9]$/.test(code)) return code[5];
+  return CODE_KEYS[code] ?? null;
+}
+
+const NO_MODS = { shift: false, alt: false, control: false, super_key: false, caps_lock: false, num_lock: false };
+
+function keyInput(e) {
+  let physical = null;
+  let text = null;
+  if (NAMED_KEYS[e.key]) physical = NAMED_KEYS[e.key];
+  else if (/^F([1-9]|1[0-9]|2[0-5])$/.test(e.key)) physical = e.key.toLowerCase();
+  else if ([...e.key].length === 1) {
+    physical = physicalFromCode(e.code) ?? e.key.toLowerCase();
+    if (!e.ctrlKey && !e.altKey) text = e.key;
+  } else return null;
+  if (physical === "space" && !e.ctrlKey && !e.altKey) text = " ";
+  const codepoint = physical === "space" ? " " : [...physical].length === 1 ? physical : null;
+  return {
+    physical_key: physical,
+    logical_key: e.key,
+    text,
+    modifiers: { shift: e.shiftKey, alt: e.altKey, control: e.ctrlKey, super_key: e.metaKey, caps_lock: e.getModifierState?.("CapsLock") ?? false, num_lock: false },
+    consumed_modifiers: NO_MODS,
+    action: e.repeat ? "repeat" : "press",
+    composing: false,
+    unshifted_codepoint: codepoint,
+  };
+}
+
+// ---- the app ---------------------------------------------------------------
+
+const app = {
+  device: loadDevice(),
+  connection: null,
+  reconnectDelay: 1000,
+  sessions: [],
+  listTimer: null,
+  open: null, // { sessionId, surfaceId, controlEpoch, writable, streamId, frame, selection, dirty }
+  renderer: new Renderer(el.screen),
+  focused: false,
+};
+
+function setLink(state, text) {
+  el.link.dataset.state = state;
+  el.link.textContent = text;
+}
+
+function connect({ pairingCode = null } = {}) {
+  if (app.connection) app.connection.close();
+  setLink("connecting", pairingCode ? "pairing" : "connecting");
+  app.connection = new Connection(app.device, {
+    pairingCode,
+    onState: (state, welcome) => {
+      if (state === "live") {
+        app.reconnectDelay = 1000;
+        setLink("live", `${location.host} · ${welcome.runtime_version}`);
+        el.pair.hidden = true;
+        el.pairError.hidden = true;
+        el.main.hidden = false;
+        el.newShell.hidden = false;
+        el.forget.hidden = false;
+        refreshSessions();
+        clearInterval(app.listTimer);
+        app.listTimer = setInterval(refreshSessions, 4000);
+        const last = app.open?.sessionId ?? safeGet(LAST_SESSION_KEY);
+        if (last) openSession(last).catch(() => {});
+      }
+    },
+    onEvent: () => {},
+    onClose: ({ refused, reason }) => {
+      clearInterval(app.listTimer);
+      if (refused && refused.code === "gateway_unauthorized") {
+        app.device.token = null;
+        saveDevice(app.device);
+        showPairing(pairingCode ? refused.message : null);
+        return;
+      }
+      if (refused && refused.code === "device_revoked") {
+        app.device.token = null;
+        saveDevice(app.device);
+        showPairing("this browser's pairing was revoked on the runtime");
+        return;
+      }
+      if (refused) {
+        showPairing(`${refused.code}: ${refused.message}`);
+        return;
+      }
+      setLink("lost", `reconnecting in ${Math.round(app.reconnectDelay / 1000)}s${reason ? ` · ${reason}` : ""}`);
+      if (app.open) app.open.streamId = null;
+      setTimeout(() => connect(), app.reconnectDelay);
+      app.reconnectDelay = Math.min(app.reconnectDelay * 2, 15000);
+    },
+  });
+}
+
+function showPairing(error) {
+  el.main.hidden = true;
+  el.newShell.hidden = true;
+  el.forget.hidden = true;
+  el.pair.hidden = false;
+  setLink("refused", error ? "refused" : "not paired");
+  el.pairError.textContent = error ?? "";
+  el.pairError.hidden = !error;
+  el.pairCode.focus();
+}
+
+function safeGet(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+// ---- sessions --------------------------------------------------------------
+
+async function refreshSessions() {
+  if (!app.connection?.welcome) return;
+  try {
+    const body = await app.connection.request({ type: "list_terminals", include_archived: false });
+    app.sessions = body.terminals ?? [];
+    renderSessions();
+  } catch (error) {
+    console.warn("list_terminals", error);
+  }
+}
+
+function sessionName(s) {
+  const exe = s.foreground_process?.executable;
+  if (exe) return exe.split("/").pop();
+  return s.status === "running" ? "shell" : s.status;
+}
+
+function shortCwd(cwd) {
+  if (!cwd) return "";
+  return cwd.replace(/^\/Users\/[^/]+|^\/home\/[^/]+/, "~");
+}
+
+function renderSessions() {
+  const rank = { running: 0, exited: 1, failed: 2 };
+  const sessions = [...app.sessions].sort((a, b) => (rank[a.status] ?? 3) - (rank[b.status] ?? 3));
+  el.sessions.replaceChildren(...sessions.map((s) => {
+    const button = document.createElement("button");
+    button.className = "session";
+    button.dataset.status = s.status;
+    button.setAttribute("aria-current", String(app.open?.sessionId === s.session_id));
+    const dot = document.createElement("span");
+    dot.className = "dot";
+    const text = document.createElement("span");
+    const name = document.createElement("div");
+    name.className = "name";
+    name.textContent = sessionName(s);
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.textContent = `${shortCwd(s.cwd)}${s.controller_client_id ? " · held" : ""}`;
+    text.append(name, meta);
+    button.append(dot, text);
+    button.onclick = () => openSession(s.session_id).catch((error) => setStatus(String(error.message ?? error)));
+    return button;
+  }));
+}
+
+function setStatus(text) {
+  el.status.textContent = text;
+}
+
+function updateControlBadge() {
+  if (!app.open) { el.control.hidden = true; return; }
+  el.control.hidden = false;
+  el.control.dataset.writable = String(app.open.writable);
+  el.control.textContent = app.open.writable ? "in control" : "watching · click to take control";
+}
+
+el.control.onclick = async () => {
+  if (!app.open || app.open.writable) return;
+  await claimControl(true);
+};
+
+async function claimControl(force) {
+  const open = app.open;
+  if (!open) return;
+  try {
+    const body = await app.connection.request(
+      { type: "claim_terminal_control", session_id: open.sessionId, force },
+      { surfaceId: open.surfaceId, controlEpoch: open.controlEpoch },
+    );
+    open.controlEpoch = body.control_epoch;
+    open.writable = true;
+    fitSession();
+  } catch (error) {
+    open.writable = false;
+    if (force) setStatus(`could not take control: ${error.message}`);
+  }
+  updateControlBadge();
+}
+
+async function openSession(sessionId, { surfaceId = null } = {}) {
+  const connection = app.connection;
+  if (!connection?.welcome) return;
+  if (app.open?.streamId) {
+    const previous = app.open;
+    connection.streams.delete(previous.streamId);
+    connection.request({ type: "unsubscribe", stream_id: previous.streamId }).catch(() => {});
+  }
+  const open = {
+    sessionId,
+    surfaceId: surfaceId ?? (app.open?.sessionId === sessionId ? app.open.surfaceId : uuid()),
+    controlEpoch: app.open?.sessionId === sessionId ? app.open.controlEpoch : null,
+    writable: false,
+    streamId: null,
+    frame: null,
+    selection: null,
+    dirty: false,
+  };
+  app.open = open;
+  try { localStorage.setItem(LAST_SESSION_KEY, sessionId); } catch {}
+  renderSessions();
+  const snapshot = await connection.request({ type: "terminal_snapshot", session_id: sessionId });
+  if (app.open !== open) return;
+  open.frame = snapshot.frame;
+  el.empty.hidden = true;
+  schedulePaint();
+  await claimControl(false);
+  const accepted = await connection.request({ type: "subscribe_terminal", session_id: sessionId, max_hz: 60 });
+  if (app.open !== open) {
+    connection.request({ type: "unsubscribe", stream_id: accepted.stream_id }).catch(() => {});
+    return;
+  }
+  open.streamId = accepted.stream_id;
+  connection.streams.set(accepted.stream_id, (frame) => onStreamFrame(open, frame));
+  el.screen.focus();
+}
+
+function onStreamFrame(open, frame) {
+  if (app.open !== open) return;
+  switch (frame.kind) {
+    case Kind.FullFrame: {
+      open.frame = decodeFullFrame(frame.payload).frame;
+      schedulePaint();
+      break;
+    }
+    case Kind.FrameDelta: {
+      const { delta } = decodeFrameDelta(frame.payload);
+      if (!open.frame) return;
+      try {
+        applyDelta(open.frame, delta);
+      } catch (error) {
+        console.warn("delta rejected, taking a snapshot", error);
+        app.connection.request({ type: "terminal_snapshot", session_id: open.sessionId })
+          .then((body) => { if (app.open === open) { open.frame = body.frame; schedulePaint(); } })
+          .catch(() => {});
+        return;
+      }
+      schedulePaint();
+      break;
+    }
+    case Kind.TerminalLifecycle: {
+      const life = decodeLifecycle(frame.payload);
+      if (life.state === "exited") {
+        const how = life.exit?.code !== undefined ? `exit ${life.exit.code}` : life.exit?.signal !== undefined ? `signal ${life.exit.signal}` : "exited";
+        setStatus(`session ended · ${how}`);
+      } else if (life.state === "lost") {
+        setStatus(`session lost${life.reason ? ` · ${life.reason}` : ""}`);
+      }
+      refreshSessions();
+      break;
+    }
+    case Kind.ResyncRequired: {
+      app.connection.request({ type: "terminal_snapshot", session_id: open.sessionId })
+        .then((body) => { if (app.open === open) { open.frame = body.frame; schedulePaint(); } })
+        .catch(() => {});
+      break;
+    }
+    case Kind.Close: {
+      open.streamId = null;
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+// ---- painting --------------------------------------------------------------
+
+function schedulePaint() {
+  if (!app.open || app.open.dirty) return;
+  app.open.dirty = true;
+  requestAnimationFrame(() => {
+    const open = app.open;
+    if (!open) return;
+    open.dirty = false;
+    if (!open.frame) return;
+    app.renderer.paint(open.frame, { focused: app.focused, selection: open.selection });
+    const f = open.frame;
+    const parts = [];
+    if (f.title) parts.push(f.title);
+    if (f.current_directory) parts.push(shortCwd(f.current_directory));
+    parts.push(`${f.grid.columns}×${f.grid.rows}`);
+    parts.push(open.writable ? "control" : "watching");
+    if (f.mouse_tracking) parts.push("mouse");
+    setStatus(parts.join(" · "));
+  });
+}
+
+// ---- size ------------------------------------------------------------------
+
+let resizeTimer = null;
+
+function fitSession() {
+  const open = app.open;
+  if (!open?.writable || !open.frame) return;
+  const fit = app.renderer.fit();
+  if (fit.columns === open.frame.grid.columns && fit.rows === open.frame.grid.rows) return;
+  app.connection.request(
+    { type: "terminal_resize", session_id: open.sessionId, grid: { columns: fit.columns, rows: fit.rows }, cell_width_px: fit.cellWidthPx, cell_height_px: fit.cellHeightPx },
+    { surfaceId: open.surfaceId, controlEpoch: open.controlEpoch },
+  ).catch((error) => setStatus(`resize: ${error.message}`));
+}
+
+new ResizeObserver(() => {
+  app.renderer.measure();
+  schedulePaint();
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(fitSession, 150);
+}).observe(el.screen);
+
+// ---- input -----------------------------------------------------------------
+
+el.screen.addEventListener("focus", () => { app.focused = true; schedulePaint(); });
+el.screen.addEventListener("blur", () => { app.focused = false; schedulePaint(); });
+
+el.screen.addEventListener("keydown", (e) => {
+  const open = app.open;
+  if (!open) return;
+  if (e.metaKey || e.isComposing) return; // the browser's own shortcuts, copy and paste included
+  const input = keyInput(e);
+  if (!input) return;
+  e.preventDefault();
+  if (!open.writable) return;
+  open.selection = null;
+  app.connection.request({ type: "terminal_key", session_id: open.sessionId, input }, { surfaceId: open.surfaceId, controlEpoch: open.controlEpoch, timeoutMs: 10000 })
+    .catch((error) => {
+      if (error.code === "control_lost" || /control/.test(error.message ?? "")) {
+        open.writable = false;
+        updateControlBadge();
+      }
+      setStatus(`key: ${error.message}`);
+    });
+});
+
+document.addEventListener("paste", async (e) => {
+  const open = app.open;
+  if (!open?.writable || document.activeElement !== el.screen) return;
+  const text = e.clipboardData?.getData("text/plain");
+  if (!text) return;
+  e.preventDefault();
+  const bytes = [...new TextEncoder().encode(text)];
+  const paste = (confirmed) => app.connection.request({ type: "terminal_paste", session_id: open.sessionId, bytes, confirmed }, { surfaceId: open.surfaceId, controlEpoch: open.controlEpoch });
+  try {
+    await paste(false);
+  } catch (error) {
+    if (/confirm|unsafe|multiline|escape/i.test(`${error.code} ${error.message}`) && window.confirm("The clipboard holds line breaks or control characters. Paste it anyway?")) {
+      await paste(true).catch((again) => setStatus(`paste: ${again.message}`));
+    } else {
+      setStatus(`paste: ${error.message}`);
+    }
+  }
+});
+
+document.addEventListener("copy", (e) => {
+  const open = app.open;
+  if (!open?.selection || !open.frame || document.activeElement !== el.screen) return;
+  const text = selectedText(open.frame, open.selection);
+  if (!text) return;
+  e.clipboardData.setData("text/plain", text);
+  e.preventDefault();
+});
+
+let dragging = false;
+el.screen.addEventListener("pointerdown", (e) => {
+  const open = app.open;
+  if (!open?.frame || e.button !== 0) return;
+  el.screen.focus();
+  const rect = el.screen.getBoundingClientRect();
+  const at = app.renderer.cellAt(e.clientX - rect.left, e.clientY - rect.top);
+  open.selection = { anchor: at, head: at };
+  dragging = true;
+  el.screen.setPointerCapture(e.pointerId);
+  schedulePaint();
+});
+el.screen.addEventListener("pointermove", (e) => {
+  const open = app.open;
+  if (!dragging || !open?.selection) return;
+  const rect = el.screen.getBoundingClientRect();
+  const at = app.renderer.cellAt(e.clientX - rect.left, e.clientY - rect.top);
+  at.column = Math.max(0, Math.min(at.column, open.frame.grid.columns - 1));
+  at.row = Math.max(0, Math.min(at.row, open.frame.grid.rows - 1));
+  open.selection.head = at;
+  schedulePaint();
+});
+el.screen.addEventListener("pointerup", () => {
+  dragging = false;
+  const open = app.open;
+  if (open?.selection && open.selection.anchor.row === open.selection.head.row && open.selection.anchor.column === open.selection.head.column) {
+    open.selection = null;
+    schedulePaint();
+  }
+});
+
+// ---- chrome ----------------------------------------------------------------
+
+el.pairForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const code = el.pairCode.value.trim().toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!code) return;
+  connect({ pairingCode: code });
+});
+
+el.newShell.onclick = async () => {
+  const fit = app.renderer.fit();
+  // The surface that starts a session holds its control; open it as the same one.
+  const surfaceId = uuid();
+  try {
+    const body = await app.connection.request({
+      type: "start_terminal",
+      spec: { session_id: uuid(), mission_id: null, run_id: null, program: "", args: [], cwd: "", environment_delta: {}, grid: { columns: fit.columns, rows: fit.rows } },
+    }, { surfaceId, timeoutMs: 20000 });
+    await refreshSessions();
+    await openSession(body.terminal.session_id, { surfaceId });
+  } catch (error) {
+    setStatus(`new shell: ${error.message}`);
+  }
+};
+
+el.forget.onclick = () => {
+  forgetDevice();
+  app.connection?.close();
+  app.device = { id: uuid(), token: null };
+  showPairing(null);
+};
+
+if (app.device.token) connect();
+else showPairing(null);

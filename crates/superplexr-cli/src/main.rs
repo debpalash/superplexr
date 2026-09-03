@@ -93,6 +93,9 @@ enum CliCommand {
         #[arg(long, default_value = "device")]
         label: String,
     },
+    /// On the device: forget the stored pairing for `--gateway`. The runtime
+    /// keeps the device until `device-revoke`; this only clears the token here.
+    Forget,
     /// Attach this terminal to a session: frames in, keystrokes out. Ctrl-]
     /// detaches; the session keeps running. Works over plain SSH with
     /// nothing installed on the far side but the daemon.
@@ -1338,6 +1341,21 @@ async fn main() -> Result<(), CliError> {
         }
         CliCommand::Pair { code, label } => {
             return run_pair(gateway.as_deref(), fingerprint.as_deref(), &code, &label);
+        }
+        CliCommand::Forget => {
+            let address = gateway.as_deref().ok_or_else(|| {
+                CliError::Usage("--gateway host:port names the pairing to forget".to_owned())
+            })?;
+            let forgotten = device_credentials::forget(address).map_err(CliError::Usage)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "type": "forgotten",
+                    "gateway": address,
+                    "had_credentials": forgotten,
+                }))?
+            );
+            return Ok(());
         }
         CliCommand::FaultFix {
             fault_id,
@@ -3172,8 +3190,8 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
         CliCommand::DevicePair { label } => Request::CreateDevicePairing { label },
         CliCommand::DeviceList => Request::ListDevices,
         CliCommand::DeviceRevoke { device_id } => Request::RevokeDevice { device_id },
-        CliCommand::Pair { .. } => {
-            unreachable!("pairing completes inside the gateway handshake, before any request")
+        CliCommand::Pair { .. } | CliCommand::Forget => {
+            unreachable!("pairing and forgetting never reach the runtime as requests")
         }
         CliCommand::Ping => Request::Ping,
     };

@@ -46,6 +46,35 @@ superplexr pair --gateway host:7373 --fingerprint sha256:… K7PM2XQ4
 The token lands in `~/.superplexr/devices/host_7373.json` (owner-only). From
 then on any command reaches the runtime with `--gateway host:7373`, and
 `superplexr attach --gateway host:7373 <session>` is the TUI shell over TLS.
+`superplexr forget --gateway host:7373` drops the stored token on the
+device; the runtime keeps the device listed until `device-revoke`.
+
+## The browser
+
+The same port serves the web shell. The listener reads the first bytes of a
+TLS connection: the wire's magic means a native shell, an HTTP request line
+means a browser. The page and its scripts are embedded in the runtime
+(`web/`, no build step, no external resources, strict CSP), and
+`wss://host:7373/ws` carries wire_v3 frames unchanged inside WebSocket
+binary messages — the browser accumulates bytes and reads frames out of the
+stream, so message boundaries carry no meaning.
+
+Admission is the same. The page sends a Hello with a pairing code the first
+time and keeps the token it gets back in the browser's storage; an unpaired
+or revoked browser is closed at the handshake like any other device. A
+WebSocket whose `Origin` is not this host is refused before the upgrade, so
+a page from elsewhere cannot borrow a browser's reach.
+
+A browser cannot pin a fingerprint, so it meets the self-signed certificate
+once and the person accepts it, comparing the fingerprint their browser
+shows with the one `device-pair` printed. That acceptance is the browser's
+pin; a different certificate at that address is a warning, not a silent
+success. Real certificates arrive with the cloud phase.
+
+`ci/web-smoke.sh` walks the whole path from node: the page and its CSP, an
+unpaired browser refused, pairing, a shell started from the page,
+subscribing, typing and reading the echo out of protobuf frames, and an
+off-host origin refused.
 
 ## What it is not
 
