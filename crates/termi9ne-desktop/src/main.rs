@@ -6997,7 +6997,11 @@ impl Render for Termi9neDesktop {
                     None::<AnyElement>
                 }
             })
-            .children(self.termination_confirmation(cx))
+            .children(
+                (!self.termination_is_anchored())
+                    .then(|| self.termination_confirmation(cx))
+                    .flatten(),
+            )
             .children({
                 #[cfg(not(test))]
                 {

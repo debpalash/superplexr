@@ -647,6 +647,183 @@ impl Termi9neDesktop {
         self.archive_session(index, cx);
     }
 
+    /// Take a finished Session out of the sidebar.
+    ///
+    /// Nothing is destroyed: the terminals are archived and the group is
+    /// detached, both of which are reversible. Without this a Session that has
+    /// exited can only be archived, which leaves its row in place, so a long
+    /// session of work ends with a sidebar no one can clear.
+    /// Whether the termination confirmation is anchored to a visible row.
+    ///
+    /// It is not, if the sidebar is collapsed or a search has filtered the
+    /// Session out. The centred dialog stays as the fallback for exactly those
+    /// cases, so a confirmation can never be left with nowhere to appear.
+    pub(crate) fn termination_is_anchored(&self) -> bool {
+        let Some(index) = self.pending_termination else {
+            return false;
+        };
+        self.sidebar_open
+            && visible_indices(&self.workspace().sessions, &self.session_sidebar.query)
+                .contains(&index)
+    }
+
+    /// Confirm terminating a Session, anchored to its own row.
+    ///
+    /// This used to dim the whole window behind a centred dialog, which hid the
+    /// very list the choice is about and read as far heavier than the action.
+    /// The confirmation belongs beside the row it acts on, like the menu it was
+    /// opened from.
+    fn session_termination_popover(
+        &self,
+        index: usize,
+        open_upward: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let force = self
+            .workspace()
+            .sessions
+            .get(index)
+            .map(|session| {
+                session.terminals.iter().any(|surface_index| {
+                    self.surfaces
+                        .get(*surface_index)
+                        .is_some_and(|surface| surface.read(cx).requires_force_kill())
+                })
+            })
+            .unwrap_or(false);
+        let count = self
+            .workspace()
+            .sessions
+            .get(index)
+            .map_or(0, |session| session.terminals.len());
+        div()
+            .id(("session-terminate-confirm", index))
+            .absolute()
+            .right(px(4.0))
+            .when(!open_upward, |popover| popover.top(px(29.0)))
+            .when(open_upward, |popover| popover.bottom(px(29.0)))
+            .w(px(228.0))
+            .p_2()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .rounded(px(5.0))
+            .border_1()
+            .border_color(rgb(FAULT))
+            .bg(rgb(DECK))
+            .shadow_lg()
+            .occlude()
+            .text_size(ui_size(12.0))
+            .text_color(rgb(CHALK))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .font_family(UI_FONT)
+                    .text_color(rgb(FAULT))
+                    .child(if force { "!" } else { "△" })
+                    .child(if force {
+                        "Force kill?".to_owned()
+                    } else {
+                        format!("Terminate {count}?")
+                    }),
+            )
+            .child(
+                div()
+                    .font_family(UI_FONT)
+                    .text_size(ui_size(10.0))
+                    .text_color(rgb(TRACE))
+                    .child(if force {
+                        "SIGKILL. Frames stay."
+                    } else {
+                        "SIGHUP → SIGTERM."
+                    }),
+            )
+            .child(
+                div()
+                    .flex()
+                    .justify_end()
+                    .gap_1()
+                    .child(
+                        div()
+                            .id(("cancel-session-termination", index))
+                            .role(Role::Button)
+                            .aria_label("Cancel termination")
+                            .h(px(24.0))
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .rounded(px(3.0))
+                            .border_1()
+                            .border_color(rgb(HAIRLINE))
+                            .text_color(rgb(TRACE))
+                            .hover(|button| button.text_color(rgb(CHALK)))
+                            .on_click(cx.listener(|desktop, _, _, cx| {
+                                cx.stop_propagation();
+                                desktop.pending_termination = None;
+                                cx.notify();
+                            }))
+                            .child("Cancel"),
+                    )
+                    .child(
+                        div()
+                            .id(("confirm-session-termination", index))
+                            .role(Role::Button)
+                            .aria_label(if force {
+                                "Force kill session"
+                            } else {
+                                "Terminate session"
+                            })
+                            .h(px(24.0))
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .rounded(px(3.0))
+                            .bg(rgb(FAULT))
+                            .text_color(rgb(DECK))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .on_click(cx.listener(|desktop, _, _, cx| {
+                                cx.stop_propagation();
+                                desktop.confirm_session_termination(cx);
+                            }))
+                            .child(if force { "Kill" } else { "Terminate" }),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn remove_session_from_menu(&mut self, index: usize, cx: &mut Context<Self>) {
+        self.session_sidebar.menu_open = None;
+        if self.shared_mode {
+            return;
+        }
+        self.archive_session(index, cx);
+        #[cfg(not(test))]
+        if let Some(session) = self.workspace().sessions.get(index) {
+            let group_id = session.group_id;
+            self.sync_session_group(
+                group_id,
+                Some(termi9ne_protocol::SessionGroupChange::SetDetached { detached: true }),
+                cx,
+            );
+        }
+        #[cfg(test)]
+        {
+            let workspace = self.workspace_mut();
+            if index < workspace.sessions.len() {
+                workspace.sessions.remove(index);
+                workspace.selected_session = workspace
+                    .selected_session
+                    .min(workspace.sessions.len().saturating_sub(1));
+            }
+        }
+        cx.notify();
+    }
+
     fn toggle_session_pin(&mut self, index: usize, cx: &mut Context<Self>) {
         self.session_sidebar.menu_open = None;
         #[cfg(not(test))]
@@ -1500,6 +1677,12 @@ impl Termi9neDesktop {
                         .child("…"),
                 )
             })
+            .when(self.pending_termination == Some(index), |row| {
+                row.child(
+                    deferred(self.session_termination_popover(index, open_menu_upward, cx))
+                        .with_priority(2),
+                )
+            })
             .when(menu_open, |row| {
                 row.child(
                     deferred(
@@ -1807,6 +1990,37 @@ impl Termi9neDesktop {
                                                 .child("↧"),
                                         )
                                         .child("Archive history"),
+                                )
+                            })
+                            .when(retained, |menu| {
+                                menu.child(
+                                    div()
+                                        .id(("session-remove", index))
+                                        .role(Role::MenuItem)
+                                        .aria_label("Remove session from sidebar")
+                                        .h(px(31.0))
+                                        .px_2()
+                                        .flex()
+                                        .items_center()
+                                        .cursor_pointer()
+                                        .rounded(px(3.0))
+                                        .text_color(rgb(TRACE))
+                                        .hover(|item| item.bg(rgb(ACTIVE)).text_color(rgb(CHALK)))
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation();
+                                        })
+                                        .on_click(cx.listener(move |desktop, _, _, cx| {
+                                            cx.stop_propagation();
+                                            desktop.remove_session_from_menu(index, cx);
+                                        }))
+                                        .child(
+                                            div()
+                                                .w(px(22.0))
+                                                .flex_none()
+                                                .font_family(UI_FONT)
+                                                .child("✕"),
+                                        )
+                                        .child("Remove"),
                                 )
                             }),
                     )
@@ -2443,6 +2657,95 @@ mod tests {
         });
     }
 
+    /// A Session that has exited must be removable.
+    ///
+    /// Until this existed a finished Session could only be archived, which
+    /// leaves its row in place, so the sidebar accumulated dead Sessions with
+    /// no way to clear them.
+    #[gpui::test]
+    fn a_finished_session_can_be_taken_out_of_the_sidebar(cx: &mut gpui::TestAppContext) {
+        let (desktop, cx) = cx.add_window_view(|window, cx| {
+            let surfaces = crate::create_surfaces(window, cx);
+            Termi9neDesktop::new(surfaces, cx.focus_handle())
+        });
+
+        cx.update(|window, cx| {
+            desktop.update(cx, |desktop, cx| {
+                desktop.workspace_mut().sessions[0].status = SessionStatus::Closed;
+                let before = desktop.workspace().sessions.len();
+                let removed_name = desktop.workspace().sessions[0].name.clone();
+
+                desktop.toggle_session_menu(0, window, cx);
+                desktop.remove_session_from_menu(0, cx);
+
+                assert_eq!(desktop.session_sidebar.menu_open, None);
+                assert_eq!(
+                    desktop.workspace().sessions.len(),
+                    before - 1,
+                    "a closed session must leave the sidebar"
+                );
+                assert!(
+                    desktop
+                        .workspace()
+                        .sessions
+                        .iter()
+                        .all(|session| session.name != removed_name),
+                    "the removed session is still listed"
+                );
+                assert!(
+                    desktop.workspace().selected_session < desktop.workspace().sessions.len(),
+                    "selection must stay inside the remaining sessions"
+                );
+            });
+        });
+    }
+
+    /// The confirmation is anchored to the row it acts on, and falls back to the
+    /// centred dialog only when that row cannot be shown.
+    #[gpui::test]
+    fn terminate_confirmation_anchors_to_its_row(cx: &mut gpui::TestAppContext) {
+        let (desktop, cx) = cx.add_window_view(|window, cx| {
+            let surfaces = crate::create_surfaces(window, cx);
+            Termi9neDesktop::new(surfaces, cx.focus_handle())
+        });
+
+        cx.update(|window, cx| {
+            desktop.update(cx, |desktop, cx| {
+                assert!(
+                    !desktop.termination_is_anchored(),
+                    "nothing is pending, so nothing is anchored"
+                );
+
+                desktop.request_session_termination_at(0, cx);
+                assert_eq!(desktop.pending_termination, Some(0));
+                assert!(
+                    desktop.termination_is_anchored(),
+                    "an open sidebar showing the row must anchor the confirmation"
+                );
+
+                // A search that hides the row leaves it nowhere to appear, so
+                // the centred dialog has to take over.
+                desktop.session_sidebar.query = "zzz-no-such-session".to_owned();
+                assert!(
+                    !desktop.termination_is_anchored(),
+                    "a filtered-out row cannot anchor the confirmation"
+                );
+                desktop.session_sidebar.query.clear();
+
+                // Same when the sidebar is collapsed.
+                desktop.sidebar_open = false;
+                assert!(
+                    !desktop.termination_is_anchored(),
+                    "a collapsed sidebar cannot anchor the confirmation"
+                );
+                desktop.sidebar_open = true;
+
+                desktop.pending_termination = None;
+                let _ = window;
+            });
+        });
+    }
+
     #[gpui::test]
     fn session_management_popover_and_rename_editor_paint(cx: &mut gpui::TestAppContext) {
         let (desktop, cx) = cx.add_window_view(|window, cx| {
@@ -2460,6 +2763,24 @@ mod tests {
         cx.update(|window, cx| {
             desktop.update(cx, |desktop, cx| {
                 desktop.begin_session_rename(0, window, cx);
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        // The anchored terminate confirmation, and the Remove entry a finished
+        // Session shows, both have to survive a real layout pass.
+        cx.update(|_, cx| {
+            desktop.update(cx, |desktop, cx| {
+                desktop.request_session_termination_at(0, cx);
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        cx.update(|window, cx| {
+            desktop.update(cx, |desktop, cx| {
+                desktop.pending_termination = None;
+                desktop.workspace_mut().sessions[0].status = SessionStatus::Closed;
+                desktop.toggle_session_menu(0, window, cx);
             });
         });
         cx.update(|window, cx| window.draw(cx).clear(cx));

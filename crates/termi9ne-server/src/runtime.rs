@@ -2736,7 +2736,20 @@ async fn handle_request_with_context(
             if requested_row > 100_000 {
                 return Err(RequestError::InvalidTerminalHistoryOffset);
             }
-            terminal_record(state, session_id)?;
+            let record = terminal_record(state, session_id)?;
+            // The bottom of history is the screen the projection already holds:
+            // recovery builds it at startup, and a live actor keeps it current.
+            // Replaying the journal to rediscover it costs O(journal) on a hot
+            // path, and the desktop asks for exactly this frame for every
+            // session it restores. For a live session the projection is also
+            // the more accurate answer, because journal writes are buffered.
+            if let Some(frame) = bottom_history_frame(&record, viewport)? {
+                return Ok(ResponseBody::TerminalHistoryFrame {
+                    session_id,
+                    viewport,
+                    frame: Box::new((*frame).clone()),
+                });
+            }
             let state_dir = state.terminal_state_dir.clone();
             let frame = tokio::task::spawn_blocking(move || {
                 replay_terminal_model(&state_dir, session_id, ReplayBudget::HISTORY)?
@@ -4875,6 +4888,29 @@ fn set_terminal_archived(
     Ok(())
 }
 
+/// The projection's frame, when the request is for the bottom of history.
+///
+/// Only `RowsBeforeBottom(0)` qualifies. Every other viewport addresses rows
+/// that have scrolled out of the screen the projection holds, and those still
+/// need a replay.
+fn bottom_history_frame(
+    record: &TerminalRecord,
+    viewport: termi9ne_terminal::HistoryViewport,
+) -> Result<Option<Arc<termi9ne_terminal::FullFrame>>, RequestError> {
+    if !matches!(
+        viewport,
+        termi9ne_terminal::HistoryViewport::RowsBeforeBottom(0)
+    ) {
+        return Ok(None);
+    }
+    Ok(record
+        .projection
+        .read()
+        .map_err(|_| RequestError::RegistryPoisoned)?
+        .frame
+        .clone())
+}
+
 fn terminal_snapshot(
     state: &AppState,
     session_id: SessionId,
@@ -5176,6 +5212,68 @@ mod tests {
     use termi9ne_protocol::{SchedulerPolicy, SchedulerSettings, TerminalSessionSpec};
     use termi9ne_terminal::{GridSize, SelectionPoint};
     use uuid::Uuid;
+
+    /// The desktop asks for the bottom frame of every session it restores, so
+    /// that request must not read the journal at all.
+    ///
+    /// It used to replay it, which is what turned restoring twelve exited
+    /// sessions into a multi-minute freeze: the frame recovery had already
+    /// built was ignored, and each session paid an O(journal) replay.
+    #[test]
+    fn the_bottom_of_history_is_served_without_reading_the_journal() {
+        let session_id = SessionId::new();
+        let grid = GridSize::new(80, 24).expect("grid should be valid");
+        let mut model = TerminalModel::new(grid).expect("model should build");
+        model
+            .advance(TerminalAction::Output(b"held screen\r\n"))
+            .expect("output should parse");
+        let mut frame = model.frame().expect("frame should render");
+        frame.sequence = 7;
+        let record = TerminalRecord {
+            handle: None,
+            projection: Arc::new(RwLock::new(TerminalProjection {
+                summary: TerminalSessionSummary {
+                    session_id,
+                    mission_id: None,
+                    run_id: None,
+                    process_id: None,
+                    foreground_process: None,
+                    tty_name: None,
+                    status: TerminalSessionStatus::Exited,
+                    archived: false,
+                    latest_sequence: frame.sequence,
+                    controller_client_id: None,
+                    controller_surface_id: None,
+                    controller_share_id: None,
+                    control_epoch: 0,
+                },
+                frame: Some(Arc::new(frame)),
+                final_event: None,
+            })),
+        };
+
+        let served = bottom_history_frame(
+            &record,
+            termi9ne_terminal::HistoryViewport::RowsBeforeBottom(0),
+        )
+        .expect("bottom frame should be readable")
+        .expect("the projection holds the bottom frame");
+        assert_eq!(served.sequence, 7, "the projection's own frame must be used");
+
+        // Anything above the bottom addresses rows that have scrolled out of
+        // the held screen, so it still has to replay.
+        for viewport in [
+            termi9ne_terminal::HistoryViewport::RowsBeforeBottom(1),
+            termi9ne_terminal::HistoryViewport::RowFromTop(0),
+        ] {
+            assert!(
+                bottom_history_frame(&record, viewport)
+                    .expect("viewport should be readable")
+                    .is_none(),
+                "{viewport:?} must not be answered from the bottom frame"
+            );
+        }
+    }
 
     /// Startup recovery must not depend on how large a session's journal grew.
     ///
