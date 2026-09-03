@@ -1,6 +1,8 @@
 mod agent_channel;
+mod device_store;
 mod engine_driver;
 mod fault_store;
+mod gateway;
 mod provider_status;
 mod realized_change;
 mod review_artifact;
@@ -30,7 +32,9 @@ use std::{
 };
 
 use clap::Parser;
+use device_store::{DeviceError, DeviceStore};
 use fault_store::{FaultStore, repro_directory, truncate_output};
+use gateway::GatewayInfo;
 use provider_status::ProviderStatusStore;
 use run_checkout::RunCheckoutStore;
 use run_evidence::RunEvidenceStore;
@@ -68,7 +72,6 @@ use tokio::{
     io::BufReader,
     net::{
         UnixListener, UnixStream,
-        unix::{OwnedReadHalf, OwnedWriteHalf},
     },
     sync::{Mutex, broadcast, mpsc},
 };
@@ -80,6 +83,10 @@ struct Args {
     socket: PathBuf,
     #[arg(long, default_value = ".superplexr")]
     state_dir: PathBuf,
+    /// Listen for paired devices over TLS at this address, e.g. `0.0.0.0:7373`.
+    /// Off unless given; nothing on the network is ever reachable unpaired.
+    #[arg(long)]
+    gateway: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -108,6 +115,10 @@ enum ServerError {
     RunEvidence(#[from] run_evidence::RunEvidenceError),
     #[error(transparent)]
     Fault(#[from] fault_store::FaultError),
+    #[error(transparent)]
+    Device(#[from] device_store::DeviceError),
+    #[error("gateway: {0}")]
+    Gateway(String),
     #[error(transparent)]
     SessionGroup(#[from] session_group_store::SessionGroupError),
     #[error(transparent)]
@@ -204,6 +215,10 @@ enum RequestError {
     #[error(transparent)]
     Fault(#[from] fault_store::FaultError),
     #[error(transparent)]
+    Device(#[from] device_store::DeviceError),
+    #[error("the network gateway is not enabled on this runtime; start it with --gateway")]
+    GatewayDisabled,
+    #[error(transparent)]
     SessionGroup(#[from] session_group_store::SessionGroupError),
     #[error("global agent concurrency limit {0} is occupied")]
     GlobalAgentConcurrencyLimit(u16),
@@ -258,6 +273,9 @@ struct AppState {
     provider_status: Mutex<ProviderStatusStore>,
     run_evidence: Mutex<RunEvidenceStore>,
     faults: Mutex<FaultStore>,
+    devices: Mutex<DeviceStore>,
+    /// Present when the network gateway is listening.
+    gateway: Option<GatewayInfo>,
     session_groups: Mutex<SessionGroupStore>,
     checkout_gate: Mutex<()>,
     agent_launch_gate: Mutex<()>,
@@ -349,12 +367,20 @@ pub async fn run_from_env() -> Result<(), String> {
 ///
 /// This is used by the desktop's hidden daemon process. Errors are converted
 /// to text so private server implementation types do not leak into callers.
-pub fn run_blocking(socket: PathBuf, state_dir: PathBuf) -> Result<(), String> {
+pub fn run_blocking(
+    socket: PathBuf,
+    state_dir: PathBuf,
+    gateway: Option<String>,
+) -> Result<(), String> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| format!("failed to construct daemon runtime: {error}"))?
-        .block_on(run_server(Args { socket, state_dir }))
+        .block_on(run_server(Args {
+            socket,
+            state_dir,
+            gateway,
+        }))
         .map_err(|error| error.to_string())
 }
 
@@ -378,6 +404,10 @@ async fn run_server(args: Args) -> Result<(), ServerError> {
     secure_directory(&args.state_dir)?;
     secure_existing_state(&args.state_dir)?;
     secure_terminal_history(&args.state_dir)?;
+    let gateway = match args.gateway.as_deref() {
+        Some(address) => Some(prepare_gateway(&args.state_dir, address).await?),
+        None => None,
+    };
     let plugin_supervisor = PluginSupervisor::start(args.state_dir.join("plugins"))?;
     let plugin_publisher = plugin_supervisor.publisher();
     let agent_socket_path = args.state_dir.canonicalize()?.join("agent.sock");
@@ -407,6 +437,8 @@ async fn run_server(args: Args) -> Result<(), ServerError> {
             args.state_dir.join("run-evidence.json"),
         )?),
         faults: Mutex::new(FaultStore::open(args.state_dir.join("faults.json"))?),
+        devices: Mutex::new(DeviceStore::open(args.state_dir.join("devices.json"))?),
+        gateway: gateway.as_ref().map(|prepared| prepared.info.clone()),
         session_groups: Mutex::new(SessionGroupStore::open(
             args.state_dir.join("session-groups.json"),
         )?),
@@ -438,9 +470,42 @@ async fn run_server(args: Args) -> Result<(), ServerError> {
     let share_expiry_task = tokio::spawn(expire_shares(Arc::clone(&state)));
     let provider_expiry_task = tokio::spawn(expire_provider_facts(Arc::clone(&state)));
     println!("superplexr runtime listening at {}", args.socket.display());
+    if let Some(prepared) = &gateway {
+        println!(
+            "superplexr gateway listening at {} ({})",
+            prepared.info.advertised, prepared.info.fingerprint
+        );
+    }
+    let gateway_listener = gateway.as_ref().map(|prepared| &prepared.listener);
+    let gateway_acceptor = gateway.as_ref().map(|prepared| prepared.acceptor.clone());
 
     loop {
         tokio::select! {
+            accepted = async { gateway_listener.expect("guarded by the branch condition").accept().await },
+                if gateway_listener.is_some() =>
+            {
+                let (tcp, peer) = accepted?;
+                let acceptor = gateway_acceptor.clone().expect("guarded by the branch condition");
+                let state = Arc::clone(&state);
+                tokio::spawn(async move {
+                    match acceptor.accept(tcp).await {
+                        Ok(tls) => {
+                            let (read, write) = tokio::io::split(tls);
+                            if let Err(error) = handle_connection_over(
+                                Box::new(read),
+                                Box::new(write),
+                                state,
+                                Transport::Gateway,
+                            )
+                            .await
+                            {
+                                eprintln!("gateway connection from {peer} ended: {error}");
+                            }
+                        }
+                        Err(error) => eprintln!("gateway tls accept from {peer} failed: {error}"),
+                    }
+                });
+            }
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
                 verify_peer(&stream)?;
@@ -907,9 +972,11 @@ async fn handle_agent_connection(
     let _connection_count = ConnectionCount::enter(&state.open_connections);
     let _agent_connection_count = ConnectionCount::enter(&state.agent_connections);
     let (read, write) = stream.into_split();
+    let read: BoxedRead = Box::new(read);
+    let write: BoxedWrite = Box::new(write);
     let mut read = AsyncWireReader::new(BufReader::new(read));
     let mut write = AsyncWireWriter::new(write);
-    accept_wire_handshake(&mut read, &mut write).await?;
+    accept_wire_handshake(&mut read, &mut write, &state, Transport::Unix).await?;
     let mut connection_client = None;
     loop {
         let request: ClientRequest = match read
@@ -1109,11 +1176,20 @@ fn filter_response(
 }
 
 async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(), ServerError> {
-    let _connection_count = ConnectionCount::enter(&state.open_connections);
     let (read, write) = stream.into_split();
+    handle_connection_over(Box::new(read), Box::new(write), state, Transport::Unix).await
+}
+
+async fn handle_connection_over(
+    read: BoxedRead,
+    write: BoxedWrite,
+    state: Arc<AppState>,
+    transport: Transport,
+) -> Result<(), ServerError> {
+    let _connection_count = ConnectionCount::enter(&state.open_connections);
     let mut read = AsyncWireReader::new(BufReader::new(read));
     let mut write = AsyncWireWriter::new(write);
-    accept_wire_handshake(&mut read, &mut write).await?;
+    let device = accept_wire_handshake(&mut read, &mut write, &state, transport).await?;
     let write = Arc::new(Mutex::new(write));
     let mut connection_client = None;
     let mut connection_authority = None;
@@ -1152,6 +1228,22 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
             continue;
         }
         connection_client = Some(request.client_id);
+        // Revocation takes effect at the device's next request, not its next
+        // connection.
+        if let Some(device_id) = device
+            && !state.devices.lock().await.is_active(device_id)
+        {
+            write_connection_response(
+                &write,
+                &ServerResponse::error(
+                    request.request_id,
+                    "device_revoked",
+                    "this device's access to the runtime was revoked",
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
         if request.version != PROTOCOL_VERSION {
             let response = ServerResponse::error(
                 request.request_id,
@@ -1425,8 +1517,52 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
     }
 }
 
-type ServerWireReader = AsyncWireReader<BufReader<OwnedReadHalf>>;
-type ServerWireWriter = AsyncWireWriter<OwnedWriteHalf>;
+/// A connection's byte streams, whatever carries them: a Unix socket for
+/// local clients, TLS over TCP for paired devices.
+type BoxedRead = Box<dyn tokio::io::AsyncRead + Unpin + Send>;
+type BoxedWrite = Box<dyn tokio::io::AsyncWrite + Unpin + Send>;
+type ServerWireReader = AsyncWireReader<BufReader<BoxedRead>>;
+type ServerWireWriter = AsyncWireWriter<BoxedWrite>;
+
+/// What carried a connection, which decides what it may assume.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Transport {
+    /// The peer's uid was verified; the owner is talking.
+    Unix,
+    /// Nothing is assumed: the handshake must present a paired device.
+    Gateway,
+}
+
+/// Bind the gateway and load its identity. Failing here fails startup: a
+/// runtime asked to listen on the network must not silently listen nowhere.
+async fn prepare_gateway(
+    state_dir: &std::path::Path,
+    address: &str,
+) -> Result<PreparedGateway, ServerError> {
+    let identity = gateway::load_or_create_identity(state_dir).map_err(ServerError::Gateway)?;
+    let config = gateway::server_config(&identity).map_err(ServerError::Gateway)?;
+    let listener = tokio::net::TcpListener::bind(address)
+        .await
+        .map_err(|error| ServerError::Gateway(format!("bind {address}: {error}")))?;
+    let bound = listener
+        .local_addr()
+        .map(|addr| addr.to_string())
+        .unwrap_or_else(|_| address.to_owned());
+    Ok(PreparedGateway {
+        listener,
+        acceptor: tokio_rustls::TlsAcceptor::from(config),
+        info: GatewayInfo {
+            fingerprint: identity.fingerprint,
+            advertised: bound,
+        },
+    })
+}
+
+struct PreparedGateway {
+    listener: tokio::net::TcpListener,
+    acceptor: tokio_rustls::TlsAcceptor,
+    info: GatewayInfo,
+}
 type SharedServerWireWriter = Arc<Mutex<ServerWireWriter>>;
 
 async fn write_connection_response(
@@ -1534,23 +1670,99 @@ fn runtime_wire_id() -> uuid::Uuid {
     *ID.get_or_init(uuid::Uuid::new_v4)
 }
 
+/// Complete the wire handshake. Over the gateway this is also where a
+/// device is admitted or refused; returns its id when one was.
 async fn accept_wire_handshake(
     reader: &mut ServerWireReader,
     writer: &mut ServerWireWriter,
-) -> Result<(), ProtocolError> {
-    tokio::time::timeout(
-        Duration::from_secs(5),
-        server_handshake(reader, writer, runtime_wire_id()),
-    )
-    .await
-    .map_err(|_| {
-        ProtocolError::Io(std::io::Error::new(
-            std::io::ErrorKind::TimedOut,
-            "local protocol handshake exceeded five seconds",
-        ))
-    })?
-    .map_err(ProtocolError::from)?;
-    Ok(())
+    state: &AppState,
+    transport: Transport,
+) -> Result<Option<uuid::Uuid>, ProtocolError> {
+    let handshake = async {
+        match transport {
+            Transport::Unix => server_handshake(reader, writer, runtime_wire_id())
+                .await
+                .map(|_| None)
+                .map_err(ProtocolError::from),
+            Transport::Gateway => gateway_handshake(reader, writer, state).await,
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), handshake)
+        .await
+        .map_err(|_| {
+            ProtocolError::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "protocol handshake exceeded five seconds",
+            ))
+        })?
+}
+
+/// The gateway's handshake: the same negotiation as the Unix socket, with
+/// admission in the middle. A connection that presents neither a pairing
+/// code nor a device token is closed before any request is read.
+async fn gateway_handshake(
+    reader: &mut ServerWireReader,
+    writer: &mut ServerWireWriter,
+    state: &AppState,
+) -> Result<Option<uuid::Uuid>, ProtocolError> {
+    use superplexr_protocol::wire_v3::{Close, Hello, Welcome};
+    let hello: Hello = reader.receive_json(FrameKind::Hello, 0).await?;
+    let mut welcome = match Welcome::negotiate(&hello, runtime_wire_id()) {
+        Ok(welcome) => welcome,
+        Err(error) => {
+            writer
+                .send_json(
+                    FrameKind::Close,
+                    0,
+                    &Close {
+                        code: "unsupported_protocol".to_owned(),
+                        message: "upgrade superplexr so the device and runtime share protocol v3"
+                            .to_owned(),
+                    },
+                )
+                .await?;
+            return Err(error.into());
+        }
+    };
+    let admitted = {
+        let mut devices = state.devices.lock().await;
+        if let Some(code) = hello.pairing_code.as_deref() {
+            devices
+                .complete_pairing(code, hello.device_id)
+                .map(|(summary, token)| (summary, Some(token)))
+        } else if let Some(token) = hello.device_token.as_deref() {
+            devices.authenticate(token).map(|summary| (summary, None))
+        } else {
+            Err(DeviceError::Unauthorized)
+        }
+    };
+    match admitted {
+        Ok((summary, minted)) if summary.device_id == hello.device_id => {
+            welcome.device_token = minted;
+            writer.send_json(FrameKind::Welcome, 0, &welcome).await?;
+            let compression = welcome.zstd_enabled();
+            reader.set_compression(compression);
+            writer.set_compression(compression);
+            Ok(Some(summary.device_id))
+        }
+        _ => {
+            writer
+                .send_json(
+                    FrameKind::Close,
+                    0,
+                    &Close {
+                        code: "gateway_unauthorized".to_owned(),
+                        message: "this device is not paired with the runtime; pair it with a code from `superplexr device-pair`"
+                            .to_owned(),
+                    },
+                )
+                .await?;
+            Err(ProtocolError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "unpaired device refused at the gateway",
+            )))
+        }
+    }
 }
 
 async fn handle_terminal_index_subscription(
@@ -2675,6 +2887,26 @@ async fn handle_request_with_context(
             let evidence = state.run_evidence.lock().await.list(mission_id, run_id);
             Ok(ResponseBody::RunEvidence { evidence })
         }
+        Request::CreateDevicePairing { label } => {
+            let gateway = state.gateway.clone().ok_or(RequestError::GatewayDisabled)?;
+            let code = state
+                .devices
+                .lock()
+                .await
+                .begin_pairing(label, superplexr_protocol::DeviceRole::Owner)?;
+            Ok(ResponseBody::DevicePairing {
+                code,
+                fingerprint: gateway.fingerprint,
+                gateway: gateway.advertised,
+                expires_in_seconds: device_store::PAIRING_TTL_SECONDS,
+            })
+        }
+        Request::ListDevices => Ok(ResponseBody::Devices {
+            devices: state.devices.lock().await.list(),
+        }),
+        Request::RevokeDevice { device_id } => Ok(ResponseBody::DeviceRevoked {
+            device: state.devices.lock().await.revoke(device_id)?,
+        }),
         Request::CreateShare {
             label,
             role,
@@ -6108,6 +6340,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -6195,6 +6429,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -6300,6 +6536,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -6473,6 +6711,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -6675,6 +6915,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -6929,6 +7171,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7091,6 +7335,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7262,6 +7508,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7372,6 +7620,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7585,6 +7835,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7789,6 +8041,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7903,6 +8157,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -8059,6 +8315,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -8299,6 +8557,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -8603,6 +8863,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -8777,6 +9039,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -9147,6 +9411,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -9321,6 +9587,8 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),

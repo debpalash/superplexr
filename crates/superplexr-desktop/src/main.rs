@@ -178,6 +178,10 @@ struct DesktopArgs {
     /// Measure a settled, quiet desktop, print JSON, and exit.
     #[arg(long, hide = true, conflicts_with = "render_benchmark")]
     idle_benchmark: bool,
+    /// Also listen for paired devices over TLS at this address (passed to
+    /// the runtime). Off unless given.
+    #[arg(long)]
+    gateway: Option<String>,
 }
 
 #[cfg(not(test))]
@@ -7155,8 +7159,17 @@ fn desktop_window_options(bounds: Bounds<Pixels>) -> WindowOptions {
 fn main() {
     let startup_started_at = Instant::now();
     let arguments = DesktopArgs::parse();
+    let mut daemon_arguments = vec![OsString::from("--internal-daemon")];
+    if let Some(gateway) = &arguments.gateway {
+        daemon_arguments.push(OsString::from("--gateway"));
+        daemon_arguments.push(OsString::from(gateway));
+    }
     if arguments.internal_daemon {
-        if let Err(error) = superplexr_server::run_blocking(arguments.socket, arguments.state_dir) {
+        if let Err(error) = superplexr_server::run_blocking(
+            arguments.socket,
+            arguments.state_dir,
+            arguments.gateway,
+        ) {
             eprintln!("superplexr daemon failed: {error}");
             std::process::exit(1);
         }
@@ -7197,7 +7210,7 @@ fn main() {
                 &arguments.socket,
                 &arguments.state_dir,
                 executable,
-                &[OsString::from("--internal-daemon")],
+                &daemon_arguments,
             ),
             Err(error) => Err(ClientError::Io(error)),
         }

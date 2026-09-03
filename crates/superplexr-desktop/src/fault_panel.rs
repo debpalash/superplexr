@@ -48,6 +48,8 @@ fn replay_glyph(fault: &FaultSummary) -> (&'static str, ColorToken, String) {
 
 impl SuperplexrDesktop {
     /// Sidebar card listing what is currently broken. Absent when nothing is.
+    /// The sidebar only asks for it outside tests.
+    #[cfg_attr(test, allow(dead_code))]
     pub(crate) fn fault_sidebar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let open = self
             .faults

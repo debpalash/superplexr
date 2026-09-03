@@ -4,6 +4,9 @@
 //! is shared and serialized, while one reader dispatches independently
 //! sequenced subscription streams without placing socket I/O on GPUI threads.
 
+pub mod gateway;
+pub use gateway::{Endpoint, GatewayEndpoint};
+
 use std::{
     collections::{HashMap, VecDeque},
     ffi::OsString,
@@ -128,10 +131,17 @@ pub enum ClientError {
     ControlPoisoned,
     #[error("daemon did not answer within {timeout:?}")]
     RequestTimeout { timeout: Duration },
+    #[error("the gateway refused this device ({code}): {message}")]
+    GatewayRefused { code: String, message: String },
 }
 
+/// The bytes a connection is carried on: a Unix socket locally, a TLS
+/// session over the gateway. The wire above does not care which.
+type WireRead = Box<dyn std::io::Read + Send>;
+type WireWrite = Box<dyn std::io::Write + Send>;
+
 struct MultiplexedWire {
-    writer: Mutex<BlockingWireWriter<UnixStream>>,
+    writer: Mutex<BlockingWireWriter<WireWrite>>,
     pending: Mutex<HashMap<Uuid, Sender<Result<ServerResponse, String>>>>,
     subscriptions: Mutex<HashMap<u32, Sender<ReceivedFrame>>>,
     early_frames: Mutex<HashMap<u32, VecDeque<ReceivedFrame>>>,
@@ -140,8 +150,8 @@ struct MultiplexedWire {
 
 impl MultiplexedWire {
     fn start(
-        reader: BlockingWireReader<UnixStream>,
-        writer: BlockingWireWriter<UnixStream>,
+        reader: BlockingWireReader<WireRead>,
+        writer: BlockingWireWriter<WireWrite>,
     ) -> Result<Arc<Self>, ClientError> {
         let wire = Arc::new(Self {
             writer: Mutex::new(writer),
@@ -157,7 +167,7 @@ impl MultiplexedWire {
         Ok(wire)
     }
 
-    fn dispatch(self: Arc<Self>, mut reader: BlockingWireReader<UnixStream>) {
+    fn dispatch(self: Arc<Self>, mut reader: BlockingWireReader<WireRead>) {
         'dispatch: while let Ok(frame) = reader.receive() {
             if frame.header.stream_id == 0 && frame.header.kind == FrameKind::Response {
                 match serde_json::from_slice::<ServerResponse>(&frame.payload) {
@@ -364,7 +374,7 @@ fn disconnected_error(message: &str) -> ClientError {
 
 #[derive(Clone)]
 pub struct ControlClient {
-    socket_path: PathBuf,
+    endpoint: Endpoint,
     client_id: Uuid,
     share_token: Option<Arc<str>>,
     share_role: Option<ShareRole>,
@@ -375,7 +385,7 @@ impl std::fmt::Debug for ControlClient {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ControlClient")
-            .field("socket_path", &self.socket_path)
+            .field("endpoint", &self.endpoint)
             .field("client_id", &self.client_id)
             .field("observer_authorized", &self.share_token.is_some())
             .field("share_role", &self.share_role)
@@ -398,6 +408,36 @@ impl ControlClient {
         Self::connect_with_optional_share(socket_path, None)
     }
 
+    /// Reach a runtime over its TLS gateway as a paired device, or pair now
+    /// if the endpoint carries a pairing code. Returns the client and, on a
+    /// pairing, the device token — shown once, never again.
+    pub fn connect_gateway(
+        gateway: GatewayEndpoint,
+    ) -> Result<(Self, Option<String>), ClientError> {
+        let client_id = Uuid::new_v4();
+        let (stream, minted) = connect_gateway_wire(&gateway, client_id)?;
+        // The code is spent; reconnects must use the token.
+        let mut settled = gateway;
+        settled.pairing_code = None;
+        if let Some(token) = &minted {
+            settled.device_token = Some(token.clone());
+        }
+        let client = Self {
+            endpoint: Endpoint::Gateway(settled),
+            client_id,
+            share_token: None,
+            share_role: None,
+            stream: Arc::new(Mutex::new(stream)),
+        };
+        Ok((client, minted))
+    }
+
+    /// Where this client is connected.
+    #[must_use]
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+
     pub fn connect_as_observer(
         socket_path: impl AsRef<Path>,
         share_token: impl Into<String>,
@@ -417,10 +457,11 @@ impl ControlClient {
         share_token: Option<String>,
     ) -> Result<Self, ClientError> {
         let socket_path = socket_path.as_ref().to_path_buf();
+        let endpoint = Endpoint::Unix(socket_path);
         let client_id = Uuid::new_v4();
-        let stream = connect_wire(&socket_path, client_id)?;
+        let (stream, _) = connect_wire(&endpoint, client_id)?;
         let mut client = Self {
-            socket_path,
+            endpoint,
             client_id,
             share_token: share_token.map(Arc::<str>::from),
             share_role: None,
@@ -580,7 +621,7 @@ impl ControlClient {
                 // Repair the shared channel for the next action, but never
                 // replay this action: terminal input is deliberately not
                 // idempotent and an ACK may have been lost after execution.
-                if let Ok(reconnected) = connect_wire(&self.socket_path, self.client_id)
+                if let Ok((reconnected, _)) = connect_wire(&self.endpoint, self.client_id)
                     && let Ok(mut stream) = self.stream.lock()
                 {
                     *stream = reconnected;
@@ -609,7 +650,7 @@ impl ControlClient {
         if !current.closed.load(Ordering::Acquire) {
             return Ok(current);
         }
-        let reconnected = connect_wire(&self.socket_path, self.client_id)?;
+        let (reconnected, _) = connect_wire(&self.endpoint, self.client_id)?;
         let mut slot = self
             .stream
             .lock()
@@ -1868,17 +1909,71 @@ impl DaemonSession {
     }
 }
 
-fn connect_wire(socket_path: &Path, client_id: Uuid) -> Result<Arc<MultiplexedWire>, ClientError> {
-    let stream = UnixStream::connect(socket_path)?;
-    stream.set_read_timeout(Some(DAEMON_START_TIMEOUT))?;
-    stream.set_write_timeout(Some(DAEMON_START_TIMEOUT))?;
-    let mut wire = SyncWire::new(stream);
-    wire.client_handshake(&Hello::new(client_id, "desktop", client_id))
+fn connect_wire(
+    endpoint: &Endpoint,
+    client_id: Uuid,
+) -> Result<(Arc<MultiplexedWire>, Option<String>), ClientError> {
+    match endpoint {
+        Endpoint::Unix(socket_path) => {
+            let stream = UnixStream::connect(socket_path)?;
+            stream.set_read_timeout(Some(DAEMON_START_TIMEOUT))?;
+            stream.set_write_timeout(Some(DAEMON_START_TIMEOUT))?;
+            let mut wire = SyncWire::new(stream);
+            wire.client_handshake(&Hello::new(client_id, "desktop", client_id))
+                .map_err(ProtocolError::from)?;
+            wire.get_ref().set_read_timeout(None)?;
+            wire.get_ref().set_write_timeout(None)?;
+            let (reader, writer) = wire.into_blocking_split()?;
+            let reader = reader.map_io(|io| Box::new(io) as WireRead);
+            let writer = writer.map_io(|io| Box::new(io) as WireWrite);
+            Ok((MultiplexedWire::start(reader, writer)?, None))
+        }
+        Endpoint::Gateway(gateway) => connect_gateway_wire(gateway, client_id),
+    }
+}
+
+/// Reach a runtime over TLS and complete the handshake as a device. A
+/// pairing code in the endpoint is exchanged for a token, returned once.
+fn connect_gateway_wire(
+    gateway: &GatewayEndpoint,
+    client_id: Uuid,
+) -> Result<(Arc<MultiplexedWire>, Option<String>), ClientError> {
+    use superplexr_protocol::wire_v3::{Close, Welcome};
+    let (read_half, write_half) = gateway::connect(gateway)?;
+    let mut reader = BlockingWireReader::new(Box::new(read_half) as WireRead);
+    let mut writer = BlockingWireWriter::new(Box::new(write_half) as WireWrite);
+    let mut hello = Hello::new(client_id, "device", gateway.device_id);
+    hello.device_token = gateway.device_token.clone();
+    hello.pairing_code = gateway.pairing_code.clone();
+    writer
+        .send_json(FrameKind::Hello, 0, &hello)
         .map_err(ProtocolError::from)?;
-    wire.get_ref().set_read_timeout(None)?;
-    wire.get_ref().set_write_timeout(None)?;
-    let (reader, writer) = wire.into_blocking_split()?;
-    MultiplexedWire::start(reader, writer)
+    let frame = reader.receive().map_err(ProtocolError::from)?;
+    let welcome: Welcome = match frame.header.kind {
+        FrameKind::Welcome => {
+            serde_json::from_slice(&frame.payload).map_err(ProtocolError::from)?
+        }
+        FrameKind::Close => {
+            let close: Close =
+                serde_json::from_slice(&frame.payload).map_err(ProtocolError::from)?;
+            return Err(ClientError::GatewayRefused {
+                code: close.code,
+                message: close.message,
+            });
+        }
+        other => {
+            return Err(ClientError::Io(std::io::Error::other(format!(
+                "gateway answered the handshake with {other:?}"
+            ))));
+        }
+    };
+    let compression = welcome.zstd_enabled();
+    reader.set_compression(compression);
+    writer.set_compression(compression);
+    Ok((
+        MultiplexedWire::start(reader, writer)?,
+        welcome.device_token,
+    ))
 }
 
 fn daemon_may_be_absent(error: &ClientError) -> bool {
@@ -1920,7 +2015,11 @@ mod tests {
         let (reader, writer) = SyncWire::new(client_socket)
             .into_blocking_split()
             .expect("client wire should split");
-        let wire = MultiplexedWire::start(reader, writer).expect("dispatcher should start");
+        let wire = MultiplexedWire::start(
+            reader.map_io(|io| Box::new(io) as WireRead),
+            writer.map_io(|io| Box::new(io) as WireWrite),
+        )
+        .expect("dispatcher should start");
         let client_id = Uuid::new_v4();
         let runtime = thread::spawn(move || {
             let mut server = SyncWire::new(server_socket);

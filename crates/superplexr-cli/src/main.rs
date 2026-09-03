@@ -1,6 +1,10 @@
 mod attach;
+mod device_credentials;
 mod shell_init;
 mod ssh_tunnel;
+
+use device_credentials::DeviceCredentials;
+use superplexr_client::{Endpoint, GatewayEndpoint};
 
 use std::{
     collections::BTreeMap,
@@ -50,6 +54,14 @@ struct Args {
     /// Read a Share token from an owner-only regular file.
     #[arg(long)]
     share_token_file: Option<PathBuf>,
+    /// Reach a runtime over its TLS gateway (`host:port`) as a paired device,
+    /// using the credentials `pair` stored.
+    #[arg(long, global = true)]
+    gateway: Option<String>,
+    /// The runtime's certificate fingerprint (`sha256:…`): required to pair,
+    /// accepted as an override afterwards.
+    #[arg(long, global = true, requires = "gateway")]
+    fingerprint: Option<String>,
     #[command(subcommand)]
     command: CliCommand,
 }
@@ -60,6 +72,26 @@ enum CliCommand {
     Events {
         #[arg(long, value_enum, default_value_t = EventScopeArg::All)]
         scope: EventScopeArg,
+    },
+    /// On the runtime's host: show a one-time pairing code and this runtime's
+    /// certificate fingerprint for a device to pair with over the gateway.
+    DevicePair {
+        /// What to call the device that pairs with this code.
+        #[arg(long, default_value = "device")]
+        label: String,
+    },
+    /// List devices paired with this runtime's gateway.
+    DeviceList,
+    /// Revoke a paired device. Its open connections end at their next request.
+    DeviceRevoke {
+        device_id: Uuid,
+    },
+    /// On the device: exchange a pairing code for a token over `--gateway`,
+    /// pinning `--fingerprint`. The token is stored under ~/.superplexr/devices.
+    Pair {
+        code: String,
+        #[arg(long, default_value = "device")]
+        label: String,
     },
     /// Attach this terminal to a session: frames in, keystrokes out. Ctrl-]
     /// detaches; the session keeps running. Works over plain SSH with
@@ -1218,6 +1250,8 @@ async fn main() -> Result<(), CliError> {
         idempotency_key,
         force_control,
         share_token_file,
+        gateway,
+        fingerprint,
         command,
     } = Args::parse();
     let share_token = share_token_file
@@ -1239,8 +1273,9 @@ async fn main() -> Result<(), CliError> {
         } => {
             // Interactive and blocking by nature; it owns the terminal until
             // the person detaches.
+            let endpoint = endpoint_for(&socket, gateway.as_deref(), fingerprint.as_deref())?;
             return tokio::task::block_in_place(|| {
-                attach::run(&socket, session_id, max_hz, observe, take)
+                attach::run(endpoint, session_id, max_hz, observe, take)
             })
             .map_err(|message| CliError::Remote {
                 code: "attach".to_owned(),
@@ -1301,6 +1336,9 @@ async fn main() -> Result<(), CliError> {
         CliCommand::ShellInit { shell, install } => {
             return run_shell_init(shell.as_deref(), install);
         }
+        CliCommand::Pair { code, label } => {
+            return run_pair(gateway.as_deref(), fingerprint.as_deref(), &code, &label);
+        }
         CliCommand::FaultFix {
             fault_id,
             mission_id,
@@ -1329,6 +1367,19 @@ async fn main() -> Result<(), CliError> {
         command => command,
     };
     let action = into_request(command)?;
+    if let Some(address) = gateway.as_deref() {
+        // Over the gateway the request rides the same client the desktop
+        // uses, so authorization and the device token are one code path.
+        let endpoint = gateway_endpoint(address, fingerprint.as_deref())?;
+        let (client, _) = ControlClient::connect_gateway(endpoint)?;
+        let body = client.request(action)?;
+        if render_handoff && let ResponseBody::FaultRecorded { fault } = &body {
+            println!("{}", fault_brief(fault));
+            return Ok(());
+        }
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
     let client_id = Uuid::new_v4();
     let surface_id = Uuid::new_v4();
     let terminal_mutation = terminal_mutation_session(&action);
@@ -1375,6 +1426,91 @@ async fn main() -> Result<(), CliError> {
 }
 
 /// Render a Fault as a compact brief for the next actor, human or agent.
+/// The gateway endpoint for an address: stored credentials when this device
+/// has paired, else an unpaired probe that the runtime will refuse — which is
+/// the honest answer, and the error says how to pair.
+fn gateway_endpoint(address: &str, fingerprint: Option<&str>) -> Result<GatewayEndpoint, CliError> {
+    match device_credentials::load(address).map_err(CliError::Usage)? {
+        Some(stored) => {
+            let mut endpoint = stored.endpoint();
+            if let Some(fingerprint) = fingerprint {
+                endpoint.fingerprint = fingerprint.to_owned();
+            }
+            Ok(endpoint)
+        }
+        None => {
+            let fingerprint = fingerprint.ok_or_else(|| {
+                CliError::Usage(format!(
+                    "no stored credentials for {address}; pair first: superplexr pair --gateway {address} --fingerprint sha256:… <code>"
+                ))
+            })?;
+            Ok(GatewayEndpoint {
+                address: address.to_owned(),
+                fingerprint: fingerprint.to_owned(),
+                device_id: Uuid::new_v4(),
+                device_token: None,
+                pairing_code: None,
+            })
+        }
+    }
+}
+
+fn endpoint_for(
+    socket: &Path,
+    gateway: Option<&str>,
+    fingerprint: Option<&str>,
+) -> Result<Endpoint, CliError> {
+    match gateway {
+        Some(address) => Ok(Endpoint::Gateway(gateway_endpoint(address, fingerprint)?)),
+        None => Ok(Endpoint::Unix(socket.to_path_buf())),
+    }
+}
+
+/// Exchange a pairing code for a device token and keep it.
+fn run_pair(
+    gateway: Option<&str>,
+    fingerprint: Option<&str>,
+    code: &str,
+    label: &str,
+) -> Result<(), CliError> {
+    let address =
+        gateway.ok_or_else(|| CliError::Usage("pair needs --gateway host:port".to_owned()))?;
+    let fingerprint = fingerprint.ok_or_else(|| {
+        CliError::Usage("pair needs --fingerprint sha256:…, shown beside the code".to_owned())
+    })?;
+    let device_id = Uuid::new_v4();
+    let endpoint = GatewayEndpoint {
+        address: address.to_owned(),
+        fingerprint: fingerprint.to_owned(),
+        device_id,
+        device_token: None,
+        pairing_code: Some(code.to_owned()),
+    };
+    let (_client, minted) = ControlClient::connect_gateway(endpoint)?;
+    let token = minted.ok_or_else(|| CliError::Remote {
+        code: "pairing_failed".to_owned(),
+        message: "the runtime admitted the connection but minted no token".to_owned(),
+    })?;
+    let path = device_credentials::store(&DeviceCredentials {
+        address: address.to_owned(),
+        fingerprint: fingerprint.to_owned(),
+        device_id,
+        token,
+        label: label.to_owned(),
+    })
+    .map_err(CliError::Usage)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "type": "paired",
+            "device_id": device_id,
+            "gateway": address,
+            "credentials": path,
+        }))?
+    );
+    Ok(())
+}
+
 fn fault_brief(fault: &superplexr_protocol::FaultSummary) -> String {
     use std::fmt::Write as _;
     let mut brief = String::new();
@@ -3032,6 +3168,12 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
         }
         CliCommand::PluginInstallAgentStatus { .. } => {
             unreachable!("plugin installation is handled before connecting to the runtime")
+        }
+        CliCommand::DevicePair { label } => Request::CreateDevicePairing { label },
+        CliCommand::DeviceList => Request::ListDevices,
+        CliCommand::DeviceRevoke { device_id } => Request::RevokeDevice { device_id },
+        CliCommand::Pair { .. } => {
+            unreachable!("pairing completes inside the gateway handshake, before any request")
         }
         CliCommand::Ping => Request::Ping,
     };

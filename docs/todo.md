@@ -103,6 +103,33 @@ output **0.97 MB/s**, one full 120×36 frame **21 KB** (~5 B/cell).
 - [x] Protocol version policy written (`docs/protocol-versioning.md`);
       a bump carries the previous version's state forward
 
+## 3c. Network gateway (platform plan, phase 3 — built 2026-09-04)
+
+Rules in `docs/gateway.md`. Off unless `--gateway host:port`; nothing
+unpaired gets past the handshake; tokens and pairing codes are stored only
+as digests; identity is a pinned certificate fingerprint; revocation ends
+open connections at their next request; devices carry owner authority and
+scoped access uses share tokens over the same listener.
+
+- [x] TLS listener (rustls/ring) with a self-signed identity created once
+- [x] Device store: pairing codes (5 min, single use, not persisted), device
+      tokens (digest only), list, revoke; `is_active` checked per request
+- [x] Handshake admission: pairing code → token minted once in `Welcome`;
+      token → authenticated; neither → `gateway_unauthorized` and close
+- [x] Client: `Endpoint::{Unix, Gateway}`, pinned-fingerprint verifier, a
+      blocking TLS stream shared by reader and writer, `connect_gateway`
+- [x] CLI: `device-pair`, `device-list`, `device-revoke` on the host;
+      `pair --gateway --fingerprint <code>` on the device; global
+      `--gateway` routes any one-shot command; `attach --gateway` over TLS
+- [x] End-to-end (`ci/gateway-smoke.sh`): unpaired refused, pair, request
+      over TLS, wrong fingerprint refused, attach under a pty over TLS,
+      revoke → refused; the first TLS pump starved its writer under a
+      tight relock loop and was rewritten to block outside the lock
+- [ ] Per-connection request rate limits
+- [ ] Outside security review of pairing and token scope before any public
+      exposure (the phase gate)
+- [ ] WebSocket framing of the same protocol, for the browser (phase 4)
+
 ## 4. Terminal and desktop certification (Gate E)
 
 - [ ] Unicode / IME / Kitty keyboard / Neovim compatibility matrix

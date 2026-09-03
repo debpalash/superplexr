@@ -312,6 +312,18 @@ pub enum Request {
         mission_id: MissionId,
         run_id: RunId,
     },
+    /// Begin pairing a device with the network gateway. Returns a one-time
+    /// code to type on the device and the runtime's certificate fingerprint
+    /// for the device to pin.
+    CreateDevicePairing {
+        label: String,
+    },
+    ListDevices,
+    /// Revoke a paired device. Its open connections close at their next
+    /// request.
+    RevokeDevice {
+        device_id: Uuid,
+    },
     /// Mint a time-bounded, scoped capability. The plaintext secret is returned
     /// once and only its digest is persisted.
     CreateShare {
@@ -930,6 +942,30 @@ impl FaultClassification {
     }
 }
 
+/// What a paired device may do.
+///
+/// Only the owner's own devices pair today; scoped access over the network
+/// uses share tokens, so authorization stays one code path.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceRole {
+    Owner,
+}
+
+/// A device paired with the runtime's network gateway. The token it holds
+/// is never in here; the runtime keeps only its digest.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DeviceSummary {
+    pub device_id: Uuid,
+    pub label: String,
+    pub role: DeviceRole,
+    pub paired_at_micros: u64,
+    #[serde(default)]
+    pub last_seen_at_micros: Option<u64>,
+    #[serde(default)]
+    pub revoked_at_micros: Option<u64>,
+}
+
 /// Lifecycle of a Fault. A Fault leaves `Open` only through evidence
 /// (`Resolved`, which requires a passing repro) or an explicit owner
 /// `Dismissed` note.
@@ -1167,6 +1203,18 @@ pub enum ResponseBody {
         checked: Vec<FaultId>,
         /// Those that failed again and are open once more.
         reopened: Vec<FaultSummary>,
+    },
+    DevicePairing {
+        code: String,
+        fingerprint: String,
+        gateway: String,
+        expires_in_seconds: u64,
+    },
+    Devices {
+        devices: Vec<DeviceSummary>,
+    },
+    DeviceRevoked {
+        device: DeviceSummary,
     },
     ShareCreated {
         share: ShareSummary,

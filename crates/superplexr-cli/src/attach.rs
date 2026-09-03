@@ -11,13 +11,12 @@
 use std::{
     io::{self, Read, Write},
     os::fd::AsRawFd,
-    path::Path,
     sync::mpsc::{self, Receiver, RecvTimeoutError},
     thread,
     time::{Duration, Instant},
 };
 
-use superplexr_client::{ControlClient, DaemonSession};
+use superplexr_client::{ControlClient, DaemonSession, Endpoint};
 use superplexr_core::SessionId;
 use superplexr_protocol::ServerEvent;
 use superplexr_terminal::{
@@ -81,13 +80,19 @@ enum Input {
 
 /// Attach to a session and stay until Ctrl-] or the session ends.
 pub(crate) fn run(
-    socket: &Path,
+    endpoint: Endpoint,
     session_id: SessionId,
     max_hz: Option<u16>,
     observe: bool,
     take: bool,
 ) -> Result<(), String> {
-    let client = ControlClient::connect(socket).map_err(|error| error.to_string())?;
+    let client = match &endpoint {
+        Endpoint::Unix(socket) => ControlClient::connect(socket),
+        Endpoint::Gateway(gateway) => {
+            ControlClient::connect_gateway(gateway.clone()).map(|(client, _)| client)
+        }
+    }
+    .map_err(|error| error.to_string())?;
     let mut session = client.terminal(session_id);
     if let Some(hz) = max_hz {
         session = session.with_max_hz(hz);

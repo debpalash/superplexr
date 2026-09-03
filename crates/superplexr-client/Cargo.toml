@@ -12,5 +12,7 @@ superplexr-protocol = { path = "../superplexr-protocol" }
 superplexr-terminal = { path = "../superplexr-terminal" }
 serde.workspace = true
 serde_json.workspace = true
+rustls.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
