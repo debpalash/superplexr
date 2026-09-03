@@ -489,6 +489,10 @@ impl TerminalSurface {
         if event.keystroke.is_ime_in_progress() {
             return;
         }
+        // Not stopped, so it propagates to the desktop's key bindings.
+        if is_desktop_shortcut(&event.keystroke) {
+            return;
+        }
 
         let input = key_input(
             &event.keystroke,
@@ -506,6 +510,9 @@ impl TerminalSurface {
     }
 
     fn key_up(&mut self, event: &KeyUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if is_desktop_shortcut(&event.keystroke) {
+            return;
+        }
         let input = key_input(&event.keystroke, KeyAction::Release, self.caps_lock);
         if self.apply(TerminalAction::EncodeKey(&input), cx) {
             cx.stop_propagation();
@@ -1587,6 +1594,17 @@ fn terminal_mouse_button(button: MouseButton) -> Option<TerminalMouseButton> {
     }
 }
 
+/// Keys the desktop owns, which must reach its key bindings rather than the
+/// terminal.
+///
+/// No macOS terminal sends a ⌘ combination to the shell, and Ctrl+Tab
+/// switches workspaces here. Forwarding them anyway meant the bindings never
+/// fired, and in a terminal left in Kitty keyboard mode each press and
+/// release became a sequence a plain shell typed out as text.
+fn is_desktop_shortcut(keystroke: &gpui::Keystroke) -> bool {
+    keystroke.modifiers.platform || (keystroke.modifiers.control && keystroke.key == "tab")
+}
+
 fn escaped_bytes(bytes: &[u8]) -> String {
     bytes
         .iter()
@@ -1699,6 +1717,67 @@ mod tests {
             window.draw(cx).clear(cx);
         });
         assert!(cx.debug_bounds("terminal-scrollbar").is_some());
+    }
+
+    /// A key the desktop owns must never be encoded for the terminal, so the
+    /// binding behind it can fire. Ctrl+Tab forwarded into a Kitty-mode shell
+    /// is exactly how `9;5:3u` ended up typed in front of a command.
+    #[gpui::test]
+    fn desktop_shortcuts_are_not_forwarded_to_the_terminal(cx: &mut TestAppContext) {
+        let window = cx.add_window(|window, cx| {
+            TerminalSurface::new(window, cx).expect("terminal fixture should initialize")
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |surface, window, cx| {
+                // Kitty keyboard mode, the state in which Ctrl+Tab and ⌘ keys
+                // would otherwise be encoded as `CSI … u` sequences.
+                surface.apply(TerminalAction::Output(b"\x1b[>3u"), cx);
+                let untouched = surface.last_encoded.clone();
+                for shortcut in [
+                    "ctrl-tab",
+                    "ctrl-shift-tab",
+                    "cmd-t",
+                    "cmd-1",
+                    "cmd-shift-f",
+                ] {
+                    surface.key_down(
+                        &KeyDownEvent {
+                            keystroke: Keystroke::parse(shortcut).expect("valid shortcut"),
+                            is_held: false,
+                            prefer_character_input: false,
+                        },
+                        window,
+                        cx,
+                    );
+                    surface.key_up(
+                        &gpui::KeyUpEvent {
+                            keystroke: Keystroke::parse(shortcut).expect("valid shortcut"),
+                        },
+                        window,
+                        cx,
+                    );
+                    assert_eq!(
+                        surface.last_encoded, untouched,
+                        "{shortcut} must not reach the terminal"
+                    );
+                }
+                // An ordinary key still does. A platform-dispatched key
+                // carries its character; a parsed one does not.
+                let mut plain = Keystroke::parse("a").expect("valid key");
+                plain.key_char = Some("a".to_owned());
+                surface.key_down(
+                    &KeyDownEvent {
+                        keystroke: plain,
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(surface.last_encoded, "a", "a plain key is still encoded");
+            })
+            .expect("test window should remain available");
     }
 
     /// Selecting and copying must work on a terminal this surface cannot

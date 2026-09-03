@@ -1306,6 +1306,37 @@ mod tests {
         assert_ne!(repeated.pty_writes, released.pty_writes);
     }
 
+    /// The prompt-time reset the shell integration emits must actually take
+    /// the terminal out of Kitty keyboard mode, or a crashed TUI leaves the
+    /// shell typing key events as text.
+    #[test]
+    fn setting_kitty_flags_to_zero_restores_plain_key_encoding() {
+        let mut model = fixture_model();
+        model
+            .advance(TerminalAction::Output(b"\x1b[>3u"))
+            .expect("kitty keyboard mode should parse");
+        let mut release = key_input("a", None);
+        release.action = KeyAction::Release;
+        let in_kitty_mode = model
+            .advance(TerminalAction::EncodeKey(&release))
+            .expect("release should encode");
+        assert!(
+            !in_kitty_mode.pty_writes.is_empty(),
+            "kitty mode reports releases"
+        );
+
+        model
+            .advance(TerminalAction::Output(b"\x1b[=0;1u"))
+            .expect("flag reset should parse");
+        let after_reset = model
+            .advance(TerminalAction::EncodeKey(&release))
+            .expect("release should encode");
+        assert!(
+            after_reset.pty_writes.is_empty(),
+            "plain mode has no release events, so the shell sees nothing"
+        );
+    }
+
     #[test]
     fn reports_focus_only_when_the_terminal_requests_it() {
         let mut model = fixture_model();

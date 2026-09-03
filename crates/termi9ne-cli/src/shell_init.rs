@@ -106,6 +106,10 @@ if [[ -n "$TERMI9NE_SESSION" ]] && [[ -o interactive ]]; then
     printf '\e]133;D;%s\a' "$__termi9ne_status"
     # Report the directory too, so the session can be named by where it runs.
     printf '\e]7;file://%s%s\a' "$HOST" "$PWD"
+    # Leave the keyboard in plain mode at the prompt. A program that enabled
+    # the Kitty keyboard protocol and crashed would otherwise leave the shell
+    # typing out key events as text. Ignored by terminals without it.
+    printf '\e[=0;1u'
     printf '\e]133;A\a'
     return $__termi9ne_status
   }
@@ -135,6 +139,8 @@ if [ -n "$TERMI9NE_SESSION" ] && [ -n "$PS1" ]; then
     printf '\e]133;D;%s\a' "$__termi9ne_status"
     # Report the directory too, so the session can be named by where it runs.
     printf '\e]7;file://%s%s\a' "$HOSTNAME" "$PWD"
+    # Leave the keyboard in plain mode at the prompt; see the zsh snippet.
+    printf '\e[=0;1u'
     printf '\e]133;A\a'
     __termi9ne_armed=1
     return $__termi9ne_status
@@ -163,6 +169,8 @@ if set -q TERMI9NE_SESSION; and status is-interactive
         printf '\e]133;D;%s\a' $__termi9ne_status
         # Report the directory too, so the session can be named by where it runs.
         printf '\e]7;file://%s%s\a' (hostname) "$PWD"
+        # Leave the keyboard in plain mode at the prompt; see the zsh snippet.
+        printf '\e[=0;1u'
         printf '\e]133;A\a'
     end
 end
@@ -247,6 +255,9 @@ mod tests {
             // The directory is reported at every prompt, so a Session can be
             // named by where it runs even before any command finishes.
             assert!(snippet.contains(r"\e]7;file://%s%s\a"), "{shell}");
+            // The keyboard is returned to plain mode at every prompt, so a
+            // crashed TUI cannot leave the shell typing key events as text.
+            assert!(snippet.contains(r"\e[=0;1u"), "{shell}");
             // Inert outside termi9ne.
             assert!(snippet.contains("TERMI9NE_SESSION"), "{shell}");
         }

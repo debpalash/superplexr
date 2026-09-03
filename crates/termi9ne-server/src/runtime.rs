@@ -4461,12 +4461,22 @@ async fn record_terminal_fault(
 ///
 /// Unlike a session-level Fault this always has an exact command line, so the
 /// record is replayable without consulting the launch spec.
+/// Exit statuses that mean the command was stopped rather than that it
+/// failed: 130 is SIGINT (Ctrl-C) and 143 is SIGTERM, as shells report them.
+const fn is_interruption(exit_code: Option<i32>) -> bool {
+    matches!(exit_code, Some(130 | 143))
+}
+
 async fn record_command_fault(
     state: &Arc<AppState>,
     session_id: SessionId,
     binding: Option<TerminalBinding>,
     block: termi9ne_runtime::command_blocks::CommandBlock,
 ) {
+    // Someone stopping a command is not the command failing.
+    if is_interruption(block.exit_code) {
+        return;
+    }
     let cwd = terminal_working_directory(state, session_id);
     let Some(cwd) = cwd else {
         return;
@@ -5608,6 +5618,16 @@ mod tests {
             "recovery replayed the wrong end of the journal; the last screen is the tail"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Ctrl-C and SIGTERM stop a command; they do not make it a Fault.
+    #[test]
+    fn an_interrupted_command_is_not_a_fault() {
+        assert!(is_interruption(Some(130)));
+        assert!(is_interruption(Some(143)));
+        assert!(!is_interruption(Some(1)));
+        assert!(!is_interruption(Some(127)), "a missing command is a real failure");
+        assert!(!is_interruption(None));
     }
 
     #[test]
