@@ -100,7 +100,7 @@ marks them optional. Otherwise the connection closes with `unsupported_frame`.
 Terminal payloads use Protocol Buffers v3 with a checked-in schema and generated
 Rust code. Proto field numbers are never reused. A wire schema change requires a
 golden cross-version fixture. The normative v1 terminal schema is
-[`proto/termi9ne/terminal/v1.proto`](../../proto/termi9ne/terminal/v1.proto).
+[`proto/superplexr/terminal/v1.proto`](../../proto/superplexr/terminal/v1.proto).
 
 JSON integers that may exceed JavaScript's safe range—sequences and byte
 offsets—are decimal strings. UUIDs use lowercase hyphenated form. Timestamps use
@@ -338,11 +338,11 @@ budget repeatedly, the runtime closes it with `client_too_slow`.
 Each Run receives:
 
 ```text
-TERMI9NE_MISSION_ID
-TERMI9NE_RUN_ID
-TERMI9NE_SESSION_ID              optional
-TERMI9NE_AGENT_SOCKET
-TERMI9NE_AGENT_AUTH=process-group-peer-credentials-v1
+SUPERPLEXR_MISSION_ID
+SUPERPLEXR_RUN_ID
+SUPERPLEXR_SESSION_ID              optional
+SUPERPLEXR_AGENT_SOCKET
+SUPERPLEXR_AGENT_AUTH=process-group-peer-credentials-v1
 ```
 
 The agent socket is separate from the general control socket and has owner-only

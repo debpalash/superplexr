@@ -1,0 +1,14 @@
+[package]
+name = "superplexr-runtime"
+description = "Durable PTY session actors for the superplexr runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+libc.workspace = true
+portable-pty.workspace = true
+thiserror.workspace = true
+superplexr-core = { path = "../superplexr-core" }
+superplexr-terminal = { path = "../superplexr-terminal" }

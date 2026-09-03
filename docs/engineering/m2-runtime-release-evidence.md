@@ -31,21 +31,21 @@ host; CI-required and long-duration gates remain explicit.
   operable without pointer-only navigation.
 - Packages carry compiled `xterm-ghostty` terminfo and the runtime discovers both
   macOS Resources and Linux shared-data layouts.
-- `termi9ne status` returns redacted operational diagnostics suitable for health
+- `superplexr status` returns redacted operational diagnostics suitable for health
   checks and support bundles.
-- `termi9ne schedule` exposes a deterministic, capacity-aware scheduler preview
+- `superplexr schedule` exposes a deterministic, capacity-aware scheduler preview
   that separates startable, queued-ready, waiting, blocked, and manual work.
-- `termi9ne schedule-launch` applies that plan to an explicit command driver,
+- `superplexr schedule-launch` applies that plan to an explicit command driver,
   launches only available slots, and reports each selected Run independently.
-- `termi9ne schedule-engine-launch` freezes the capacity plan in the daemon,
+- `superplexr schedule-engine-launch` freezes the capacity plan in the daemon,
   resolves each selected Run's named engine, records a redacted immutable driver
   snapshot, and reports launch or resolution failure independently.
-- `termi9ne schedule-auto` persists an owner-only per-Mission policy; the daemon
+- `superplexr schedule-auto` persists an owner-only per-Mission policy; the daemon
   continuously reconciles configured agent Runs under its cap and restores the
   policy after restart. Disable prevents new launches without killing active work.
-- `termi9ne schedule-settings` atomically persists the runtime-wide agent cap;
+- `superplexr schedule-settings` atomically persists the runtime-wide agent cap;
   direct, batch, and continuous launches share the same serialized admission gate.
-- `termi9ne run-engine` resolves an agent Run through bounded, owner-only,
+- `superplexr run-engine` resolves an agent Run through bounded, owner-only,
   structured driver configuration without shell-string interpolation.
 - Owner-only Run checkouts bind an exact Git repository/base revision and
   deterministic isolated branch/worktree to one pending Run. Configured preview
@@ -53,7 +53,7 @@ host; CI-required and long-duration gates remain explicit.
   retirement refuses live, dirty, or unmerged work without a force path.
 - Structured terminal capture returns identity and the exact canonical frame;
   bounded text, quiet, and exit waits subscribe to canonical Session events.
-  `termi9ne events` emits race-free Mission and terminal-index snapshots plus
+  `superplexr events` emits race-free Mission and terminal-index snapshots plus
   push updates as stable NDJSON rather than polling terminal pixels.
 - Expiring provider facts record bounded adapter state with server-authored
   owner-hook versus authenticated-agent provenance. Run Activity is derived
@@ -62,9 +62,9 @@ host; CI-required and long-duration gates remain explicit.
 - Agent-launched PTYs receive a separate owner-only socket authenticated by
   kernel peer PID and the Run's isolated process group; requests use a narrow
   Run-scoped allowlist and are revalidated against lifecycle state.
-- `termi9ne terminal-ssh` creates a daemon-owned OpenSSH PTY with validated
+- `superplexr terminal-ssh` creates a daemon-owned OpenSSH PTY with validated
   destination/port/jump/identity arguments and no shell-command interpolation.
-- `termi9ne remote-forward` supervises an OpenSSH StreamLocal tunnel from a new
+- `superplexr remote-forward` supervises an OpenSSH StreamLocal tunnel from a new
   owner-only client socket to one authoritative runtime. The desktop's
   connect-only mode attaches the complete native workspace without a local
   fallback, and its titlebar identifies LOCAL versus REMOTE ownership.
@@ -88,7 +88,7 @@ host; CI-required and long-duration gates remain explicit.
 The comparison target is [Superlogical's public product plan](https://www.superlogical.com/),
 not an assumed private implementation.
 
-| Public-plan capability | termi9ne repository status |
+| Public-plan capability | superplexr repository status |
 |---|---|
 | long-lived local terminal Sessions | implemented and real-PTY-soaked |
 | preserved operational history | implemented for Mission causality and terminal journals/search |
@@ -127,11 +127,11 @@ cargo build --workspace --release --locked --offline            PASS
                                                                12 visible PTYs
 ./ci/cli-event-multiplex-smoke.sh .                             PASS, 4 logical
                                                                feeds, 1 socket
-TERMI9NE_SOAK_SECONDS=3 TERMI9NE_SOAK_SESSIONS=12
+SUPERPLEXR_SOAK_SECONDS=3 SUPERPLEXR_SOAK_SESSIONS=12
   ./ci/runtime-soak.sh .                                        PASS, 12 iterations
-TERMI9NE_SOAK_SECONDS=5 TERMI9NE_SOAK_SESSIONS=12
+SUPERPLEXR_SOAK_SECONDS=5 SUPERPLEXR_SOAK_SESSIONS=12
   ./ci/runtime-soak.sh .                                        PASS, 22 iterations
-TERMI9NE_SOAK_SECONDS=60 TERMI9NE_SOAK_SESSIONS=12
+SUPERPLEXR_SOAK_SECONDS=60 SUPERPLEXR_SOAK_SESSIONS=12
   ./ci/runtime-soak.sh .                                        PASS, 317 iterations
 SPDX 2.3 JSON + collected license/NOTICE texts + SHA256SUMS      PASS
 ```

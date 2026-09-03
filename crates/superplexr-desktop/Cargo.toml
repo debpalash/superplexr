@@ -1,0 +1,33 @@
+[package]
+name = "superplexr-desktop"
+description = "Native GPUI desktop for superplexr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+clap.workspace = true
+gpui = { workspace = true, features = ["profiler"] }
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sysinfo.workspace = true
+superplexr-client = { path = "../superplexr-client" }
+superplexr-core = { path = "../superplexr-core" }
+superplexr-protocol = { path = "../superplexr-protocol" }
+superplexr-server = { path = "../superplexr-server" }
+superplexr-terminal = { path = "../superplexr-terminal" }
+tokio.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui_apple = { workspace = true, features = ["runtime_shaders"] }
+gpui_platform = { workspace = true, features = ["font-kit"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui_platform = { workspace = true, features = ["wayland", "x11"] }

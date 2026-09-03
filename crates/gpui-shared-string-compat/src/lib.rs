@@ -251,8 +251,8 @@ mod tests {
     fn static_and_owned_values_compare_and_hash_equally() {
         use std::hash::{DefaultHasher, Hash, Hasher};
 
-        let static_value = SharedString::new_static("termi9ne");
-        let owned_value = SharedString::from(String::from("termi9ne"));
+        let static_value = SharedString::new_static("superplexr");
+        let owned_value = SharedString::from(String::from("superplexr"));
         let mut static_hash = DefaultHasher::new();
         let mut owned_hash = DefaultHasher::new();
         static_value.hash(&mut static_hash);

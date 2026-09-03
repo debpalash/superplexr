@@ -9,7 +9,7 @@ evidence for the upstream-feasibility lock and maps it to the M1 gate in
 The selected foundation is feasible on macOS and Linux:
 
 - a pinned Ghostty VT library creates, mutates, and snapshots terminal state;
-- `termi9ne-terminal` translates that state into owned, backend-neutral frames;
+- `superplexr-terminal` translates that state into owned, backend-neutral frames;
 - device replies and bells cross the adapter as explicit effects;
 - rich keyboard, IME commits, focus reports, and bounded/safe paste cross the
   same backend-neutral action/effect seam;
@@ -37,7 +37,7 @@ the same exact Git revisions:
 |---|---|---|
 | libghostty-rs | `f4c72b931588cb3e53db0ea8470eaa1b2e5427d9` | adopt for M1 behind our adapter |
 | Ghostty | `22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018` | transitive static `libghostty-vt` source |
-| GPUI/Zed | `bce0c5785bfd9172c939aca4083fd70bc4930927` | isolate in `termi9ne-desktop` |
+| GPUI/Zed | `bce0c5785bfd9172c939aca4083fd70bc4930927` | isolate in `superplexr-desktop` |
 | GPUI compatibility seams | local workspace crates | independently implemented MIT/Apache interfaces |
 | Rust | `1.97.1` | required by the GPUI pin |
 | Zig | `0.16.0` | required by the libghostty-rs pin |
@@ -84,7 +84,7 @@ The M1 adoption decision is bounded by the following findings:
   as `Apache-2.0 OR GPL-2.0-only`.
 
 This is the M1 feasibility approval, not the final release supply-chain report.
-`termi9ne-terminal` itself contains no unsafe block, and FFI-backed terminal
+`superplexr-terminal` itself contains no unsafe block, and FFI-backed terminal
 tests run on both targets; Miri cannot execute through the native Zig/C ABI.
 Sanitizer/fuzz corpora, regenerated-binding comparison for any upstream update,
 offline source vendoring, redistributed notices, and SBOM generation remain M5
@@ -97,13 +97,13 @@ macOS Apple Silicon host (`Darwin arm64`):
 ```text
 rustc 1.97.1
 Zig 0.16.0
-cargo check -p termi9ne-desktop                         PASS
+cargo check -p superplexr-desktop                         PASS
 cargo fmt --all --check                                 PASS
 ./ci/audit-normal-licenses.sh .                         PASS
 cargo clippy --workspace --all-targets --locked -- -D warnings PASS
-cargo run -p termi9ne-desktop                           PASS (native event loop)
+cargo run -p superplexr-desktop                           PASS (native event loop)
 cargo test --workspace --all-targets --locked           PASS (27 tests)
-cargo bench -p termi9ne-terminal --bench frame_pipeline PASS (p95 1.253 ms)
+cargo bench -p superplexr-terminal --bench frame_pipeline PASS (p95 1.253 ms)
 cargo build --workspace --release --locked --offline    PASS (warm source cache)
 ./ci/package-smoke.sh .                                 PASS (signed app bundle archive)
 ```
@@ -125,7 +125,7 @@ GPUI features                                            font-kit, wayland, x11
 The reproducible command is:
 
 ```sh
-docker build --file ci/linux.Dockerfile --tag termi9ne-ci .
+docker build --file ci/linux.Dockerfile --tag superplexr-ci .
 ```
 
 The Linux window smoke uses Mesa software Vulkan. X11 runs under Xvfb. Wayland

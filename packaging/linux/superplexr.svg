@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="superplexr">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#20242d"/>
+      <stop offset="1" stop-color="#11141a"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#g)"/>
+  <path d="M50 70h94v27h-32v89H82V97H50z" fill="#8db8ee"/>
+  <path d="M151 70c32 0 55 21 55 55v18c0 41-23 67-61 67-15 0-29-4-40-12l14-23c7 5 16 8 26 8 19 0 29-11 31-31-9 7-19 11-31 11-27 0-47-18-47-45 0-28 22-48 53-48zm0 26c-14 0-23 8-23 21 0 12 9 20 23 20 10 0 19-4 25-12-1-19-9-29-25-29z" fill="#d7e2f2"/>
+</svg>

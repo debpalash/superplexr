@@ -8,12 +8,12 @@
 and broader arXiv searches for agent harnesses, runtimes, workspaces, protocols,
 parallel coding, cloud sandboxes, agentic IDEs, and computer-use infrastructure.
 
-**Purpose:** identify recent research that should influence termi9ne's design as
+**Purpose:** identify recent research that should influence superplexr's design as
 a durable, human-supervised execution environment for coding agents.
 
 The consolidated implementation status and priority plan derived from this
 research now lives in
-[termi9ne-unified-roadmap.md](termi9ne-unified-roadmap.md).
+[superplexr-unified-roadmap.md](superplexr-unified-roadmap.md).
 
 ## 1. Scope and method
 
@@ -54,7 +54,7 @@ and source span. The paper links below remain the durable public citations.
 
 ## 2. Executive conclusions
 
-| Finding | Research signal | Consequence for termi9ne |
+| Finding | Research signal | Consequence for superplexr |
 |---|---|---|
 | The harness is part of the system under evaluation. | DS-Lighting shows that task representation, workflow, execution, and evaluation choices affect reliability and comparability. | Snapshot and identify the complete harness contract for every Run, not only the model and command. |
 | Agents need a legitimate way to reject a defective task. | A structured escalation tool plus policy reduced reward hacking from 23.6% to 5.3% in the reported experiment. | Add an explicit escalation Signal with evidence, resolution, and continuation semantics. |
@@ -93,7 +93,7 @@ data-science benchmarks and does not cover private systems, streaming work,
 human review, or domain governance; dependency and sandbox versions can still
 change outcomes.
 
-**Implication for termi9ne:** extend the existing resolved Driver snapshot into
+**Implication for superplexr:** extend the existing resolved Driver snapshot into
 a complete, digest-backed Harness Snapshot:
 
 ```text
@@ -128,7 +128,7 @@ placement in the decision environment affected uptake. The study covers only
 nine ambiguous competitive-programming problems, and its prompts combine tool
 availability with normative guidance.
 
-**Implication for termi9ne:** add a first-class `escalation` Signal rather than
+**Implication for superplexr:** add a first-class `escalation` Signal rather than
 expecting prose in a terminal:
 
 ```text
@@ -161,7 +161,7 @@ Raw traces carry information but grow without bound. Compact handoff artifacts
 were the practical middle ground. The study uses one OpenHands-style runtime and
 75 SWE-bench Verified source tasks, so absolute costs should not be generalized.
 
-**Implication for termi9ne:** every paused, replaced, timed-out, or voluntarily
+**Implication for superplexr:** every paused, replaced, timed-out, or voluntarily
 yielded Run should be able to produce a Handoff Artifact:
 
 ```text
@@ -199,7 +199,7 @@ forwarding, and duplicate payment across Hermes, Cline, and LangGraph examples.
 The general lesson is that internal state, workspace state, tool state, external
 services, and persistent effects may have different recovery boundaries.
 
-**Implication for termi9ne:** restored PTY bytes and event history are necessary
+**Implication for superplexr:** restored PTY bytes and event history are necessary
 but do not prove that an agent can safely continue. Any future semantic
 checkpoint/rollback feature needs a Recovery Manifest:
 
@@ -214,7 +214,7 @@ RecoveryManifest
 └── reconciliation result
 ```
 
-If continuity cannot be established, termi9ne should create a new Attempt with
+If continuity cannot be established, superplexr should create a new Attempt with
 the prior state as evidence or require owner approval. It must not label a local
 restore as a transparent resume.
 
@@ -238,7 +238,7 @@ The evidence base is small and repository-clustered, and some lifecycle signals
 in the studied archive were defective. The value lies primarily in the
 measurement model, not in a proven universal compression policy.
 
-**Implication for termi9ne:** context assembly should operate on typed objects
+**Implication for superplexr:** context assembly should operate on typed objects
 and record what was actually delivered. A Run's context receipt should include
 object IDs, source versions, full-versus-summary form, delivered size, omissions,
 retrieval/compression cost, and the policy that selected them. Raw Mission
@@ -271,7 +271,7 @@ but failed the final delivery.
 The benchmark uses synthetic REST mocks, only eleven headline sampling units,
 and a generation/oracle pipeline with possible model-family entanglement.
 
-**Implication for termi9ne:** an Evaluation Receipt should independently record:
+**Implication for superplexr:** an Evaluation Receipt should independently record:
 
 - whether required actions were authorized and executed;
 - whether resulting state was observed and verified;
@@ -294,7 +294,7 @@ improvement in step localization over prior work.
 Surfaced violations can still be false positives, downstream symptoms, or weak
 signals that misdirect diagnosis. The taxonomy will not cover every domain.
 
-**Implication for termi9ne:** build failure diagnosis as a derived Artifact over
+**Implication for superplexr:** build failure diagnosis as a derived Artifact over
 immutable Run events:
 
 ```text
@@ -329,8 +329,8 @@ This is attribution evidence, not prompt-injection prevention. Production key
 rotation, registry compromise, endpoint collusion, streaming semantics, and
 application-policy enforcement remain out of scope.
 
-**Implication for termi9ne:** use content-addressed Artifacts, Driver snapshots,
-and explicit parent/child Run events now. If termi9ne later coordinates workers
+**Implication for superplexr:** use content-addressed Artifacts, Driver snapshots,
+and explicit parent/child Run events now. If superplexr later coordinates workers
 owned by different people or organizations, add co-signed delegation edges
 rather than trusting child-provided ancestry. Do not add cross-deployer
 cryptography to the local-first V1 merely for architectural symmetry.
@@ -346,7 +346,7 @@ models, outcomes, usage, branches, pull requests, edits, Git actions, reviews,
 CI, and other tool calls. The dataset makes workflow patterns, task formulation,
 review response, costs, failures, and adoption measurable.
 
-**Implication for termi9ne:** maintain a documented, versioned event-export
+**Implication for superplexr:** maintain a documented, versioned event-export
 schema so owners can study their own Runs. Store observable messages, tool
 actions, state transitions, costs, Artifacts, and review facts. Do not require or
 claim access to a provider's hidden chain of thought. Exports must scrub secrets,
@@ -368,7 +368,7 @@ may arrive after the effect.
 The study uses unconstrained automation, focuses on exfiltration, and does not
 systematically vary memory, MCP servers, IDEs, or permission modes.
 
-**Implication for termi9ne:** repository instructions, test scripts, tool
+**Implication for superplexr:** repository instructions, test scripts, tool
 descriptions, skills, and user text all need source trust labels. High-risk
 actions require a policy gate before execution; emitting an alert afterward is
 not enforcement. Test and setup commands deserve stronger pre-execution review
@@ -387,7 +387,7 @@ up to 96.7% without defense and 69.2% under a common safety filter. The authors'
 core conclusion is that no individual prompt, tool description, or early action
 must reveal the full objective.
 
-**Implication for termi9ne:** policy evaluation must be sequence-aware and
+**Implication for superplexr:** policy evaluation must be sequence-aware and
 effect-aware. Keep provenance for every context fragment and tool result, limit
 the capabilities available to each Run phase, and check the cumulative action
 plan before privileged effects. A one-time input filter is insufficient.
@@ -403,7 +403,7 @@ queries, it reportedly reduced total tokens by 29–46% relative to retaining al
 context while maintaining comparable or higher success. It transferred with
 18–25% savings on five LOCA-bench environments.
 
-**Implication for termi9ne:** do not implement an RL compression policy in the
+**Implication for superplexr:** do not implement an RL compression policy in the
 core now. First record per-object retention, later re-fetch/re-execution,
 delivered tokens, latency, and outcome. These facts make future policy evaluation
 possible. Never compress away the durable source evidence merely because the
@@ -420,7 +420,7 @@ composition, execution and repair, adaptation, evaluation, and security
 governance. It argues that reusable executable skills bridge model planning and
 deterministic execution.
 
-**Implication for termi9ne:** a skill is not trusted prompt text. A future Skill
+**Implication for superplexr:** a skill is not trusted prompt text. A future Skill
 Manifest should include identity, version, content digest, origin, declared
 tools and capabilities, parameters, compatible Drivers, evaluation evidence,
 and revocation state. Imported executable skills require approval and sandbox
@@ -438,7 +438,7 @@ mean AUROC 0.60 at 50% trajectory progress. Agents often switched paths, breakin
 the relationship between intermediate confidence and final outcome. Confidence
 also remained poorly calibrated.
 
-**Implication for termi9ne:** do not infer Attention or terminate a Run from an
+**Implication for superplexr:** do not infer Attention or terminate a Run from an
 agent's intermediate confidence. Prefer expired leases, missing heartbeats,
 failed checks, blocked dependencies, permission requests, explicit Signals, and
 observable inactivity. Final confidence may help decide whether to launch an
@@ -459,7 +459,7 @@ untrusted context flows, and when a human must be interrupted.
 | [Claim Plane](https://arxiv.org/abs/2607.21909) and its [confirmatory study](https://arxiv.org/abs/2608.00947) | Versioned pre-write `ChangeIntent`; typed resources and regions; committed versus contingent scope; atomic admission; scope promotion; leases, fencing tokens, worktree locks, and patch provenance. | Static admission improved integration reliability but serialized 96.7% of the confirmatory Runs. Dynamic admission was selective but failed closed frequently because declarations under-covered regions. Strong primitive; learned declarations are not mature. |
 | [Shepherd](https://arxiv.org/abs/2605.10913) | Agent execution as a first-class value: structured events, atomic environment/agent forks, replay, revert, resume, and meta-agent transformations. | Three proof-of-existence studies report supervision, counterfactual-optimization, and training gains. Strong meta-runtime idea, but supervisor cost can exceed worker cost and replay assumes limited coupling to external effects. |
 | [When Parallelism Pays Off](https://arxiv.org/abs/2606.00953) | Static-analysis dependency graph, hub isolation, community partitioning, and dependency-aware release of coding work. | Across 28 tasks the paper reports up to 2.10× speedup, up to 14-point pass-rate gain, and up to 35% cost reduction. Evaluation size is modest and benefits depend on repository structure. |
-| [Effective Strategies for Asynchronous Software Engineering Agents](https://arxiv.org/abs/2603.21489) | Centralized, asynchronous, isolated delegation: dependency-aware manager, per-agent worktree/branch, commit-and-merge integration, executable test gates. | Reports absolute gains of 25.6% on PaperBench and 14.7% on Commit0. Direct validation of termi9ne's planned worktree model; benchmark transfer still needs local testing. |
+| [Effective Strategies for Asynchronous Software Engineering Agents](https://arxiv.org/abs/2603.21489) | Centralized, asynchronous, isolated delegation: dependency-aware manager, per-agent worktree/branch, commit-and-merge integration, executable test gates. | Reports absolute gains of 25.6% on PaperBench and 14.7% on Commit0. Direct validation of superplexr's planned worktree model; benchmark transfer still needs local testing. |
 | [LongHorizon-Harness](https://arxiv.org/abs/2608.01964) | Manage–Execute–Audit loop; task state outside model context; fresh-context executor; read-only auditor; only verified facts advance state. | Reports consistent gains on WeaveBench, OSWorld 2.0, and Terminal-Bench 2.1. Clean conceptual fit, though the extra manager/auditor calls add cost. |
 | [openJiuwen](https://arxiv.org/abs/2608.27969) | Inner/outer execution loops; ordered capability “Rails”; shared semantics for single, delegated, and swarm agents; Goal Mode; LSP-driven passive feedback; adaptive context management. | Strong benchmark results, but the paper asks for broader models, benchmarks, and mechanism ablations. Adopt its separations, not its branded abstraction wholesale. |
 | [Agentic Harness Engineering](https://arxiv.org/abs/2604.25850) | Harness components represented as editable files; layered trajectory evidence; every harness edit paired with a falsifiable outcome prediction. | Ten iterations reportedly lifted Terminal-Bench 2 pass@1 from 69.7% to 77.0% and transferred across models. Evolution should run as reviewed experiments, never live self-modification of trusted policy. |
@@ -472,10 +472,10 @@ untrusted context flows, and when a human must be interrupted.
 | [DeltaBox](https://arxiv.org/abs/2605.22781) | Diff-based OS checkpoint/restore: dynamically frozen OverlayFS layers plus incremental process dumps and warm-template forks. | Reports 14 ms checkpoints and 5 ms rollbacks. Highly relevant to future speculative Run trees, but it does not solve semantic continuity or external-effect reconciliation. |
 | [OSGym](https://arxiv.org/abs/2511.11672) | Decentralized replica state, hardware-aware placement, KVM plus copy-on-write disks, fault-tolerant pools, and a central task/data interface. | Reports more than 1,000 OS replicas, 1,420 trajectories/minute, 88% disk reduction, and 37× faster provisioning. Designed for training infrastructure; interactive human supervision remains underexplored. |
 | [AWCP](https://arxiv.org/abs/2602.20493) | Temporary remote workspace delegation with separate control and transport planes; SSHFS for live work and archives for bounded exchange; delegator/executor state machines. | Demonstration-oriented, one-to-one, and still missing granular permissions, audit, conflict-free multi-party writes, and strong governance. Useful future protocol seam, not a V1 dependency. |
-| [ESAA-Conversational](https://arxiv.org/abs/2606.23752) | Vendor-neutral visible-turn capture into an append-only log with deterministic projections for handoff, state, decisions, and tasks; mechanical capture separated from judgmental curation. | One 570-event, Windows/PowerShell case study; lacks signatures, redaction, robust concurrency, snapshots, and cross-platform support. The architectural boundary aligns strongly with termi9ne. |
+| [ESAA-Conversational](https://arxiv.org/abs/2606.23752) | Vendor-neutral visible-turn capture into an append-only log with deterministic projections for handoff, state, decisions, and tasks; mechanical capture separated from judgmental curation. | One 570-event, Windows/PowerShell case study; lacks signatures, redaction, robust concurrency, snapshots, and cross-platform support. The architectural boundary aligns strongly with superplexr. |
 | [JarvisBench](https://arxiv.org/abs/2608.14870) | A bidirectional attention coordinator outside worker loops answers owner questions, detects when agents need judgment, and routes responses back to Runs. | Forty-five tasks across single- and multi-agent settings. Shows an attention layer can improve workers without modifying them, while exposing quality/latency/attention trade-offs. |
 | [LiteCUA / AIOS 1.0](https://arxiv.org/abs/2505.18829) | Contextualizes the computer as an MCP server, separating interface complexity from agent decision complexity. | LiteCUA achieved only 14.66% on OSWorld but beat several more elaborate frameworks. The semantic-interface direction matters more than the absolute score. |
-| [Governance Gaps in Agent Interoperability Protocols](https://arxiv.org/abs/2606.31498) | Separates coordination protocols from governance: membership, deliberation, voting, dissent preservation, escalation, and audit/replay. | Specification analysis rather than runtime experiment. Protocols change rapidly, but the identified layer should remain owned by termi9ne's domain rather than delegated to MCP/A2A. |
+| [Governance Gaps in Agent Interoperability Protocols](https://arxiv.org/abs/2606.31498) | Separates coordination protocols from governance: membership, deliberation, voting, dissent preservation, escalation, and audit/replay. | Specification analysis rather than runtime experiment. Protocols change rapidly, but the identified layer should remain owned by superplexr's domain rather than delegated to MCP/A2A. |
 | [Cuckoo Attack](https://arxiv.org/abs/2509.15572) | Persistent AI-IDE compromise through ordinary configuration edits that later execute commands invisibly, including MCP configuration paths. | End-to-end proof of concept across eight agent/IDE pairs plus responsible disclosure. Strong argument for immutable reviewed configuration and visible executable diffs. |
 | [ZitPit](https://arxiv.org/abs/2604.06241) | First-seen repositories, packages, workflows, manifests, and configuration become durable admission-policy events before receiving local execution rights. | The paper deliberately makes narrow empirical claims. The consumer-side admission boundary is valuable even if this specific implementation is not adopted. |
 
@@ -503,7 +503,7 @@ active set, requests an amendment, or fails closed. An old worker cannot write
 after lease transfer because its fencing token is stale.
 
 The confirmatory study is a useful warning: conservative admission can obtain
-reliability simply by serializing everything. termi9ne should begin with exact
+reliability simply by serializing everything. superplexr should begin with exact
 file/create/delete claims, collect conflicts and amendments, and treat symbol or
 semantic scope as advisory until local evidence supports enforcement.
 
@@ -555,7 +555,7 @@ handoff, conflict, and integration costs.
 
 ### 4.5 Verified task state outside the model context
 
-LongHorizon-Harness's Manage–Execute–Audit loop maps cleanly onto termi9ne:
+LongHorizon-Harness's Manage–Execute–Audit loop maps cleanly onto superplexr:
 
 ```text
 Manager             Executor                 Auditor
@@ -637,7 +637,7 @@ reconciled before semantic resume.
 ### 4.8 An attention broker outside worker loops
 
 JarvisBench formalizes the missing middle between always-running agents and an
-intermittently available owner. termi9ne already has the right source material:
+intermittently available owner. superplexr already has the right source material:
 Signals, Attention, Session activity, deadlines, approvals, Artifacts, and Run
 state. A Supervisor projection can:
 
@@ -711,7 +711,7 @@ context.
 ### 4.12 Workspace delegation and semantic computer interfaces
 
 AWCP identifies a useful future protocol layer: remote agents often need the
-workspace, not another text message. termi9ne can model a delegated workspace as
+workspace, not another text message. superplexr can model a delegated workspace as
 a scoped, expiring capability over an exact snapshot or live projection, with a
 control-plane lifecycle independent of SSHFS, archive, object-store, or other
 transport.
@@ -722,7 +722,7 @@ ChangeIntent admission, fencing, and conflict semantics exist.
 
 LiteCUA offers a complementary interface principle: adapt the computer to the
 agent with typed semantic state and actions rather than forcing every agent to
-reverse-engineer a human UI. termi9ne's side channel can eventually expose file,
+reverse-engineer a human UI. superplexr's side channel can eventually expose file,
 symbol, terminal, test, Git, and browser facts through one capability-checked
 Agent-Computer Interface while preserving the raw terminal as the universal
 fallback.
@@ -735,7 +735,7 @@ human escalation, acceptance, and audit remain durable domain facts.
 
 ESAA-Conversational reinforces the local memory boundary: capture observable
 events mechanically, curate decisions explicitly, project compact views, and
-let each agent read selectively. termi9ne already has the stronger event store;
+let each agent read selectively. superplexr already has the stronger event store;
 it should add provider import adapters rather than a second JSONL source of
 truth.
 
@@ -870,7 +870,7 @@ Other useful patterns include:
 - opt-in model synthesis, with deterministic fetching and evidence handling kept
   outside the model.
 
-### 8.1 Potential termi9ne Web Evidence Artifact
+### 8.1 Potential superplexr Web Evidence Artifact
 
 ```text
 WebEvidenceArtifact
@@ -892,7 +892,7 @@ Wigolo should be evaluated as an optional external MCP/Driver integration, not
 copied into the scheduler or event store. Its AGPL license, public-beta status,
 browser/model downloads, remote-search privacy, and self-published benchmark
 claims require independent review. Its autonomous `agent` loop should not nest
-an opaque second Mission system inside termi9ne.
+an opaque second Mission system inside superplexr.
 
 ## 9. Recommended implementation order
 
@@ -977,7 +977,7 @@ an opaque second Mission system inside termi9ne.
 
 ## 11. Bottom line
 
-The most useful recent research is not asking termi9ne to make agents more
+The most useful recent research is not asking superplexr to make agents more
 autonomous. It is asking the runtime to make their work more explicit:
 
 - what harness and policy governed the Run;
@@ -987,11 +987,11 @@ autonomous. It is asking the runtime to make their work more explicit:
 - whether recovery preserves the assumptions that made earlier actions valid;
 - whether verification covers both the work and its final delivery.
 
-Those are natural extensions of termi9ne's event-sourced Mission graph. The next
+Those are natural extensions of superplexr's event-sourced Mission graph. The next
 step should be stronger receipts, handoffs, escalation, and recovery semantics,
 not a broader but less trustworthy autonomous surface.
 
-The broader cutting-edge pass adds one sharper product thesis: termi9ne can be
+The broader cutting-edge pass adds one sharper product thesis: superplexr can be
 the deterministic execution-control plane around probabilistic coding agents.
 Its differentiating primitives would be pre-write ChangeIntents, verified task
 state, forkable Run lineage, provenance-preserving context, effect-aware

@@ -2,7 +2,7 @@
 
 Change admission, Harness Snapshots, Escalations, Handoffs, Evaluation Receipts,
 and owner Settlement are authoritative facts about why a Run could execute and
-whether its exact Candidate was accepted. termi9ne records them as immutable
+whether its exact Candidate was accepted. superplexr records them as immutable
 Mission events and projections rather than creating a second workflow store or
 encoding them in terminal text. Frequently replaced provider and CI observations
 remain outside Mission history as Run evidence; they may support a receipt but

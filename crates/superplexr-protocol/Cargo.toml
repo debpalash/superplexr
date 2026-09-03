@@ -1,0 +1,21 @@
+[package]
+name = "superplexr-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+prost.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+superplexr-core = { path = "../superplexr-core" }
+superplexr-terminal = { path = "../superplexr-terminal" }
+zstd.workspace = true
+
+[[bench]]
+name = "terminal_transport"
+harness = false

@@ -1,7 +1,7 @@
 /target/
 /dist/
-/.termi9ne/
-/.termi9ne-dev/
+/.superplexr/
+/.superplexr-dev/
 /.DS_Store
 *.swp
 *.swo

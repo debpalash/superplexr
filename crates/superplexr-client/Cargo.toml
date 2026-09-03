@@ -1,0 +1,16 @@
+[package]
+name = "superplexr-client"
+description = "Blocking local daemon client for native superplexr frontends"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+superplexr-core = { path = "../superplexr-core" }
+superplexr-protocol = { path = "../superplexr-protocol" }
+superplexr-terminal = { path = "../superplexr-terminal" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true

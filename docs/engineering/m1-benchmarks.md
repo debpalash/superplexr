@@ -6,7 +6,7 @@
 and one six-Surface waterfall, drives continuous ANSI output through every PTY,
 measures actual GPUI draw completions for five seconds after a warm-up frame,
 emits both raw callback cadence and display-normalized presented FPS, and fails
-below `TERMI9NE_DESKTOP_MIN_FPS` (60 by default) or above the 16.7 ms p95 frame
+below `SUPERPLEXR_DESKTOP_MIN_FPS` (60 by default) or above the 16.7 ms p95 frame
 budget. It cleans up only its unique
 temporary state root and daemon. This is a graphical-host gate and therefore
 runs on the physical macOS, Wayland, and X11 release hosts rather than in a
@@ -33,11 +33,11 @@ PTY I/O; those become end-to-end latency spans in M2.
 Run the release harness with:
 
 ```sh
-cargo bench -p termi9ne-terminal --bench frame_pipeline
+cargo bench -p superplexr-terminal --bench frame_pipeline
 ```
 
-Machine-readable JSON is printed to stdout. `TERMI9NE_BENCH_ITERATIONS` changes
-the sample count and `TERMI9NE_BENCH_P95_US` turns a recorded p95 budget into a
+Machine-readable JSON is printed to stdout. `SUPERPLEXR_BENCH_ITERATIONS` changes
+the sample count and `SUPERPLEXR_BENCH_P95_US` turns a recorded p95 budget into a
 failing gate. Reference-host definitions live in `ci/reference-hardware.toml`.
 
 ## Apple Silicon baseline

@@ -1,13 +1,13 @@
 # The agentic multiplexer
 
-termi9ne is not a terminal application with agent features. It is a durable
+superplexr is not a terminal application with agent features. It is a durable
 execution environment in which humans and agents can run, observe, interrupt,
 delegate, and review work. The terminal is the first high-fidelity Surface, not
 the product's organizing model.
 
 Our shorthand is:
 
-> Superlogical multiplexes streams. termi9ne multiplexes agency.
+> Superlogical multiplexes streams. superplexr multiplexes agency.
 
 This is a product-design bar, not a claim we make before the evidence exists.
 As of 2026-08-31, Superlogical's public plan describes durable sessions spanning
@@ -17,7 +17,7 @@ safety. Merely combining Rust, GPUI, and libghostty does not exceed that plan.
 
 ## The durable object
 
-The durable object in termi9ne is the Mission: an intended outcome with actors,
+The durable object in superplexr is the Mission: an intended outcome with actors,
 Runs, Sessions, Signals, Interventions, and Artifacts. This creates relationships
 that a stream-oriented multiplexer cannot express directly:
 
@@ -36,7 +36,7 @@ only the current controller may write or resize it. Views never own durable work
 
 ## Superiority gates
 
-We do not call termi9ne superior until it demonstrates all applicable gates.
+We do not call superplexr superior until it demonstrates all applicable gates.
 
 ### Terminal foundation
 

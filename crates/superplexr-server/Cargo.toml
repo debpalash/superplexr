@@ -1,0 +1,29 @@
+[package]
+name = "superplexr-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "superplexr-server"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+clap.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+superplexr-core = { path = "../superplexr-core" }
+superplexr-plugin = { path = "../superplexr-plugin" }
+superplexr-protocol = { path = "../superplexr-protocol" }
+superplexr-runtime = { path = "../superplexr-runtime" }
+superplexr-terminal = { path = "../superplexr-terminal" }
+uuid.workspace = true

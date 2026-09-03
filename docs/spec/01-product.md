@@ -2,7 +2,7 @@
 
 ## 1. Product definition — P-DEF-001
 
-termi9ne is an agent-native execution environment whose first interface is a
+superplexr is an agent-native execution environment whose first interface is a
 high-fidelity terminal multiplexer. It makes parallel work legible and
 interruptible without making a terminal tab, pane, window, or GUI process the
 owner of that work.
@@ -25,7 +25,7 @@ control when automation reaches ambiguity or risk.
 
 Secondary users are:
 
-- developers using termi9ne as a conventional durable terminal multiplexer;
+- developers using superplexr as a conventional durable terminal multiplexer;
 - agent authors integrating through the local signal protocol;
 - maintainers reviewing an execution history after work has completed.
 

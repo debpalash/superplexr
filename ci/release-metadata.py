@@ -98,16 +98,16 @@ def generate(workspace, output):
         "spdxVersion": "SPDX-2.3",
         "dataLicense": "CC0-1.0",
         "SPDXID": "SPDXRef-DOCUMENT",
-        "name": "termi9ne-cargo-lock",
-        "documentNamespace": f"https://termi9ne.local/spdx/{lock_digest}",
+        "name": "superplexr-cargo-lock",
+        "documentNamespace": f"https://superplexr.local/spdx/{lock_digest}",
         "creationInfo": {
             "created": created_at(),
-            "creators": ["Organization: termi9ne contributors"],
+            "creators": ["Organization: superplexr contributors"],
         },
         "packages": packages,
         "relationships": relationships,
     }
-    (output / "termi9ne.spdx.json").write_text(
+    (output / "superplexr.spdx.json").write_text(
         json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     generate_notices(metadata, output / "THIRD_PARTY_NOTICES.txt")
@@ -115,7 +115,7 @@ def generate(workspace, output):
 
 def generate_notices(metadata, destination):
     lines = [
-        "termi9ne third-party dependency and notice bundle",
+        "superplexr third-party dependency and notice bundle",
         "Generated from Cargo's locked resolved graph.",
         "",
         "Dependency inventory",

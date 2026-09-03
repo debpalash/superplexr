@@ -16,11 +16,11 @@ Sources:
 - [GPUI site](https://gpui.rs/)
 - [GPUI crate README](https://github.com/zed-industries/zed/tree/main/crates/gpui)
 
-termi9ne therefore:
+superplexr therefore:
 
 - pins one exact Zed/GPUI commit, never `*`, a moving branch, or an unbounded
   semver range;
-- isolates GPUI in `termi9ne-desktop`;
+- isolates GPUI in `superplexr-desktop`;
 - enables both Wayland and X11 for Linux release builds;
 - proves custom Element painting, rich keys, IME, clipboard, focus, accessibility,
   display scale, timers, and packaging before final UI construction;
@@ -29,7 +29,7 @@ termi9ne therefore:
 
 M1 found that the pinned Zed graph otherwise resolves GPL-only `ztracing` and
 two unlicensed auxiliary packages, `gpui_util` and `gpui_shared_string`.
-termi9ne therefore patches those package names to small, independently
+superplexr therefore patches those package names to small, independently
 implemented `MIT OR Apache-2.0` compatibility crates. The normal/build license
 gate checks both target graphs and fails if the names resolve remotely, a
 package omits its license, or a copyleft-only license enters the graph. Exact
@@ -51,9 +51,9 @@ Sources:
 - [Ghostty repository](https://github.com/ghostty-org/ghostty)
 - [Ghostling](https://github.com/ghostty-org/ghostling)
 
-termi9ne therefore uses only public VT interfaces, pins a commit and build inputs,
+superplexr therefore uses only public VT interfaces, pins a commit and build inputs,
 statically links by default, and translates all upstream state behind
-`termi9ne-terminal`. The private full Ghostty application/surface interface is
+`superplexr-terminal`. The private full Ghostty application/surface interface is
 not a Linux product foundation.
 
 ## 3. libghostty-rs — DEP-RUST-001
@@ -83,10 +83,10 @@ The adoption audit MUST record:
 
 Audit outcomes:
 
-1. **Adopt pinned:** upstream passes and termi9ne adds only its terminal seam.
+1. **Adopt pinned:** upstream passes and superplexr adds only its terminal seam.
 2. **Fork pinned:** wrapper is sound/useful but needs bounded changes.
 3. **Replace binding:** generate minimal raw bindings and implement a small safe
-   wrapper owned by termi9ne.
+   wrapper owned by superplexr.
 
 The audit cannot select the private Ghostty app surface as a fourth outcome.
 

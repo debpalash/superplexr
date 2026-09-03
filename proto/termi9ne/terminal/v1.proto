@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package termi9ne.terminal.v1;
+package superplexr.terminal.v1;
 
 // Normative terminal data-plane schema for local protocol v3. UUID byte fields
 // MUST contain exactly 16 RFC 4122 network-order bytes. All sequence and offset

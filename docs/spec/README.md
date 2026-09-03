@@ -1,11 +1,11 @@
-# termi9ne v1 product and engineering specification
+# superplexr v1 product and engineering specification
 
 Status: implementation contract  
 Version: 1.0  
 Last revised: 2026-09-01  
 Targets: macOS and Linux
 
-This directory is the normative specification for termi9ne v1. It turns the
+This directory is the normative specification for superplexr v1. It turns the
 product thesis and accepted architecture decisions into contracts that can be
 implemented and tested independently. When this specification conflicts with a
 design exploration, README prose, or an older prototype, this specification
@@ -18,7 +18,7 @@ cited as that identifier plus their bullet or paragraph number when necessary.
 
 ## Product in one paragraph
 
-termi9ne is a local-first, agent-native terminal multiplexer for developers who
+superplexr is a local-first, agent-native terminal multiplexer for developers who
 supervise parallel human and agent work. A browser-style Mission tab contains a
 Session sidebar and a responsive waterfall of terminal Surfaces. Durable work is
 represented as an event-sourced graph of Runs, dependencies, Signals, Artifacts,
@@ -53,10 +53,10 @@ happened afterward.
 
 Supporting material:
 
-- [`docs/termi9ne-unified-roadmap.md`](../termi9ne-unified-roadmap.md) is the
+- [`docs/superplexr-unified-roadmap.md`](../superplexr-unified-roadmap.md) is the
   consolidated status and planning view across research, implementation, and
   the remaining v1 delivery gates.
-- [`proto/termi9ne/terminal/v1.proto`](../../proto/termi9ne/terminal/v1.proto)
+- [`proto/superplexr/terminal/v1.proto`](../../proto/superplexr/terminal/v1.proto)
   is the normative terminal data-plane schema.
 - [`CONTEXT.md`](../../CONTEXT.md) is the canonical glossary and contains no
   implementation policy.

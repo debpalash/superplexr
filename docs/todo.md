@@ -1,7 +1,7 @@
 # TODO
 
 Updated: 2026-09-03. Companion to
-[termi9ne-unified-roadmap.md](termi9ne-unified-roadmap.md), which stays the
+[superplexr-unified-roadmap.md](superplexr-unified-roadmap.md), which stays the
 authoritative capability catalog. This file is the short, ordered list.
 
 Legend: `[x]` done and verified · `[~]` partial · `[ ]` not started
@@ -10,7 +10,7 @@ Legend: `[x]` done and verified · `[~]` partial · `[ ]` not started
 
 ## 1. Fault / debugging loop
 
-The differentiator: agents write code, termi9ne owns what happens when it
+The differentiator: agents write code, superplexr owns what happens when it
 breaks. A Fault closes only when a replay actually passes.
 
 - [x] `FaultId`, protocol types, 6 requests
@@ -21,7 +21,7 @@ breaks. A Fault closes only when a replay actually passes.
 - [x] Auto-detect: per-command via OSC 133 marks
 - [x] CLI: `report list show repro resolve dismiss handoff`
 - [x] Desktop: sidebar `△ Broken` card + panel (⌘⇧F)
-- [x] MCP bridge (`termi9ne-mcp`), Fault tools only
+- [x] MCP bridge (`superplexr-mcp`), Fault tools only
 - [x] Live end-to-end proof on a real daemon and PTY
 
 Remaining:
@@ -38,7 +38,7 @@ Remaining:
 - [x] **Regression guard** — `fault guard` re-replays resolved Faults and
       reopens any that fail again, keeping the replay that closed them so the
       regression can be read against it; verified end to end on a real daemon
-- [x] Shell integration installer (`termi9ne shell-init`) for zsh, bash and
+- [x] Shell integration installer (`superplexr shell-init`) for zsh, bash and
       fish; verified end to end against a real interactive zsh
 - [ ] Mobile/web triage surface: read a Fault, replay, hand off. No terminal.
 
@@ -141,7 +141,7 @@ finishes in 0.2s. See "parser build mode" below.
   This is what "the app doesn't run" was on 2026-09-03, after two rounds of
   real fixes to the app itself. The grant is per folder and a dismissed
   prompt means denied, so it flips mid-session. Do not keep the repo under
-  `~/Desktop`, `~/Documents` or `~/Downloads`; `~/src/termi9ne` never hits
+  `~/Desktop`, `~/Documents` or `~/Downloads`; `~/src/superplexr` never hits
   this. If the Desktop copy must be used: System Settings → Privacy &
   Security → Files and Folders → Ghostty → Desktop Folder, then restart
   Ghostty.
@@ -154,7 +154,7 @@ finishes in 0.2s. See "parser build mode" below.
   whenever cargo sets `DEBUG=true`, so every `cargo run` and `cargo test` got
   an unoptimized VT parser at well under 1 MiB/s instead of over 400 MiB/s.
   `.cargo/config.toml` pins `LIBGHOSTTY_VT_SYS_OPTIMIZE=ReleaseFast`, and
-  `crates/termi9ne-terminal/tests/parser_throughput.rs` fails if that is lost.
+  `crates/superplexr-terminal/tests/parser_throughput.rs` fails if that is lost.
 - Long-running dev sessions leave orphaned `--internal-daemon` processes and
   their state directories behind. Each retains terminal journals, so
-  `.termi9ne-dev/` grows without anything reclaiming it.
+  `.superplexr-dev/` grows without anything reclaiming it.

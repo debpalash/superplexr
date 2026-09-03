@@ -5308,6 +5308,148 @@ dependencies = [
 ]
 
 [[package]]
+name = "superplexr-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "libc",
+ "serde",
+ "serde_json",
+ "superplexr-client",
+ "superplexr-core",
+ "superplexr-plugin",
+ "superplexr-protocol",
+ "superplexr-terminal",
+ "thiserror 2.0.20",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "superplexr-client"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "superplexr-core",
+ "superplexr-protocol",
+ "superplexr-terminal",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
+name = "superplexr-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "uuid",
+]
+
+[[package]]
+name = "superplexr-desktop"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "gpui",
+ "gpui_apple",
+ "gpui_platform",
+ "libc",
+ "serde",
+ "serde_json",
+ "superplexr-client",
+ "superplexr-core",
+ "superplexr-protocol",
+ "superplexr-server",
+ "superplexr-terminal",
+ "sysinfo",
+ "thiserror 2.0.20",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "superplexr-mcp"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde",
+ "serde_json",
+ "superplexr-client",
+ "superplexr-core",
+ "superplexr-protocol",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "superplexr-plugin"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+ "superplexr-core",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "superplexr-protocol"
+version = "0.1.0"
+dependencies = [
+ "prost",
+ "serde",
+ "serde_json",
+ "superplexr-core",
+ "superplexr-terminal",
+ "thiserror 2.0.20",
+ "tokio",
+ "uuid",
+ "zstd",
+]
+
+[[package]]
+name = "superplexr-runtime"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "portable-pty",
+ "superplexr-core",
+ "superplexr-terminal",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "superplexr-server"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "superplexr-core",
+ "superplexr-plugin",
+ "superplexr-protocol",
+ "superplexr-runtime",
+ "superplexr-terminal",
+ "thiserror 2.0.20",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "superplexr-terminal"
+version = "0.1.0"
+dependencies = [
+ "libghostty-vt",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "sval"
 version = "2.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5524,148 +5666,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
-]
-
-[[package]]
-name = "termi9ne-cli"
-version = "0.1.0"
-dependencies = [
- "clap",
- "libc",
- "serde",
- "serde_json",
- "termi9ne-client",
- "termi9ne-core",
- "termi9ne-plugin",
- "termi9ne-protocol",
- "termi9ne-terminal",
- "thiserror 2.0.20",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "termi9ne-client"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "termi9ne-core",
- "termi9ne-protocol",
- "termi9ne-terminal",
- "thiserror 2.0.20",
- "uuid",
-]
-
-[[package]]
-name = "termi9ne-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "uuid",
-]
-
-[[package]]
-name = "termi9ne-desktop"
-version = "0.1.0"
-dependencies = [
- "clap",
- "gpui",
- "gpui_apple",
- "gpui_platform",
- "libc",
- "serde",
- "serde_json",
- "sysinfo",
- "termi9ne-client",
- "termi9ne-core",
- "termi9ne-protocol",
- "termi9ne-server",
- "termi9ne-terminal",
- "thiserror 2.0.20",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "termi9ne-mcp"
-version = "0.1.0"
-dependencies = [
- "clap",
- "serde",
- "serde_json",
- "termi9ne-client",
- "termi9ne-core",
- "termi9ne-protocol",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "termi9ne-plugin"
-version = "0.1.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "termi9ne-core",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "termi9ne-protocol"
-version = "0.1.0"
-dependencies = [
- "prost",
- "serde",
- "serde_json",
- "termi9ne-core",
- "termi9ne-terminal",
- "thiserror 2.0.20",
- "tokio",
- "uuid",
- "zstd",
-]
-
-[[package]]
-name = "termi9ne-runtime"
-version = "0.1.0"
-dependencies = [
- "libc",
- "portable-pty",
- "termi9ne-core",
- "termi9ne-terminal",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "termi9ne-server"
-version = "0.1.0"
-dependencies = [
- "clap",
- "libc",
- "serde",
- "serde_json",
- "sha2",
- "termi9ne-core",
- "termi9ne-plugin",
- "termi9ne-protocol",
- "termi9ne-runtime",
- "termi9ne-terminal",
- "thiserror 2.0.20",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "termi9ne-terminal"
-version = "0.1.0"
-dependencies = [
- "libghostty-vt",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
 ]
 
 [[package]]

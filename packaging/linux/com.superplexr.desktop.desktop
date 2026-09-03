@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=superplexr
+Comment=Agent-native terminal multiplexer
+Exec=superplexr-desktop
+Icon=superplexr
+Terminal=false
+Categories=Development;System;TerminalEmulator;
+StartupNotify=true

@@ -1,10 +1,10 @@
-# termi9ne
+# superplexr
 
 An agent-native execution environment built around missions, runs, and human
 attention—not windows, tabs, and panes.
 
 Traditional terminal multiplexers preserve processes and arrange terminal
-rectangles. termi9ne's durable state is a graph of work: what is being attempted,
+rectangles. superplexr's durable state is a graph of work: what is being attempted,
 who is doing it, which runs depend on one another, what needs a human decision,
 and which artifacts were produced. A terminal Surface is one transient projection
 of a durable Session, which may host agent Runs or ordinary shell work.
@@ -28,13 +28,13 @@ of a durable Session, which may host agent Runs or ordinary shell work.
 ## Architecture
 
 ```text
-termi9ne desktop (one Rust app for macOS and Linux)
+superplexr desktop (one Rust app for macOS and Linux)
   Mission tabs + Session sidebar + responsive terminal waterfall
   GPUI + custom TerminalElement + shared SessionProjection
                               |
           binary terminal data + JSON control protocol
                               |
-termi9ne runtime ----------------------------- agent side-channel
+superplexr runtime ----------------------------- agent side-channel
   mission/run events + durable Sessions + PTYs + canonical libghostty-vt state
 ```
 
@@ -47,7 +47,7 @@ interface. The complete v1 design is in
 [`docs/architecture/v1-cross-platform-multiplexer.md`](docs/architecture/v1-cross-platform-multiplexer.md).
 The product interaction, visual, protocol, and delivery plan is in
 [`docs/design/browser-waterfall-v1.md`](docs/design/browser-waterfall-v1.md).
-The evidence required before termi9ne calls itself superior is recorded in
+The evidence required before superplexr calls itself superior is recorded in
 [`docs/product/north-star.md`](docs/product/north-star.md).
 The normative v1 product and engineering contract starts at
 [`docs/spec/README.md`](docs/spec/README.md), covering the execution graph,
@@ -79,14 +79,14 @@ to type, use the Mission sidebar to switch Sessions, and open the command deck
 with Cmd/Ctrl-K. Unsafe multiline paste is held for explicit confirmation:
 
 ```sh
-cargo run -p termi9ne-desktop
+cargo run -p superplexr-desktop
 ```
 
 Graphite and Paper are built in under **View → Theme**. A custom data-only theme
 can be loaded without placing code in the desktop process:
 
 ```sh
-cargo run -p termi9ne-desktop -- --theme docs/examples/theme.json
+cargo run -p superplexr-desktop -- --theme docs/examples/theme.json
 ```
 
 Custom themes use the bounded, strict JSON schema in
@@ -96,8 +96,8 @@ changes. Invalid colors, fonts, fields, versions, file types, sizes, or contrast
 leave the previous theme active. Theme parsing and file I/O never occur in
 terminal paint paths.
 
-Debug desktops use `.termi9ne-dev/v25` so they can run beside an older packaged
-runtime without taking over its socket or state. Release builds use `.termi9ne`.
+Debug desktops use `.superplexr-dev/v25` so they can run beside an older packaged
+runtime without taking over its socket or state. Release builds use `.superplexr`.
 An explicit incompatible `--socket` fails before GPUI starts, reports both wire
 versions, and never replaces a daemon that may own live PTYs.
 
@@ -109,16 +109,16 @@ plugin before starting the runtime. If it is already running, restart the
 durable runtime; closing only the desktop does not stop it:
 
 ```sh
-cargo build -p termi9ne-plugin --bin termi9ne-agent-status-plugin
-cargo run -p termi9ne-cli -- plugin-install-agent-status \
-  target/debug/termi9ne-agent-status-plugin \
-  --plugin-dir .termi9ne-dev/v25/plugins
-cargo run -p termi9ne-cli -- \
-  --socket .termi9ne-dev/v25/control.sock plugin-list
+cargo build -p superplexr-plugin --bin superplexr-agent-status-plugin
+cargo run -p superplexr-cli -- plugin-install-agent-status \
+  target/debug/superplexr-agent-status-plugin \
+  --plugin-dir .superplexr-dev/v25/plugins
+cargo run -p superplexr-cli -- \
+  --socket .superplexr-dev/v25/control.sock plugin-list
 ```
 
-The shown path targets `cargo run -p termi9ne-desktop`; packaged builds use
-`.termi9ne/plugins`. The installer refuses to replace an existing plugin.
+The shown path targets `cargo run -p superplexr-desktop`; packaged builds use
+`.superplexr/plugins`. The installer refuses to replace an existing plugin.
 Manifests and executable paths must be owner-controlled, non-symlink files under
 the selected plugin directory. Runtime health is visible under
 **Tools → Plugins**.
@@ -145,7 +145,7 @@ on `PATH`. A reproducible Linux verification, including both Wayland and X11
 features, is available when Docker is installed:
 
 ```sh
-docker build --file ci/linux.Dockerfile --tag termi9ne-ci .
+docker build --file ci/linux.Dockerfile --tag superplexr-ci .
 ```
 
 On a graphical macOS, Wayland, or X11 host, run the six-PTY output/render gate:
@@ -174,57 +174,57 @@ ci/desktop-input-smoke.sh
 Run the daemon in one terminal:
 
 ```sh
-cargo run -p termi9ne-server
+cargo run -p superplexr-server
 ```
 
 Create and inspect a mission from another:
 
 ```sh
-cargo run -p termi9ne-cli -- create "Ship the first agent-native terminal"
-cargo run -p termi9ne-cli -- list
-cargo run -p termi9ne-cli -- status
-cargo run -p termi9ne-cli -- schedule MISSION_ID --max-concurrency 4
-cargo run -p termi9ne-cli -- run-launch MISSION_ID RUN_ID --program /usr/bin/env -- bash -lc 'your-agent-command'
-cargo run -p termi9ne-cli -- schedule-launch MISSION_ID --max-concurrency 4 --program /usr/bin/env -- your-agent-command
-cargo run -p termi9ne-cli -- schedule-engine-launch MISSION_ID --max-concurrency 4
-cargo run -p termi9ne-cli -- schedule-auto MISSION_ID --max-concurrency 4
-cargo run -p termi9ne-cli -- schedule-auto-list
-cargo run -p termi9ne-cli -- schedule-settings --global-max-concurrency 12
-cargo run -p termi9ne-cli -- schedule-settings-show
-cargo run -p termi9ne-cli -- run-engine MISSION_ID RUN_ID
-cargo run -p termi9ne-cli -- run-engine-preview MISSION_ID RUN_ID
-cargo run -p termi9ne-cli -- run-checkout-new MISSION_ID RUN_ID --repository /path/to/repo --base-ref main
-cargo run -p termi9ne-cli -- run-engine MISSION_ID RUN_ID --checkout
-cargo run -p termi9ne-cli -- run-checkout-list --mission-id MISSION_ID
-cargo run -p termi9ne-cli -- evidence-check MISSION_ID RUN_ID --provider github --adapter-version 1 --key check/test --revision COMMIT --name test --state passed --summary "tests passed"
-cargo run -p termi9ne-cli -- evidence-review MISSION_ID RUN_ID --provider github --adapter-version 1 --key pr/42 --revision COMMIT --title "Ship feature" --state approved --summary "review approved"
-cargo run -p termi9ne-cli -- evidence-list MISSION_ID RUN_ID
-cargo run -p termi9ne-cli -- run-checkout-retire MISSION_ID RUN_ID --merged-into-ref main
-cargo run -p termi9ne-cli -- provider-report MISSION_ID RUN_ID --provider codex --adapter-version 1 --state working --summary 'executing a tool'
-cargo run -p termi9ne-cli -- provider-status MISSION_ID RUN_ID
-cargo run -p termi9ne-cli -- provider-list MISSION_ID
-cargo run -p termi9ne-cli -- terminal-capture SESSION_ID
-cargo run -p termi9ne-cli -- terminal-wait-text SESSION_ID 'ready>' --timeout-millis 30000
-cargo run -p termi9ne-cli -- terminal-wait-quiet SESSION_ID --quiet-millis 500 --timeout-millis 30000
-cargo run -p termi9ne-cli -- terminal-wait-exit SESSION_ID --timeout-millis 300000
-cargo run -p termi9ne-cli -- events --scope all
-cargo run -p termi9ne-cli -- terminal-ssh user@host --port 22
-cargo run -p termi9ne-cli -- terminal-history SESSION_ID --rows-before-bottom 500
-cargo run -p termi9ne-cli -- terminal-list --all
-cargo run -p termi9ne-cli -- terminal-archive SESSION_ID
-cargo run -p termi9ne-cli -- terminal-restore SESSION_ID
-cargo run -p termi9ne-cli -- session-group-create "review agents" --session SESSION_ID
-cargo run -p termi9ne-cli -- session-group-list
-cargo run -p termi9ne-cli -- session-group-rename GROUP_ID GROUP_VERSION "landing queue"
-cargo run -p termi9ne-cli -- session-group-detach GROUP_ID GROUP_VERSION
-cargo run -p termi9ne-cli -- session-group-reattach GROUP_ID GROUP_VERSION
-cargo run -p termi9ne-cli -- events --scope groups
+cargo run -p superplexr-cli -- create "Ship the first agent-native terminal"
+cargo run -p superplexr-cli -- list
+cargo run -p superplexr-cli -- status
+cargo run -p superplexr-cli -- schedule MISSION_ID --max-concurrency 4
+cargo run -p superplexr-cli -- run-launch MISSION_ID RUN_ID --program /usr/bin/env -- bash -lc 'your-agent-command'
+cargo run -p superplexr-cli -- schedule-launch MISSION_ID --max-concurrency 4 --program /usr/bin/env -- your-agent-command
+cargo run -p superplexr-cli -- schedule-engine-launch MISSION_ID --max-concurrency 4
+cargo run -p superplexr-cli -- schedule-auto MISSION_ID --max-concurrency 4
+cargo run -p superplexr-cli -- schedule-auto-list
+cargo run -p superplexr-cli -- schedule-settings --global-max-concurrency 12
+cargo run -p superplexr-cli -- schedule-settings-show
+cargo run -p superplexr-cli -- run-engine MISSION_ID RUN_ID
+cargo run -p superplexr-cli -- run-engine-preview MISSION_ID RUN_ID
+cargo run -p superplexr-cli -- run-checkout-new MISSION_ID RUN_ID --repository /path/to/repo --base-ref main
+cargo run -p superplexr-cli -- run-engine MISSION_ID RUN_ID --checkout
+cargo run -p superplexr-cli -- run-checkout-list --mission-id MISSION_ID
+cargo run -p superplexr-cli -- evidence-check MISSION_ID RUN_ID --provider github --adapter-version 1 --key check/test --revision COMMIT --name test --state passed --summary "tests passed"
+cargo run -p superplexr-cli -- evidence-review MISSION_ID RUN_ID --provider github --adapter-version 1 --key pr/42 --revision COMMIT --title "Ship feature" --state approved --summary "review approved"
+cargo run -p superplexr-cli -- evidence-list MISSION_ID RUN_ID
+cargo run -p superplexr-cli -- run-checkout-retire MISSION_ID RUN_ID --merged-into-ref main
+cargo run -p superplexr-cli -- provider-report MISSION_ID RUN_ID --provider codex --adapter-version 1 --state working --summary 'executing a tool'
+cargo run -p superplexr-cli -- provider-status MISSION_ID RUN_ID
+cargo run -p superplexr-cli -- provider-list MISSION_ID
+cargo run -p superplexr-cli -- terminal-capture SESSION_ID
+cargo run -p superplexr-cli -- terminal-wait-text SESSION_ID 'ready>' --timeout-millis 30000
+cargo run -p superplexr-cli -- terminal-wait-quiet SESSION_ID --quiet-millis 500 --timeout-millis 30000
+cargo run -p superplexr-cli -- terminal-wait-exit SESSION_ID --timeout-millis 300000
+cargo run -p superplexr-cli -- events --scope all
+cargo run -p superplexr-cli -- terminal-ssh user@host --port 22
+cargo run -p superplexr-cli -- terminal-history SESSION_ID --rows-before-bottom 500
+cargo run -p superplexr-cli -- terminal-list --all
+cargo run -p superplexr-cli -- terminal-archive SESSION_ID
+cargo run -p superplexr-cli -- terminal-restore SESSION_ID
+cargo run -p superplexr-cli -- session-group-create "review agents" --session SESSION_ID
+cargo run -p superplexr-cli -- session-group-list
+cargo run -p superplexr-cli -- session-group-rename GROUP_ID GROUP_VERSION "landing queue"
+cargo run -p superplexr-cli -- session-group-detach GROUP_ID GROUP_VERSION
+cargo run -p superplexr-cli -- session-group-reattach GROUP_ID GROUP_VERSION
+cargo run -p superplexr-cli -- events --scope groups
 ```
 
-Every command accepts `--socket`; the default is `.termi9ne/control.sock` in the
+Every command accepts `--socket`; the default is `.superplexr/control.sock` in the
 current workspace. Mission mutations also accept `--expected-version` and
 `--idempotency-key`. The daemon persists owner-only enveloped event journals
-under `.termi9ne/missions` and raw terminal output under `.termi9ne/sessions`.
+under `.superplexr/missions` and raw terminal output under `.superplexr/sessions`.
 `status` reports daemon identity, platform, uptime, connection/subscriber counts,
 Mission and scheduler-policy counts, global agent capacity, and terminal
 lifecycle counts without exposing state paths, environment values, commands, or
@@ -258,16 +258,16 @@ daemon-owned PTY. The runtime observes the child before it can emit or exit;
 process completion then durably finishes the Session and Run. Launch failure is
 recorded through a compensating failed completion, and retrying the same bound
 Session is idempotent.
-Agent processes receive daemon-owned `TERMI9NE_MISSION_ID`, `TERMI9NE_RUN_ID`,
-and `TERMI9NE_SESSION_ID` environment values; caller-supplied values cannot spoof
+Agent processes receive daemon-owned `SUPERPLEXR_MISSION_ID`, `SUPERPLEXR_RUN_ID`,
+and `SUPERPLEXR_SESSION_ID` environment values; caller-supplied values cannot spoof
 those bindings.
-They also receive an owner-only `TERMI9NE_AGENT_SOCKET`. The daemon authenticates
+They also receive an owner-only `SUPERPLEXR_AGENT_SOCKET`. The daemon authenticates
 its kernel-reported peer PID against the live PTY process group and permits only
 Run-scoped reads, Signals, Artifacts, and configured-driver preview. Global
 listing, approval resolution, Grant issuance, unrelated Runs, and terminal
 control are denied; authorization is rechecked and revoked on Run or Session
 completion.
-`run-engine` resolves the Run actor's engine through `.termi9ne/engines.json`.
+`run-engine` resolves the Run actor's engine through `.superplexr/engines.json`.
 Configuration is structured argv—never an interpolated shell string—and is
 reloaded for each launch. For example:
 
@@ -312,7 +312,7 @@ snapshots followed by NDJSON updates, so scripts can react without polling or
 screen scraping.
 The optional fail-closed `workspace_write` sandbox canonicalizes the working
 directory, exposes the host read-only, permits writes only inside that workspace,
-and re-protects `.termi9ne`. It uses `/usr/bin/sandbox-exec` on macOS and
+and re-protects `.superplexr`. It uses `/usr/bin/sandbox-exec` on macOS and
 Bubblewrap on Linux. Network remains available so agents can reach providers and
 their restricted local channel; preview and Mission history say so explicitly
 rather than implying network isolation. If the platform backend is missing, the
@@ -333,15 +333,15 @@ owner-only directory on the client, then forward its control socket through
 OpenSSH:
 
 ```sh
-mkdir -m 700 /absolute/local/termi9ne-remote
-cargo run -p termi9ne-cli -- remote-forward user@host \
-  --local-socket /absolute/local/termi9ne-remote/control.sock \
-  --remote-socket /absolute/remote/project/.termi9ne/control.sock \
+mkdir -m 700 /absolute/local/superplexr-remote
+cargo run -p superplexr-cli -- remote-forward user@host \
+  --local-socket /absolute/local/superplexr-remote/control.sock \
+  --remote-socket /absolute/remote/project/.superplexr/control.sock \
   --identity /absolute/path/to/id_ed25519 \
   --known-hosts /absolute/path/to/known_hosts
 
-cargo run -p termi9ne-desktop -- \
-  --socket /absolute/local/termi9ne-remote/control.sock \
+cargo run -p superplexr-desktop -- \
+  --socket /absolute/local/superplexr-remote/control.sock \
   --connect-only --runtime-label staging
 ```
 
@@ -357,15 +357,15 @@ Scope it to explicit Missions and/or Sessions and capture the one-time token in
 an owner-only file. Observer is the default read-only role:
 
 ```sh
-(umask 077; target/debug/termi9ne share-create reviewer \
+(umask 077; target/debug/superplexr share-create reviewer \
   --mission MISSION_ID --expires-in-seconds 86400 | jq -r .token > reviewer.token)
 
-target/debug/termi9ne --share-token-file reviewer.token list
-target/debug/termi9ne-desktop --socket /absolute/path/control.sock \
+target/debug/superplexr --share-token-file reviewer.token list
+target/debug/superplexr-desktop --socket /absolute/path/control.sock \
   --connect-only --share-token-file reviewer.token
 
-target/debug/termi9ne share-list
-target/debug/termi9ne share-revoke SHARE_ID
+target/debug/superplexr share-list
+target/debug/superplexr share-revoke SHARE_ID
 ```
 
 Observers receive only scoped Mission/terminal reads and live updates. Terminal
@@ -407,7 +407,7 @@ license/NOTICE texts, and a `SHA256SUMS` manifest.
 cargo fmt --all -- --check
 cargo test --workspace --all-targets --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-TERMI9NE_SOAK_SECONDS=60 TERMI9NE_SOAK_SESSIONS=12 ./ci/runtime-soak.sh .
+SUPERPLEXR_SOAK_SECONDS=60 SUPERPLEXR_SOAK_SESSIONS=12 ./ci/runtime-soak.sh .
 ```
 
 Executed evidence and remaining release gaps are kept separate in
@@ -418,12 +418,12 @@ claim is made.
 
 ## Repository map
 
-- `termi9ne-core`: event-sourced Mission, Run, Session, and attention model.
-- `termi9ne-protocol`: negotiated v3 framing, sequencing, compression, JSON control, and protobuf terminal codecs.
-- `termi9ne-server`: durable local runtime and Unix-socket server.
-- `termi9ne-cli`: human- and agent-usable control client.
-- `termi9ne-terminal`: product-owned libghostty adapter and semantic frames.
-- `termi9ne-desktop`: GPUI application shell and custom terminal painter.
+- `superplexr-core`: event-sourced Mission, Run, Session, and attention model.
+- `superplexr-protocol`: negotiated v3 framing, sequencing, compression, JSON control, and protobuf terminal codecs.
+- `superplexr-server`: durable local runtime and Unix-socket server.
+- `superplexr-cli`: human- and agent-usable control client.
+- `superplexr-terminal`: product-owned libghostty adapter and semantic frames.
+- `superplexr-desktop`: GPUI application shell and custom terminal painter.
 - `gpui-*-compat` / `ztracing-compat`: small permissively licensed seams that
   keep unapproved Zed auxiliary crates out of the product graph.
 - `CONTEXT.md`: canonical product language.

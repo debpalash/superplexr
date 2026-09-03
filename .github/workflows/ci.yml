@@ -50,4 +50,4 @@ jobs:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Verify in pinned Linux image
-        run: docker build --file ci/linux.Dockerfile --tag termi9ne-ci .
+        run: docker build --file ci/linux.Dockerfile --tag superplexr-ci .

@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=termi9ne
-Comment=Agent-native terminal multiplexer
-Exec=termi9ne-desktop
-Icon=termi9ne
-Terminal=false
-Categories=Development;System;TerminalEmulator;
-StartupNotify=true

@@ -147,12 +147,12 @@ RUN --network=none \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/workspace/target \
     cargo build --workspace --release --locked --offline \
-    && TERMI9NE_USE_PREGENERATED_METADATA=1 \
-        TERMI9NE_APPIMAGETOOL=/opt/appimagetool/squashfs-root/AppRun \
-        TERMI9NE_APPIMAGE_RUNTIME=/opt/appimage-runtime \
-        TERMI9NE_LINUXDEPLOY=/opt/linuxdeploy/squashfs-root/AppRun \
+    && SUPERPLEXR_USE_PREGENERATED_METADATA=1 \
+        SUPERPLEXR_APPIMAGETOOL=/opt/appimagetool/squashfs-root/AppRun \
+        SUPERPLEXR_APPIMAGE_RUNTIME=/opt/appimage-runtime \
+        SUPERPLEXR_LINUXDEPLOY=/opt/linuxdeploy/squashfs-root/AppRun \
         ./ci/package-smoke.sh . \
-    && TERMI9NE_SOAK_SECONDS=5 TERMI9NE_SOAK_SESSIONS=12 ./ci/runtime-soak.sh . \
-    && ./ci/linux-window-smoke.sh target/release/termi9ne-desktop \
+    && SUPERPLEXR_SOAK_SECONDS=5 SUPERPLEXR_SOAK_SESSIONS=12 ./ci/runtime-soak.sh . \
+    && ./ci/linux-window-smoke.sh target/release/superplexr-desktop \
     && APPIMAGE_EXTRACT_AND_RUN=1 \
-        ./ci/linux-window-smoke.sh "dist/termi9ne-linux-$(uname -m).AppImage"
+        ./ci/linux-window-smoke.sh "dist/superplexr-linux-$(uname -m).AppImage"
