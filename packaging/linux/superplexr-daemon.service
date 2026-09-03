@@ -1,0 +1,30 @@
+# systemd unit for a hosted superplexr runtime.
+#   install -m 0644 superplexr-daemon.service /etc/systemd/system/
+#   useradd --system --home /var/lib/superplexr --shell /bin/bash superplexr
+#   systemctl enable --now superplexr-daemon
+# Then, as the superplexr user on the host:
+#   superplexr --socket /run/superplexr/control.sock device-pair --label laptop
+[Unit]
+Description=superplexr runtime (headless)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=superplexr
+Group=superplexr
+RuntimeDirectory=superplexr
+RuntimeDirectoryMode=0700
+StateDirectory=superplexr
+StateDirectoryMode=0700
+ExecStart=/usr/local/bin/superplexr-daemon --socket /run/superplexr/control.sock --state-dir /var/lib/superplexr --gateway 0.0.0.0:7373
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/superplexr /run/superplexr /tmp
+PrivateTmp=false
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

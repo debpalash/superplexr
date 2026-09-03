@@ -10,6 +10,7 @@ members = [
     "crates/superplexr-runtime",
     "crates/superplexr-plugin",
     "crates/superplexr-desktop",
+    "crates/superplexr-daemon",
     "crates/gpui-shared-string-compat",
     "crates/gpui-util-compat",
     "crates/ztracing-compat",

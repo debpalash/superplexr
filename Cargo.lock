@@ -5509,6 +5509,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "superplexr-daemon"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "superplexr-server",
+]
+
+[[package]]
 name = "superplexr-desktop"
 version = "0.1.0"
 dependencies = [
