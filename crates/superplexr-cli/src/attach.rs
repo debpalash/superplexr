@@ -78,6 +78,87 @@ enum Input {
     Closed,
 }
 
+/// Play a recording into this terminal: frames only, no keys go back.
+/// `q`, Ctrl-] or Ctrl-C stops; the end of the recording waits for a key.
+pub(crate) fn replay(
+    endpoint: Endpoint,
+    session_id: SessionId,
+    from_offset: u64,
+    speed_percent: u32,
+) -> Result<(), String> {
+    let client = match &endpoint {
+        Endpoint::Unix(socket) => ControlClient::connect(socket),
+        Endpoint::Gateway(gateway) => {
+            ControlClient::connect_gateway(gateway.clone()).map(|(client, _)| client)
+        }
+    }
+    .map_err(|error| error.to_string())?;
+    let session = client.terminal(session_id);
+    let events = session
+        .subscribe_replay(from_offset, speed_percent)
+        .map_err(|error| error.to_string())?;
+    let _raw = RawMode::enter()?;
+    let mut out = io::stdout();
+    out.write_all(b"\x1b[?1049h\x1b[2J")
+        .map_err(|e| e.to_string())?;
+    let local = local_size();
+    let input = spawn_input_reader();
+    let mut frame: Option<superplexr_terminal::FullFrame> = None;
+    let mut ended = false;
+    let notice = |out: &mut io::Stdout, text: &str| {
+        let (_, rows) = local.unwrap_or((80, 24));
+        let _ = out.write_all(format!("\x1b[{rows};1H\x1b[7m {text} \x1b[0m").as_bytes());
+        let _ = out.flush();
+    };
+    loop {
+        if !ended {
+            match events.recv_timeout(Duration::from_millis(8)) {
+                Ok(ServerEvent::TerminalFrame { frame: next, .. }) => {
+                    frame = Some(*next);
+                    paint_all(&mut out, frame.as_ref().expect("just set"), local)?;
+                }
+                Ok(ServerEvent::TerminalDelta { delta, .. }) => {
+                    if let Some(current) = frame.as_mut()
+                        && delta.apply_to(current).is_ok()
+                    {
+                        paint_all(&mut out, current, local)?;
+                    }
+                }
+                Ok(ServerEvent::TerminalFailed { message, .. }) => {
+                    ended = true;
+                    notice(&mut out, &format!("replay stopped: {message} · any key"));
+                }
+                Ok(_) => {}
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    ended = true;
+                    notice(&mut out, "end of recording · any key to leave");
+                }
+            }
+        }
+        match input.try_recv() {
+            Ok(Input::Detach) | Ok(Input::Closed) => break,
+            Ok(Input::Key(key)) => {
+                if ended
+                    || key.physical_key == "q"
+                    || key.physical_key == "escape"
+                    || (key.modifiers.control && key.physical_key == "c")
+                {
+                    break;
+                }
+            }
+            Err(_) => {
+                if ended {
+                    std::thread::sleep(Duration::from_millis(30));
+                }
+            }
+        }
+    }
+    let _ = out.write_all(b"\x1b[?1049l");
+    let _ = out.flush();
+    Ok(())
+}
+
 /// Attach to a session and stay until Ctrl-] or the session ends.
 pub(crate) fn run(
     endpoint: Endpoint,

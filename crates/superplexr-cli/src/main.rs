@@ -337,6 +337,24 @@ enum CliCommand {
     TerminalViewers {
         session_id: SessionId,
     },
+    /// The chapters of a session's recording: start, control changes,
+    /// Faults, exit, each at a journal offset `replay` can start from.
+    Chapters {
+        session_id: SessionId,
+    },
+    /// Play a session's recording into this terminal. `--speed 4` is four
+    /// times its own pace; gaps over five seconds are shortened. `q` stops.
+    Replay {
+        session_id: SessionId,
+        #[arg(long, default_value_t = 1.0)]
+        speed: f64,
+        /// Start at this chapter (see `chapters`).
+        #[arg(long)]
+        from_chapter: Option<u32>,
+        /// Start at this journal offset instead.
+        #[arg(long)]
+        from_offset: Option<u64>,
+    },
     /// Raise a hand: ask whoever holds control of a session for it.
     TerminalControlRequest {
         session_id: SessionId,
@@ -1381,6 +1399,44 @@ async fn main() -> Result<(), CliError> {
         }
         CliCommand::Pair { code, label } => {
             return run_pair(gateway.as_deref(), fingerprint.as_deref(), &code, &label);
+        }
+        CliCommand::Replay {
+            session_id,
+            speed,
+            from_chapter,
+            from_offset,
+        } => {
+            let endpoint = endpoint_for(&socket, gateway.as_deref(), fingerprint.as_deref())?;
+            let speed_percent = (speed.clamp(0.1, 64.0) * 100.0).round() as u32;
+            let start = match (from_offset, from_chapter) {
+                (Some(offset), _) => offset,
+                (None, Some(chapter)) => {
+                    let client = match &endpoint {
+                        Endpoint::Unix(path) => ControlClient::connect(path)?,
+                        Endpoint::Gateway(gateway) => {
+                            ControlClient::connect_gateway(gateway.clone())?.0
+                        }
+                    };
+                    match client.request(Request::TerminalChapters { session_id })? {
+                        ResponseBody::TerminalChapters { chapters, .. } => chapters
+                            .iter()
+                            .find(|c| c.index == chapter)
+                            .map(|c| c.journal_offset)
+                            .ok_or_else(|| {
+                                CliError::Usage(format!("no chapter {chapter}; see `chapters`"))
+                            })?,
+                        _ => 0,
+                    }
+                }
+                (None, None) => 0,
+            };
+            return tokio::task::block_in_place(|| {
+                attach::replay(endpoint, session_id, start, speed_percent)
+            })
+            .map_err(|message| CliError::Remote {
+                code: "replay_failed".to_owned(),
+                message,
+            });
         }
         CliCommand::Stream {
             session_id,
@@ -3295,6 +3351,7 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
             unreachable!("plugin installation is handled before connecting to the runtime")
         }
         CliCommand::TerminalViewers { session_id } => Request::TerminalViewers { session_id },
+        CliCommand::Chapters { session_id } => Request::TerminalChapters { session_id },
         CliCommand::TerminalControlRequest { session_id } => {
             Request::RequestTerminalControl { session_id }
         }
@@ -3321,7 +3378,10 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
         CliCommand::DevicePair { label } => Request::CreateDevicePairing { label },
         CliCommand::DeviceList => Request::ListDevices,
         CliCommand::DeviceRevoke { device_id } => Request::RevokeDevice { device_id },
-        CliCommand::Pair { .. } | CliCommand::Forget | CliCommand::Stream { .. } => {
+        CliCommand::Pair { .. }
+        | CliCommand::Forget
+        | CliCommand::Stream { .. }
+        | CliCommand::Replay { .. } => {
             unreachable!(
                 "pairing, forgetting and stream links never reach the runtime as one request"
             )

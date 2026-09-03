@@ -175,8 +175,11 @@ scoped access uses share tokens over the same listener.
       keystroke lost)
 - [ ] Rooms in the desktop: show hands and offers, offer from the pane
 - [ ] Per-participant cursor and selection shown to the others
-- [ ] Replay: journal playback at speed with Faults, Runs and hand-offs as
-      chapters
+- [x] Replay: `timing.bin` beside the journal, `events.jsonl` chapters
+      (start, control changes, Faults, exit), `subscribe_terminal_replay`
+      paced by the recording ÷ speed with long gaps shortened, `chapters`
+      and `replay` in the CLI (TUI player), ▶ replay in the browser;
+      `ci/replay-smoke.sh` — see docs/replay.md
 
 ## 4. Terminal and desktop certification (Gate E)
 

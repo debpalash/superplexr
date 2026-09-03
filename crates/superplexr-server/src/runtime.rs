@@ -1166,6 +1166,8 @@ fn authorize_request(
         | Request::TerminalHistoryFrame { session_id, .. }
         | Request::TerminalSearch { session_id, .. }
         | Request::TerminalViewers { session_id }
+        | Request::TerminalChapters { session_id }
+        | Request::SubscribeTerminalReplay { session_id, .. }
         | Request::SubscribeTerminal { session_id, .. } => {
             terminal_in_share(state, share, *session_id)?
         }
@@ -1407,6 +1409,7 @@ async fn handle_connection_over(
             && matches!(
                 &request.action,
                 Request::SubscribeTerminal { .. }
+                    | Request::SubscribeTerminalReplay { .. }
                     | Request::SubscribeMissions
                     | Request::SubscribeRunActivities { .. }
                     | Request::SubscribeTerminals
@@ -1449,6 +1452,38 @@ async fn handle_connection_over(
                     ),
                 )
                 .await?;
+                continue;
+            }
+            Request::SubscribeTerminalReplay {
+                session_id,
+                from_offset,
+                speed_percent,
+                max_hz,
+            } => {
+                let stream_id = next_stream_id;
+                next_stream_id = next_stream_id.saturating_add(1);
+                let writer = SubscriptionWriter {
+                    wire: Arc::clone(&write),
+                    stream_id,
+                };
+                let ending = writer.clone();
+                let state = Arc::clone(&state);
+                subscriptions.insert(
+                    stream_id,
+                    tokio::spawn(async move {
+                        let _ = handle_replay(
+                            request.request_id,
+                            session_id,
+                            from_offset,
+                            speed_percent,
+                            max_hz,
+                            state,
+                            writer,
+                        )
+                        .await;
+                        ending.end().await;
+                    }),
+                );
                 continue;
             }
             Request::SubscribeTerminal { session_id, max_hz } => {
@@ -2583,11 +2618,11 @@ async fn handle_request_with_context(
                 .projection
                 .write()
                 .map_err(|_| RequestError::RegistryPoisoned)?;
-            projection.summary.control_offer = Some(superplexr_protocol::ControlOffer {
+            projection.summary.control_offer = Some(Box::new(superplexr_protocol::ControlOffer {
                 from,
                 to,
                 control_epoch: projection.summary.control_epoch,
-            });
+            }));
             publish_terminal(state, &projection.summary);
             Ok(accepted(session_id))
         }
@@ -2619,6 +2654,13 @@ async fn handle_request_with_context(
                 .summary
                 .control_requests
                 .retain(|hand| !hand.same_identity(&me));
+            append_session_event(
+                &state.terminal_state_dir,
+                session_id,
+                superplexr_protocol::ChapterKind::Control,
+                &format!("control → {}", me.label),
+                None,
+            );
             publish_terminal(state, &projection.summary);
             Ok(ResponseBody::TerminalControlChanged {
                 session_id,
@@ -2644,6 +2686,9 @@ async fn handle_request_with_context(
             }
             publish_terminal(state, &projection.summary);
             Ok(accepted(session_id))
+        }
+        Request::TerminalChapters { session_id } => {
+            read_chapters(&state.terminal_state_dir, session_id)
         }
         Request::GatewayInfo => Ok(ResponseBody::GatewayInfo {
             advertised: state.gateway.as_ref().map(|gateway| gateway.advertised.clone()),
@@ -3639,6 +3684,7 @@ async fn handle_request_with_context(
         Request::ClaimTerminalControl { session_id, force } => {
             let record = terminal_record(state, session_id)?;
             record.live_handle(session_id)?;
+            let taker = participant_of(state, client_id, surface_id, share_id).await;
             let mut projection = record
                 .projection
                 .write()
@@ -3662,6 +3708,13 @@ async fn handle_request_with_context(
                     .summary
                     .control_requests
                     .retain(|hand| hand.client_id != client_id || hand.surface_id != surface_id);
+                append_session_event(
+                    &state.terminal_state_dir,
+                    session_id,
+                    superplexr_protocol::ChapterKind::Control,
+                    &format!("control → {}", taker.label),
+                    None,
+                );
             }
             publish_terminal(state, &projection.summary);
             Ok(ResponseBody::TerminalControlChanged {
@@ -3682,6 +3735,13 @@ async fn handle_request_with_context(
             projection.summary.controller_share_id = None;
             projection.summary.control_offer = None;
             projection.summary.control_epoch = next_control_epoch(projection.summary.control_epoch);
+            append_session_event(
+                &state.terminal_state_dir,
+                session_id,
+                superplexr_protocol::ChapterKind::Control,
+                "control released",
+                None,
+            );
             publish_terminal(state, &projection.summary);
             Ok(ResponseBody::TerminalControlChanged {
                 session_id,
@@ -3694,6 +3754,7 @@ async fn handle_request_with_context(
         | Request::SubscribeRunActivities { .. }
         | Request::SubscribeTerminals
         | Request::SubscribeSessionGroups { .. }
+        | Request::SubscribeTerminalReplay { .. }
         | Request::SubscribeTerminal { .. } => {
             unreachable!("subscriptions are handled per stream")
         }
@@ -4647,6 +4708,13 @@ fn start_terminal(
         _ => return Err(RequestError::InvalidAgentBinding),
     };
     persist_terminal_spec(&spec, &state.terminal_state_dir)?;
+    append_session_event(
+        &state.terminal_state_dir,
+        spec.session_id,
+        superplexr_protocol::ChapterKind::Started,
+        &spec.program.to_string_lossy(),
+        None,
+    );
     let session_id = spec.session_id;
     let spawn_cwd = spec.cwd.clone();
     let (handle, events) = SessionHandle::spawn_subscribed(
@@ -4920,6 +4988,232 @@ fn recover_terminal_history(
     Ok(records)
 }
 
+/// One line per event in `sessions/<id>/events.jsonl`: what happened, when,
+/// and where the journal was at that moment. Read back as chapters.
+fn append_session_event(
+    state_dir: &std::path::Path,
+    session_id: SessionId,
+    kind: superplexr_protocol::ChapterKind,
+    label: &str,
+    fault_id: Option<superplexr_core::FaultId>,
+) {
+    let directory = state_dir.join("sessions").join(session_id.to_string());
+    let journal_offset = std::fs::metadata(directory.join("output.raw"))
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    let at_micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or_default();
+    let line = serde_json::json!({
+        "at_micros": at_micros,
+        "journal_offset": journal_offset,
+        "kind": kind,
+        "label": label,
+        "fault_id": fault_id,
+    });
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let written = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(directory.join("events.jsonl"))
+        .and_then(|mut file| {
+            use std::io::Write as _;
+            writeln!(file, "{line}")
+        });
+    if let Err(error) = written {
+        eprintln!("could not record a session event for {session_id}: {error}");
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct SessionEventLine {
+    at_micros: u64,
+    journal_offset: u64,
+    kind: superplexr_protocol::ChapterKind,
+    label: String,
+    #[serde(default)]
+    fault_id: Option<superplexr_core::FaultId>,
+}
+
+fn read_chapters(
+    state_dir: &std::path::Path,
+    session_id: SessionId,
+) -> Result<ResponseBody, RequestError> {
+    let directory = state_dir.join("sessions").join(session_id.to_string());
+    if !directory.join("terminal.json").is_file() {
+        return Err(RequestError::TerminalNotFound(session_id));
+    }
+    let journal_bytes = std::fs::metadata(directory.join("output.raw"))
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    let timing = superplexr_runtime::read_timing(&directory.join(superplexr_runtime::TIMING_FILE));
+    let duration_ms = timing.last().map_or(0, |(_, ms)| u64::from(*ms));
+    let text = std::fs::read_to_string(directory.join("events.jsonl")).unwrap_or_default();
+    let mut chapters = text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<SessionEventLine>(line).ok())
+        .enumerate()
+        .map(|(index, event)| superplexr_protocol::Chapter {
+            index: index as u32,
+            kind: event.kind,
+            label: event.label,
+            at_micros: event.at_micros,
+            journal_offset: event.journal_offset.min(journal_bytes),
+            fault_id: event.fault_id,
+        })
+        .collect::<Vec<_>>();
+    if chapters.is_empty() {
+        chapters.push(superplexr_protocol::Chapter {
+            index: 0,
+            kind: superplexr_protocol::ChapterKind::Started,
+            label: "start".to_owned(),
+            at_micros: 0,
+            journal_offset: 0,
+            fault_id: None,
+        });
+    }
+    Ok(ResponseBody::TerminalChapters {
+        session_id,
+        journal_bytes,
+        duration_ms,
+        chapters,
+    })
+}
+
+/// Play a recording back as frames, on its own thread because parsing is
+/// CPU work and pacing is sleeping, neither of which belongs on the
+/// executor. Ends when the journal ends or the receiver goes away.
+fn replay_journal(
+    directory: &std::path::Path,
+    session_id: SessionId,
+    from_offset: u64,
+    speed_percent: u32,
+    interval: Duration,
+    send: &mpsc::Sender<ServerEvent>,
+) -> Result<(), RequestError> {
+    let spec: TerminalSessionSpec =
+        serde_json::from_slice(&std::fs::read(directory.join("terminal.json"))?)?;
+    let journal = std::fs::read(directory.join("output.raw"))?;
+    let timing = superplexr_runtime::read_timing(&directory.join(superplexr_runtime::TIMING_FILE));
+    let mut model = TerminalModel::new(spec.grid)?;
+    let from = usize::try_from(from_offset.min(journal.len() as u64)).unwrap_or(0);
+    // Everything before the start point is fast-forwarded, within the
+    // history budget so a huge journal cannot hold the thread.
+    let started = Instant::now();
+    for chunk in journal[..from].chunks(64 * 1024) {
+        model.advance(TerminalAction::Output(chunk))?;
+        if started.elapsed() >= ReplayBudget::HISTORY.deadline {
+            break;
+        }
+    }
+    let mut previous: Arc<superplexr_terminal::FullFrame> = Arc::new(model.frame()?);
+    if send
+        .blocking_send(ServerEvent::TerminalFrame {
+            session_id,
+            frame: Box::new((*previous).clone()),
+        })
+        .is_err()
+    {
+        return Ok(());
+    }
+    let speed = f64::from(speed_percent.max(1)) / 100.0;
+    let mut position = from;
+    let mut clock_ms: Option<u32> = None;
+    let mut entries = timing
+        .into_iter()
+        .filter(|(offset, _)| usize::try_from(*offset).is_ok_and(|offset| offset > from))
+        .peekable();
+    let mut last_emit = Instant::now();
+    while position < journal.len() {
+        let (target, wait_ms) = match entries.next() {
+            Some((offset, ms)) => {
+                let wait = clock_ms.map_or(0, |clock| ms.saturating_sub(clock));
+                clock_ms = Some(ms);
+                (usize::try_from(offset).unwrap_or(journal.len()).min(journal.len()), wait)
+            }
+            // No timing for these bytes: a steady 200 KiB/s.
+            None => ((position + 16 * 1024).min(journal.len()), 80),
+        };
+        if wait_ms > 0 {
+            let wait = Duration::from_secs_f64(f64::from(wait_ms) / 1000.0 / speed);
+            std::thread::sleep(wait.min(Duration::from_secs(5)));
+        }
+        if target > position {
+            model.advance(TerminalAction::Output(&journal[position..target]))?;
+            position = target;
+        }
+        if last_emit.elapsed() >= interval || position >= journal.len() {
+            let frame = Arc::new(model.frame()?);
+            let event = frame_event(session_id, Some(&previous), &frame);
+            previous = frame;
+            if send.blocking_send(event).is_err() {
+                return Ok(());
+            }
+            last_emit = Instant::now();
+        }
+    }
+    Ok(())
+}
+
+async fn handle_replay(
+    request_id: uuid::Uuid,
+    session_id: SessionId,
+    from_offset: u64,
+    speed_percent: u32,
+    max_hz: Option<u16>,
+    state: Arc<AppState>,
+    writer: SubscriptionWriter,
+) -> Result<(), ServerError> {
+    let directory = state
+        .terminal_state_dir
+        .join("sessions")
+        .join(session_id.to_string());
+    if !directory.join("terminal.json").is_file() {
+        writer
+            .response(&ServerResponse::error(
+                request_id,
+                "request_failed",
+                RequestError::TerminalNotFound(session_id).to_string(),
+            ))
+            .await?;
+        return Ok(());
+    }
+    writer
+        .accept(
+            request_id,
+            ResponseBody::TerminalReplayAccepted {
+                session_id,
+                stream_id: writer.stream_id,
+            },
+        )
+        .await?;
+    let (send, mut receive) = mpsc::channel(8);
+    let interval = subscriber_interval(max_hz);
+    thread::Builder::new()
+        .name(format!("superplexr-replay-{session_id}"))
+        .spawn(move || {
+            if let Err(error) = replay_journal(
+                &directory,
+                session_id,
+                from_offset,
+                speed_percent,
+                interval,
+                &send,
+            ) {
+                let _ = send.blocking_send(ServerEvent::TerminalFailed {
+                    session_id,
+                    message: format!("replay stopped: {error}"),
+                });
+            }
+        })?;
+    while let Some(event) = receive.recv().await {
+        writer.terminal(&event).await?;
+    }
+    Ok(())
+}
+
 /// The identity a request acts as, with a label people can read: the
 /// Share's label for a viewer, "owner" for the owner's own screens.
 async fn participant_of(
@@ -5080,6 +5374,15 @@ fn observe_terminal(
                         | SessionEvent::TerminationEscalationRequired => {}
                     }
                     if terminal {
+                        if let SessionEvent::Exited(exit) = &event {
+                            append_session_event(
+                                &state.terminal_state_dir,
+                                session_id,
+                                superplexr_protocol::ChapterKind::Exited,
+                                &format!("exited {}", exit.code),
+                                None,
+                            );
+                        }
                         publish_terminal(&state, &projection.summary);
                     } else if matches!(event, SessionEvent::ForegroundProcessChanged { .. }) {
                         let _ = state.terminal_events.send(projection.summary.clone());
@@ -5252,6 +5555,13 @@ async fn record_command_fault(
         Some(code) => format!("{} exited {code}", block.command),
         None => format!("{} failed", block.command),
     };
+    append_session_event(
+        &state.terminal_state_dir,
+        session_id,
+        superplexr_protocol::ChapterKind::Fault,
+        &summary,
+        None,
+    );
     let fault = superplexr_protocol::FaultInput {
         kind: superplexr_protocol::FaultKind::CommandFailed,
         command: block.command,

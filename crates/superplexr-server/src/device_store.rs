@@ -333,8 +333,8 @@ mod tests {
             Err(DeviceError::Unauthorized)
         ));
         let mut wrong = token.clone();
-        wrong.pop();
-        wrong.push('0');
+        let last = wrong.pop().expect("token has a last character");
+        wrong.push(if last == '0' { '1' } else { '0' });
         assert!(matches!(store.authenticate(&wrong), Err(DeviceError::Unauthorized)));
 
         store.revoke(device_id).expect("revoke");

@@ -14,6 +14,7 @@
   <span id="link" class="link" data-state="connecting">connecting</span>
   <span class="grow"></span>
   <div id="control" class="control" hidden></div>
+  <button id="replay-toggle" class="button quiet" hidden title="play this session's recording">▶ replay</button>
   <button id="new-shell" class="button" hidden>new shell</button>
   <button id="forget" class="button quiet" hidden title="forget this device's pairing">forget</button>
 </header>
@@ -33,6 +34,7 @@
   <section class="stage">
     <canvas id="screen" tabindex="0" aria-label="terminal"></canvas>
     <div id="empty" class="empty">pick a session, or start a shell</div>
+    <div id="replay" class="replay" hidden></div>
     <div id="status" class="status"></div>
   </section>
 </main>

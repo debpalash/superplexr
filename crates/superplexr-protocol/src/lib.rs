@@ -345,6 +345,24 @@ pub enum Request {
     TerminalViewers {
         session_id: SessionId,
     },
+    /// The chapters of a session's recording: start, control changes,
+    /// Faults, exit — each at a journal offset a replay can start from.
+    TerminalChapters {
+        session_id: SessionId,
+    },
+    /// Play a session's recording from a journal offset at a speed, as the
+    /// same frame stream a live subscription sends, then a close.
+    SubscribeTerminalReplay {
+        session_id: SessionId,
+        #[serde(default)]
+        from_offset: u64,
+        /// 100 is the session's own pace; 400 is four times faster. Gaps
+        /// longer than five seconds are shortened to five.
+        #[serde(default = "default_speed_percent")]
+        speed_percent: u32,
+        #[serde(default)]
+        max_hz: Option<u16>,
+    },
     /// Raise a hand: ask the holder of control for it. Idempotent.
     RequestTerminalControl {
         session_id: SessionId,
@@ -582,7 +600,7 @@ pub struct TerminalSessionSummary {
     pub control_epoch: u64,
     /// Control the holder has offered, if any. Cleared by any control change.
     #[serde(default)]
-    pub control_offer: Option<ControlOffer>,
+    pub control_offer: Option<Box<ControlOffer>>,
     /// Hands raised: participants who asked for control and have not got it.
     #[serde(default)]
     pub control_requests: Vec<Participant>,
@@ -1136,6 +1154,31 @@ pub enum ViewerRole {
     Controller,
 }
 
+fn default_speed_percent() -> u32 {
+    100
+}
+
+/// A point in a session's recording worth starting from.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Chapter {
+    pub index: u32,
+    pub kind: ChapterKind,
+    pub label: String,
+    pub at_micros: u64,
+    pub journal_offset: u64,
+    #[serde(default)]
+    pub fault_id: Option<FaultId>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChapterKind {
+    Started,
+    Control,
+    Fault,
+    Exited,
+}
+
 /// Who someone is in a room, as far as control is concerned: an owner
 /// screen (client and surface) or a Share. Labels are for people; identity
 /// is the ids.
@@ -1221,6 +1264,9 @@ pub enum ResponseResult {
     Error { code: String, message: String },
 }
 
+// A response is built once and serialized; its size in memory is not on any
+// hot path, and boxing the mission would ripple through every consumer.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseBody {
@@ -1330,6 +1376,16 @@ pub enum ResponseBody {
     TerminalViewers {
         session_id: SessionId,
         viewers: Vec<ViewerSummary>,
+    },
+    TerminalChapters {
+        session_id: SessionId,
+        journal_bytes: u64,
+        duration_ms: u64,
+        chapters: Vec<Chapter>,
+    },
+    TerminalReplayAccepted {
+        session_id: SessionId,
+        stream_id: u32,
     },
     AgentRunLaunched {
         events: Vec<Event>,

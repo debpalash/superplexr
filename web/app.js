@@ -11,6 +11,8 @@ const el = {
   link: $("link"),
   control: $("control"),
   newShell: $("new-shell"),
+  replayToggle: $("replay-toggle"),
+  replay: $("replay"),
   forget: $("forget"),
   pair: $("pair"),
   pairForm: $("pair-form"),
@@ -217,6 +219,7 @@ const app = {
   focused: false,
   share: null, // ShareSummary when this page was opened from a viewer link
   viewers: [],
+  replay: null, // { sessionId, streamId, chapters, journalBytes, offset, speed, frame, live }
 };
 
 function setLink(state, text) {
@@ -536,6 +539,8 @@ async function openSession(sessionId, { surfaceId = null } = {}) {
   open.streamId = accepted.stream_id;
   connection.streams.set(accepted.stream_id, (frame) => onStreamFrame(open, frame));
   refreshViewers();
+  el.replayToggle.hidden = false;
+  if (app.replay) stopReplay();
   el.screen.focus();
 }
 
@@ -588,6 +593,88 @@ function onStreamFrame(open, frame) {
   }
 }
 
+// ---- replay ----------------------------------------------------------------
+// A recording plays into the same canvas as the live session; the live
+// stream keeps its frames in the background and is shown again on stop.
+
+async function startReplay(fromOffset = 0) {
+  const open = app.open;
+  if (!open) return;
+  if (app.replay) await stopReplay({ keepPanel: true });
+  const speed = app.replay?.speed ?? Number(el.replay.querySelector("select")?.value ?? 1);
+  let chapters = app.replay?.chapters;
+  let journalBytes = app.replay?.journalBytes ?? 0;
+  if (!chapters) {
+    const body = await app.connection.request({ type: "terminal_chapters", session_id: open.sessionId });
+    chapters = body.chapters;
+    journalBytes = body.journal_bytes;
+  }
+  const replay = { sessionId: open.sessionId, streamId: null, chapters, journalBytes, offset: fromOffset, speed, frame: null, ended: false };
+  app.replay = replay;
+  renderReplayPanel();
+  try {
+    const accepted = await app.connection.request({ type: "subscribe_terminal_replay", session_id: open.sessionId, from_offset: fromOffset, speed_percent: Math.round(speed * 100), max_hz: 30 });
+    if (app.replay !== replay) return;
+    replay.streamId = accepted.stream_id;
+    app.connection.streams.set(accepted.stream_id, (frame) => {
+      if (app.replay !== replay) return;
+      if (frame.kind === Kind.FullFrame) replay.frame = decodeFullFrame(frame.payload).frame;
+      else if (frame.kind === Kind.FrameDelta && replay.frame) { try { applyDelta(replay.frame, decodeFrameDelta(frame.payload).delta); } catch { replay.frame = null; } }
+      else if (frame.kind === Kind.Close) { replay.ended = true; renderReplayPanel(); }
+      schedulePaint();
+    });
+  } catch (error) {
+    setStatus(`replay: ${error.message}`);
+    app.replay = null;
+    renderReplayPanel();
+  }
+}
+
+async function stopReplay({ keepPanel = false } = {}) {
+  const replay = app.replay;
+  if (!replay) return;
+  if (replay.streamId) {
+    app.connection.streams.delete(replay.streamId);
+    app.connection.request({ type: "unsubscribe", stream_id: replay.streamId }).catch(() => {});
+  }
+  app.replay = null;
+  if (!keepPanel) el.replay.hidden = true;
+  schedulePaint();
+}
+
+function renderReplayPanel() {
+  const replay = app.replay;
+  el.replay.hidden = !replay;
+  if (!replay) return;
+  const children = [];
+  children.push(button("■ live", () => stopReplay(), true));
+  const speed = document.createElement("select");
+  for (const s of [0.5, 1, 2, 4, 8, 16]) {
+    const o = document.createElement("option");
+    o.value = String(s); o.textContent = `×${s}`; o.selected = s === replay.speed;
+    speed.append(o);
+  }
+  speed.onchange = () => { replay.speed = Number(speed.value); startReplay(replay.offset); };
+  children.push(speed);
+  const bar = document.createElement("div");
+  bar.className = "bar";
+  const fill = document.createElement("div");
+  fill.style.width = replay.journalBytes ? `${Math.min(100, (100 * replay.offset) / replay.journalBytes).toFixed(1)}%` : "0";
+  bar.append(fill);
+  children.push(bar);
+  for (const c of replay.chapters) {
+    const b = button(`${c.index} · ${c.label}`, () => startReplay(c.journal_offset), true);
+    b.classList.add("chapter");
+    b.dataset.kind = c.kind;
+    b.title = `${c.kind} · offset ${c.journal_offset}`;
+    children.push(b);
+  }
+  if (replay.ended) { const e = document.createElement("span"); e.textContent = "· end of recording"; children.push(e); }
+  el.replay.replaceChildren(...children);
+}
+
+el.replayToggle.onclick = () => { if (app.replay) stopReplay(); else startReplay(0); };
+
 // ---- painting --------------------------------------------------------------
 
 function schedulePaint() {
@@ -597,6 +684,12 @@ function schedulePaint() {
     const open = app.open;
     if (!open) return;
     open.dirty = false;
+    const replay = app.replay;
+    if (replay?.frame) {
+      app.renderer.paint(replay.frame, { focused: false, selection: null });
+      setStatus(`▶ replay ×${replay.speed} · ${replay.frame.title ?? ""}${replay.ended ? " · ended" : ""}`);
+      return;
+    }
     if (!open.frame) return;
     app.renderer.paint(open.frame, { focused: app.focused, selection: open.selection });
     const f = open.frame;
@@ -642,6 +735,7 @@ el.screen.addEventListener("blur", () => { app.focused = false; schedulePaint();
 el.screen.addEventListener("keydown", (e) => {
   const open = app.open;
   if (!open) return;
+  if (app.replay) { if (e.key === "Escape") stopReplay(); return; }
   if (e.metaKey || e.isComposing) return; // the browser's own shortcuts, copy and paste included
   const input = keyInput(e);
   if (!input) return;

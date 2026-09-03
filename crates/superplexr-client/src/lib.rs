@@ -1874,6 +1874,54 @@ impl DaemonSession {
         self
     }
 
+    /// Play this session's recording from a journal offset at a speed
+    /// (100 = its own pace). Frames arrive as on a live subscription; the
+    /// receiver ends when the recording does.
+    pub fn subscribe_replay(
+        &self,
+        from_offset: u64,
+        speed_percent: u32,
+    ) -> Result<Receiver<ServerEvent>, ClientError> {
+        let stream = self.control.subscription_wire()?;
+        let request = self
+            .control
+            .client_request(Request::SubscribeTerminalReplay {
+                session_id: self.session_id,
+                from_offset,
+                speed_percent,
+                max_hz: self.max_hz,
+            });
+        let response = stream.exchange(&request)?;
+        let subscription = match decode_response(&request, response)? {
+            ResponseBody::TerminalReplayAccepted { stream_id, .. } => stream.subscribe(
+                stream_id,
+                self.control
+                    .client_request(Request::Unsubscribe { stream_id }),
+            )?,
+            body => return Err(ClientError::UnexpectedResponse(Box::new(body))),
+        };
+        let (send, receive) = std::sync::mpsc::channel();
+        let session_id = self.session_id;
+        thread::Builder::new()
+            .name(format!("superplexr-client-replay-{session_id}"))
+            .spawn(move || {
+                let subscription = subscription;
+                while let Ok(event) = subscription.receive_terminal() {
+                    if send.send(event).is_err() {
+                        break;
+                    }
+                }
+            })?;
+        Ok(receive)
+    }
+
+    /// The chapters of this session's recording.
+    pub fn chapters(&self) -> Result<ResponseBody, ClientError> {
+        self.control.request(Request::TerminalChapters {
+            session_id: self.session_id,
+        })
+    }
+
     fn open_subscription(&self) -> Result<MultiplexedSubscription, ClientError> {
         let stream = self.control.subscription_wire()?;
         let request = self.control.client_request(Request::SubscribeTerminal {
