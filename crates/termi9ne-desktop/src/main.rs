@@ -99,7 +99,8 @@ fn macos_titlebar_leading_inset(is_fullscreen: bool) -> f32 {
 
 /// Name a new workspace after the directory it opens in, falling back to a
 /// numbered name when the directory is unknown.
-fn workspace_display_name(sequence: u64) -> String {
+/// The directory the desktop was started in, which names its workspaces.
+fn workspace_base_name() -> Option<String> {
     std::env::current_dir()
         .ok()
         .and_then(|directory| {
@@ -108,6 +109,29 @@ fn workspace_display_name(sequence: u64) -> String {
                 .map(|name| name.to_string_lossy().into_owned())
         })
         .filter(|name| !name.trim().is_empty())
+}
+
+/// The number the next workspace with this base name gets, counting only the
+/// tabs that are open.
+fn next_workspace_sequence<'a>(
+    open_titles: impl IntoIterator<Item = &'a str>,
+    base: Option<&str>,
+) -> u64 {
+    let Some(base) = base else { return 1 };
+    let same_base = open_titles
+        .into_iter()
+        .filter(|title| {
+            *title == base
+                || title
+                    .strip_prefix(base)
+                    .is_some_and(|rest| rest.starts_with(' '))
+        })
+        .count();
+    same_base as u64 + 1
+}
+
+fn workspace_display_name(sequence: u64) -> String {
+    workspace_base_name()
         .map(|name| {
             if sequence <= 1 {
                 name
@@ -4854,7 +4878,13 @@ impl Termi9neDesktop {
             return;
         }
         self.session_sidebar.dismiss_session_overlays();
-        let sequence = self.next_fixture;
+        // Numbered among the tabs that are open, not by a counter that only
+        // ever grows: the second "termi9ne" tab is "termi9ne 2", even if it
+        // is the thirty-second workspace this checkout has ever opened.
+        let sequence = next_workspace_sequence(
+            self.workspaces.tabs().iter().map(|tab| tab.title()),
+            workspace_base_name().as_deref(),
+        );
         let terminal = self.make_surface("workspace", window, cx);
         self.workspaces.add(
             workspace_display_name(sequence),
@@ -7371,6 +7401,23 @@ fn read_share_token(path: &Path) -> Result<String, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// New tabs are numbered among the tabs that are open.
+    #[test]
+    fn workspaces_are_numbered_among_open_tabs_not_by_a_global_counter() {
+        assert_eq!(next_workspace_sequence([], Some("termi9ne")), 1);
+        assert_eq!(next_workspace_sequence(["termi9ne"], Some("termi9ne")), 2);
+        assert_eq!(
+            next_workspace_sequence(["termi9ne", "termi9ne 2", "notes"], Some("termi9ne")),
+            3
+        );
+        assert_eq!(
+            next_workspace_sequence(["termi9ne-docs"], Some("termi9ne")),
+            1,
+            "a different base name does not count"
+        );
+        assert_eq!(next_workspace_sequence(["a", "b"], None), 1);
+    }
 
     /// A launch with nothing running must open a shell, even when finished
     /// sessions are listed: after a daemon restart every row is finished.

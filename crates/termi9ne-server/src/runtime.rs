@@ -4427,6 +4427,11 @@ async fn record_terminal_fault(
     let Ok(spec) = serde_json::from_slice::<TerminalSessionSpec>(&bytes) else {
         return;
     };
+    // An interactive shell exits with whatever its last command returned.
+    // That is the shell being closed, not a failure of anything.
+    if is_interactive_shell(&spec.program, &spec.args) {
+        return;
+    }
     let command = std::iter::once(spec.program.display().to_string())
         .chain(spec.args.iter().cloned())
         .collect::<Vec<_>>()
@@ -4461,6 +4466,30 @@ async fn record_terminal_fault(
 ///
 /// Unlike a session-level Fault this always has an exact command line, so the
 /// record is replayable without consulting the launch spec.
+/// True for a shell started to be typed into, rather than to run something.
+///
+/// Its exit status is its last command's, so a session ending in `zsh
+/// exited 1` says only that the person closed a shell whose previous command
+/// had failed. A shell given a command (`-c`) or a script is different: that
+/// is a program, and its exit status means what it says.
+fn is_interactive_shell(program: &std::path::Path, args: &[String]) -> bool {
+    let shell = program
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            matches!(
+                name,
+                "sh" | "bash" | "zsh" | "fish" | "dash" | "ksh" | "tcsh" | "csh" | "nu" | "pwsh"
+            )
+        });
+    // Login and interactive flags are still an interactive shell; anything
+    // else (a command, a script) is a program.
+    shell
+        && args
+            .iter()
+            .all(|arg| matches!(arg.as_str(), "-l" | "-i" | "-il" | "-li" | "--login" | "--interactive"))
+}
+
 /// Exit statuses that mean the command was stopped rather than that it
 /// failed: 130 is SIGINT (Ctrl-C) and 143 is SIGTERM, as shells report them.
 const fn is_interruption(exit_code: Option<i32>) -> bool {
@@ -5618,6 +5647,18 @@ mod tests {
             "recovery replayed the wrong end of the journal; the last screen is the tail"
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Closing a shell is not a Fault, however its last command went.
+    #[test]
+    fn closing_an_interactive_shell_is_not_a_fault() {
+        let p = std::path::Path::new;
+        let none: [String; 0] = [];
+        assert!(is_interactive_shell(p("/bin/zsh"), &none));
+        assert!(is_interactive_shell(p("/opt/homebrew/bin/fish"), &["-l".to_owned()]));
+        assert!(!is_interactive_shell(p("/bin/zsh"), &["-c".to_owned(), "cargo test".to_owned()]));
+        assert!(!is_interactive_shell(p("/bin/sh"), &["build.sh".to_owned()]));
+        assert!(!is_interactive_shell(p("/usr/bin/python3"), &none));
     }
 
     /// Ctrl-C and SIGTERM stop a command; they do not make it a Fault.

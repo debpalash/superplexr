@@ -1457,12 +1457,30 @@ impl FrameDelta {
         {
             return None;
         }
+        // Cells name their style by index, and the table those indices point
+        // into can be rebuilt between frames. A row is unchanged only when its
+        // cells are the same *and* every style they name still means the same
+        // thing; comparing bytes alone kept stale paint on the far side.
+        let style_changed = next
+            .styles
+            .iter()
+            .enumerate()
+            .map(|(index, style)| base.styles.get(index) != Some(style))
+            .collect::<Vec<_>>();
+        let restyled = |row: &Row| {
+            row.cells.iter().any(|cell| {
+                style_changed
+                    .get(cell.style_index as usize)
+                    .copied()
+                    .unwrap_or(true)
+            })
+        };
         let changed_rows = base
             .rows
             .iter()
             .zip(&next.rows)
             .enumerate()
-            .filter(|(_, (old, new))| !Arc::ptr_eq(old, new) && old != new)
+            .filter(|(_, (old, new))| (!Arc::ptr_eq(old, new) && old != new) || restyled(new))
             .map(|(index, (_, new))| ChangedRow {
                 index: u16::try_from(index).expect("terminal row limits fit in u16"),
                 row: (**new).clone(),
@@ -1691,6 +1709,100 @@ mod tests {
             reader.receive_json::<ClientRequest>(wire_v3::FrameKind::Request, 0),
             Err(wire_v3::WireError::Json(_))
         ));
+    }
+
+    /// A row whose cells are byte-identical is still changed when the style
+    /// table underneath it changed.
+    ///
+    /// The model rebuilds its style table from scratch on a reset, so the same
+    /// index can mean a different style before and after. Comparing cells by
+    /// index alone left a blank row painted with the previous style: a white
+    /// block where an exited program's cursor had been, that the daemon's own
+    /// frame no longer contained.
+    #[test]
+    fn a_row_is_changed_when_its_styles_change_under_the_same_indices() {
+        use termi9ne_terminal::{Cell, CellStyle, Rgb, Row, UnderlineStyle};
+        let style = |background: Rgb| CellStyle {
+            foreground: Rgb {
+                red: 200,
+                green: 200,
+                blue: 200,
+            },
+            background,
+            bold: false,
+            italic: false,
+            faint: false,
+            blink: false,
+            inverse: false,
+            invisible: false,
+            strikethrough: false,
+            overline: false,
+            underline: UnderlineStyle::None,
+        };
+        let blank_row = || {
+            Arc::new(Row {
+                wrapped: false,
+                cells: vec![
+                    Cell {
+                        grapheme: " ".to_owned(),
+                        width: 1,
+                        style_index: 0,
+                        hyperlink: None
+                    };
+                    4
+                ],
+            })
+        };
+        let frame = |sequence: u64, background: Rgb| FullFrame {
+            sequence,
+            grid: GridSize::new(4, 1).expect("grid"),
+            rows: vec![blank_row()],
+            styles: vec![style(background)],
+            cursor: None,
+            default_foreground: Rgb {
+                red: 200,
+                green: 200,
+                blue: 200,
+            },
+            default_background: Rgb {
+                red: 0,
+                green: 0,
+                blue: 0,
+            },
+            mouse_tracking: false,
+            title: None,
+            current_directory: None,
+        };
+        // Before: index 0 is a white background (a program's block cursor).
+        let mut base = frame(
+            1,
+            Rgb {
+                red: 255,
+                green: 255,
+                blue: 255,
+            },
+        );
+        // After a table reset: same bytes, but index 0 is now the plain ground.
+        let next = frame(
+            2,
+            Rgb {
+                red: 0,
+                green: 0,
+                blue: 0,
+            },
+        );
+
+        let delta = FrameDelta::between(&base, &next).expect("same grid should delta");
+        assert_eq!(
+            delta.changed_rows.len(),
+            1,
+            "the row must be resent: its cells resolve to different styles now"
+        );
+        delta.apply_to(&mut base).expect("delta should apply");
+        assert_eq!(
+            base, next,
+            "applying a delta must reproduce the next frame exactly"
+        );
     }
 
     #[test]
