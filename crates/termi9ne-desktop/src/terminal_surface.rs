@@ -47,6 +47,9 @@ pub(crate) struct TerminalSurface {
     requested_grid: GridSize,
     geometry: Option<TerminalGeometry>,
     selection_anchor: Option<SelectionPoint>,
+    /// The viewer's selection over the visible grid. Never a request: it
+    /// works on terminals this surface cannot control, and on finished ones.
+    selection: Option<crate::selection::Selection>,
     focus_handle: FocusHandle,
     composition: String,
     caps_lock: bool,
@@ -147,6 +150,7 @@ impl TerminalSurface {
             requested_grid: GridSize::new(72, 12)?,
             geometry: None,
             selection_anchor: None,
+            selection: None,
             focus_handle,
             composition: String::new(),
             caps_lock: false,
@@ -206,6 +210,7 @@ impl TerminalSurface {
             requested_grid,
             geometry: None,
             selection_anchor: None,
+            selection: None,
             focus_handle,
             composition: String::new(),
             caps_lock: false,
@@ -550,15 +555,30 @@ impl TerminalSurface {
             .join("\n")
             .trim_end()
             .to_owned();
-        let text = self
-            .session
-            .as_ref()
-            .and_then(|session| session.selection_text().ok().flatten())
-            .filter(|selection| !selection.is_empty())
+        let selected = self.selected_text();
+        let copied_selection = selected.is_some();
+        let text = selected
+            .or_else(|| {
+                self.session
+                    .as_ref()
+                    .and_then(|session| session.selection_text().ok().flatten())
+                    .filter(|selection| !selection.is_empty())
+            })
             .unwrap_or(visible);
         cx.write_to_clipboard(ClipboardItem::new_string(text));
-        self.last_encoded = "visible terminal copied to clipboard".to_owned();
+        self.last_encoded = if copied_selection {
+            "selection copied to clipboard".to_owned()
+        } else {
+            "visible terminal copied to clipboard".to_owned()
+        };
         cx.notify();
+    }
+
+    /// The viewer's selected text, when there is any.
+    pub(crate) fn selected_text(&self) -> Option<String> {
+        let selection = self.selection.filter(|selection| !selection.is_empty())?;
+        let text = selection.text(&self.frame.rows, self.frame.grid.columns);
+        (!text.is_empty()).then_some(text)
     }
 
     fn modifiers_changed(
@@ -654,6 +674,8 @@ impl TerminalSurface {
                     }),
                 };
                 if self.load_history_viewport(viewport, cx) {
+                    // The selection is in viewport rows; scrolling moves them.
+                    self.selection = None;
                     self.scroll_rows_before_bottom = match viewport {
                         HistoryViewport::RowsBeforeBottom(row)
                         | HistoryViewport::RowFromTop(row) => row,
@@ -684,6 +706,7 @@ impl TerminalSurface {
         }
         if delta != 0 && self.apply(TerminalAction::Scroll(ViewportScroll::Delta(delta)), cx) {
             let amount = delta.unsigned_abs();
+            self.selection = None;
             self.scroll_rows_before_bottom = if delta < 0 {
                 self.scroll_rows_before_bottom
                     .saturating_add(amount)
@@ -706,6 +729,9 @@ impl TerminalSurface {
         };
         match result {
             Ok(frame) => {
+                if frame.grid != self.frame.grid {
+                    self.selection = None;
+                }
                 self.frame = Arc::new(frame);
                 self.history_viewport = viewport;
                 self.last_error = None;
@@ -749,14 +775,12 @@ impl TerminalSurface {
             return;
         }
         self.selection_anchor = Some(point);
-        self.apply(
-            TerminalAction::Select {
-                anchor: point,
-                head: point,
-                rectangle: event.modifiers.alt,
-            },
-            cx,
-        );
+        self.selection = Some(crate::selection::Selection {
+            anchor: point,
+            head: point,
+            rectangle: event.modifiers.alt,
+        });
+        cx.notify();
         cx.stop_propagation();
     }
 
@@ -792,14 +816,12 @@ impl TerminalSurface {
         let Some(head) = self.selection_point(event.position) else {
             return;
         };
-        self.apply(
-            TerminalAction::Select {
-                anchor,
-                head,
-                rectangle: event.modifiers.alt,
-            },
-            cx,
-        );
+        self.selection = Some(crate::selection::Selection {
+            anchor,
+            head,
+            rectangle: event.modifiers.alt,
+        });
+        cx.notify();
         cx.stop_propagation();
     }
 
@@ -818,6 +840,11 @@ impl TerminalSurface {
             cx.stop_propagation();
         }
         self.selection_anchor = None;
+        // A click that never became a drag clears whatever was selected.
+        if self.selection.is_some_and(|selection| selection.is_empty()) {
+            self.selection = None;
+            cx.notify();
+        }
     }
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -974,6 +1001,9 @@ impl TerminalSurface {
         match event {
             ServerEvent::TerminalFrame { frame, .. } => {
                 if frame.sequence >= self.frame.sequence {
+                    if frame.grid != self.frame.grid {
+                        self.selection = None;
+                    }
                     self.frame = Arc::from(frame);
                     self.emit_activity_heartbeat(cx);
                 }
@@ -1233,6 +1263,7 @@ impl gpui::Render for TerminalSurface {
                                 self.frame.clone(),
                                 cx.entity(),
                                 self.composition.clone(),
+                                self.selection,
                             )),
                     )
                     .children(self.scroll_indicator()),
@@ -1670,6 +1701,134 @@ mod tests {
         assert!(cx.debug_bounds("terminal-scrollbar").is_some());
     }
 
+    /// Selecting and copying must work on a terminal this surface cannot
+    /// control: one an agent spawned, one being observed, or one that has
+    /// finished. It used to be a daemon request that needed the controller,
+    /// so on exactly those terminals a drag did nothing at all.
+    #[gpui::test]
+    fn selection_and_copy_work_without_controlling_the_terminal(cx: &mut TestAppContext) {
+        use gpui::{
+            Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, point, px,
+        };
+
+        let window = cx.add_window(|window, cx| {
+            TerminalSurface::new(window, cx).expect("terminal fixture should initialize")
+        });
+        let any_window = AnyWindowHandle::from(window);
+        cx.run_until_parked();
+        cx.update_window(any_window, |_, window, cx| {
+            window.draw(cx).clear(cx);
+        })
+        .expect("test window should draw so the grid geometry is known");
+
+        // Expected text comes from the frame itself, so this checks the
+        // pixel-to-cell mapping rather than assuming the fixture's content.
+        let expected = window
+            .update(cx, |surface, _, _| {
+                let first = surface.frame.rows[0]
+                    .text()
+                    .chars()
+                    .skip(6)
+                    .collect::<String>();
+                let second = surface.frame.rows[1]
+                    .text()
+                    .chars()
+                    .take(6)
+                    .collect::<String>();
+                format!("{}\n{second}", first.trim_end())
+            })
+            .expect("test window should remain available");
+        assert!(
+            expected.len() > 2,
+            "fixture rows should hold text: {expected:?}"
+        );
+
+        window
+            .update(cx, |surface, window, cx| {
+                // The case that was broken: not the controller.
+                surface.writable = false;
+                let geometry = surface.geometry.expect("drawn once, so geometry is known");
+                let at = |row: f32, column: f32| {
+                    point(
+                        geometry.bounds.left() + geometry.cell_width * column + px(1.0),
+                        geometry.bounds.top() + geometry.line_height * row + px(1.0),
+                    )
+                };
+                surface.mouse_down(
+                    &MouseDownEvent {
+                        button: MouseButton::Left,
+                        position: at(0.0, 6.0),
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                        first_mouse: false,
+                    },
+                    window,
+                    cx,
+                );
+                surface.mouse_move(
+                    &MouseMoveEvent {
+                        position: at(1.0, 5.0),
+                        pressed_button: Some(MouseButton::Left),
+                        modifiers: Modifiers::default(),
+                    },
+                    window,
+                    cx,
+                );
+                surface.mouse_up(
+                    &MouseUpEvent {
+                        button: MouseButton::Left,
+                        position: at(1.0, 5.0),
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(surface.selected_text().as_deref(), Some(expected.as_str()));
+                assert!(
+                    surface.last_error.is_none(),
+                    "selecting must never trip the observer-mode refusal"
+                );
+                surface.copy_visible(cx);
+                assert_eq!(surface.last_encoded, "selection copied to clipboard");
+
+                // A plain click clears it.
+                surface.mouse_down(
+                    &MouseDownEvent {
+                        button: MouseButton::Left,
+                        position: at(0.0, 0.0),
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                        first_mouse: false,
+                    },
+                    window,
+                    cx,
+                );
+                surface.mouse_up(
+                    &MouseUpEvent {
+                        button: MouseButton::Left,
+                        position: at(0.0, 0.0),
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(
+                    surface.selection.is_none(),
+                    "a click without a drag clears the selection"
+                );
+            })
+            .expect("test window should remain available");
+        let copied = cx.read_from_clipboard().and_then(|item| item.text());
+        assert_eq!(copied.as_deref(), Some(expected.as_str()));
+        // The highlight must survive a real layout pass.
+        cx.update_window(any_window, |_, window, cx| {
+            window.draw(cx).clear(cx);
+        })
+        .expect("test window should draw with a selection");
+    }
+
     #[gpui::test]
     fn terminal_surface_handlers_route_input_and_clipboard(cx: &mut TestAppContext) {
         let window = cx.add_window(|window, cx| {
@@ -1843,7 +2002,7 @@ mod tests {
         let frame = window
             .read_with(cx, |surface, _| surface.frame.clone())
             .expect("test window should expose its terminal frame");
-        let element = TerminalElement::new("a11y-grid", frame, surface, String::new());
+        let element = TerminalElement::new("a11y-grid", frame, surface, String::new(), None);
         let mut node = gpui::accesskit::Node::new(gpui::accesskit::Role::Terminal);
 
         assert_eq!(element.a11y_role(), Some(gpui::accesskit::Role::Terminal));

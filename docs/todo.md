@@ -91,6 +91,10 @@ not independently verified here.
 - [x] Sessions titled by the agent's own title, else `repo@branch` from the
       terminal's directory (runtime cwd, or OSC 7 from `shell-init`); a name a
       person chose always wins; derived at render so it never freezes
+- [x] Viewer-side selection: highlight and copy from the frame the desktop
+      holds, no daemon request, so it works on agent-owned, observed and
+      finished terminals; Shift bypasses an app's mouse reporting, ⌥ drags a
+      rectangle, a plain click clears
 - [ ] OSC 133 command blocks in the UI: jump, search, copy, rerun
 
 ---

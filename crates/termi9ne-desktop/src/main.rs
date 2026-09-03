@@ -8,6 +8,7 @@ mod pane_layout;
 mod performance_monitor;
 mod provider_usage;
 mod provider_usage_panel;
+mod selection;
 mod session_sidebar;
 mod status_bar;
 mod terminal_element;
