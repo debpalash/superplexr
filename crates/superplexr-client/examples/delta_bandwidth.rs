@@ -5,7 +5,7 @@
 use std::time::{Duration, Instant};
 
 use superplexr_client::ControlClient;
-use superplexr_protocol::ServerEvent;
+use superplexr_protocol::{ServerEvent, encode_terminal_event};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -22,12 +22,16 @@ fn main() {
     let events = client.terminal(session).subscribe().expect("subscribe");
     let deadline = Instant::now() + Duration::from_secs(seconds);
     let (mut frames, mut deltas, mut frame_bytes, mut delta_bytes) = (0u64, 0u64, 0u64, 0u64);
+    // What the wire actually carries for frames is the protobuf data plane;
+    // JSON is kept only for comparison.
+    let mut json_bytes = 0u64;
     while Instant::now() < deadline {
         let Ok(event) = events.recv_timeout(deadline.saturating_duration_since(Instant::now()))
         else {
             break;
         };
-        let bytes = serde_json::to_vec(&event).map_or(0, |v| v.len() as u64);
+        json_bytes += serde_json::to_vec(&event).map_or(0, |v| v.len() as u64);
+        let bytes = encode_terminal_event(&event).map_or(0, |(_, v)| v.len() as u64);
         match event {
             ServerEvent::TerminalFrame { .. } => {
                 frames += 1;
@@ -42,11 +46,12 @@ fn main() {
     }
     let total = (frame_bytes + delta_bytes) as f64 / 1024.0;
     println!(
-        "{seconds}s window: {frames} full frames ({} KB), {deltas} deltas ({} KB) → {:.0} KB/s, {:.1} events/s, avg delta {} B",
+        "{seconds}s window: {frames} full frames ({} KB), {deltas} deltas ({} KB) → wire {:.0} KB/s ({:.1} events/s, avg delta {} B); same events as JSON would be {:.0} KB/s",
         frame_bytes / 1024,
         delta_bytes / 1024,
         total / seconds as f64,
         (frames + deltas) as f64 / seconds as f64,
-        if deltas > 0 { delta_bytes / deltas } else { 0 }
+        if deltas > 0 { delta_bytes / deltas } else { 0 },
+        json_bytes as f64 / 1024.0 / seconds as f64
     );
 }

@@ -81,19 +81,19 @@ not independently verified here.
 
 ---
 
-## 3b. Wire encoding (measured 2026-09-03, blocks every remote shell)
+## 3b. Wire cost of a terminal subscription (measured 2026-09-03)
 
-`crates/superplexr-client/examples/delta_bandwidth` against a live daemon:
-a repainting agent screen is **25.8 MB/s** on the wire, scrolling build
-output **10.7 MB/s**, one full 120×36 frame **259 KB** — about 60 bytes per
-cell, because each cell is spelled out as JSON with a `hyperlink: null`.
-That is 200–500× the web budget and a serialization cost the desktop pays
-today on its own socket.
+`crates/superplexr-client/examples/delta_bandwidth` against a live daemon, on
+the protobuf data plane the desktop actually uses: a repainting agent screen
+is **2.27 MB/s** at ~117 deltas/s (~20 KB each), scrolling build output
+**0.97 MB/s**, one full 120×36 frame **21 KB** (~5 B/cell). The same events
+as JSON would be 11× larger; an earlier note here said 25.8 MB/s "on the
+wire", which was the JSON size, not the wire. Still ~45× the web budget.
 
-- [ ] Compact row encoding: graphemes as one string per row, styles as
-      runs, hyperlinks only where present; behind the protocol version policy
 - [ ] Coalesce publishes per remote subscriber to ≤ 30 Hz (actor publishes
-      at up to 125 Hz)
+      at up to 125 Hz): ÷4
+- [ ] Within a changed row, send only the changed cell span: ÷3–4 on repaints
+- [ ] Run-length styles within a row: ÷2–3
 - [ ] Re-measure; target ≤ 50 KB/s on the same repaint workload
 
 ## 4. Terminal and desktop certification (Gate E)
