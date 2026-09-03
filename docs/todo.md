@@ -175,6 +175,32 @@ scoped access uses share tokens over the same listener.
       keystroke lost)
 - [ ] Rooms in the desktop: show hands and offers, offer from the pane
 - [ ] Per-participant cursor and selection shown to the others
+
+## 3f. The phone (platform plan, phase 6 — built 2026-09-04, see docs/mobile.md)
+
+- [x] Installable web shell: manifest, icon, service worker (offline shell,
+      notifications with no tab open, a tap lands on the thing)
+- [x] Web Push from the runtime on ring (RFC 8291 + 8292), curl delivery,
+      `push/` under the state dir; Faults, approvals (once), finished Runs
+- [x] `🔔 notify` in the page; `push-list`, `push-test` in the CLI
+- [x] Touch: hidden input for the soft keyboard, key bar (esc/tab/ctrl/alt/
+      arrows/^C/^D), refit on keyboard open
+- [x] `ci/push-smoke.sh`: node as push service + browser verifies VAPID and
+      decrypts; 410 forgets
+- [ ] Native wrapper, App Store, APNs: needs an Apple developer account —
+      the owner's call
+
+## 3g. A daemon that never sleeps (platform plan, phase 7 — built 2026-09-04, see docs/cloud.md)
+
+- [x] `superplexr-daemon`: the runtime alone (`--socket`, `--state-dir`,
+      `--gateway`), no desktop linked in
+- [x] Packaging: systemd unit (own user, locked-down filesystem), launchd
+      agent, `ci/daemon.Dockerfile` (unprivileged, state on a volume)
+- [x] `ci/daemon-smoke.sh`: headless daemon + gateway, laptop paired, session
+      on the host, TUI attached under a pty, browser smoke, viewer link
+- [ ] Real certificate for a public name (slots in at `gateway/identity.crt`)
+- [ ] Rendezvous / relay for hosts behind NAT; the multi-machine fleet (P2)
+- [ ] The outside security review before any public exposure (from phase 3)
 - [x] Replay: `timing.bin` beside the journal, `events.jsonl` chapters
       (start, control changes, Faults, exit), `subscribe_terminal_replay`
       paced by the recording ÷ speed with long gaps shortened, `chapters`

@@ -36,6 +36,9 @@ const APP_JS: &str = include_str!("../../../web/app.js");
 const WIRE_JS: &str = include_str!("../../../web/wire.js");
 const FRAMES_JS: &str = include_str!("../../../web/frames.js");
 const RENDER_JS: &str = include_str!("../../../web/render.js");
+const SW_JS: &str = include_str!("../../../web/sw.js");
+const MANIFEST: &str = include_str!("../../../web/manifest.webmanifest");
+const ICON_SVG: &str = include_str!("../../../web/icon.svg");
 
 /// A browser gets this long to send its request line and headers.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -286,6 +289,18 @@ fn route(request: &HttpRequest) -> Route {
         "/render.js" => Route::Asset {
             content_type: "text/javascript; charset=utf-8",
             body: RENDER_JS,
+        },
+        "/sw.js" => Route::Asset {
+            content_type: "text/javascript; charset=utf-8",
+            body: SW_JS,
+        },
+        "/manifest.webmanifest" => Route::Asset {
+            content_type: "application/manifest+json; charset=utf-8",
+            body: MANIFEST,
+        },
+        "/icon.svg" => Route::Asset {
+            content_type: "image/svg+xml; charset=utf-8",
+            body: ICON_SVG,
         },
         "/ws" => Route::Socket,
         _ => Route::NotFound,

@@ -12,6 +12,9 @@ const el = {
   control: $("control"),
   newShell: $("new-shell"),
   replayToggle: $("replay-toggle"),
+  notify: $("notify"),
+  soft: $("soft"),
+  keybar: $("keybar"),
   replay: $("replay"),
   forget: $("forget"),
   pair: $("pair"),
@@ -242,6 +245,7 @@ function connect({ pairingCode = null } = {}) {
         el.main.hidden = false;
         el.newShell.hidden = !!SHARE_TOKEN;
         el.forget.hidden = !!SHARE_TOKEN;
+        refreshNotifyButton();
         if (SHARE_TOKEN) {
           try {
             const identity = await app.connection.request({ type: "share_identity" });
@@ -674,6 +678,114 @@ function renderReplayPanel() {
 }
 
 el.replayToggle.onclick = () => { if (app.replay) stopReplay(); else startReplay(0); };
+
+// ---- installable, and told when something needs you ------------------------
+
+const TOUCH = matchMedia("(pointer: coarse)").matches;
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").catch((error) => console.warn("service worker", error));
+}
+
+function urlBase64ToBytes(text) {
+  const padded = text.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (text.length % 4)) % 4);
+  return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
+}
+
+async function refreshNotifyButton() {
+  if (SHARE_TOKEN || !("PushManager" in window) || !("Notification" in window)) { el.notify.hidden = true; return; }
+  el.notify.hidden = false;
+  const registration = await navigator.serviceWorker?.ready;
+  const current = await registration?.pushManager.getSubscription();
+  el.notify.textContent = current ? "🔔 on" : "🔔 notify";
+  el.notify.dataset.on = String(!!current);
+}
+
+el.notify.onclick = async () => {
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const current = await registration.pushManager.getSubscription();
+    if (current) {
+      await app.connection.request({ type: "forget_push_subscription", endpoint: current.endpoint });
+      await current.unsubscribe();
+      setStatus("notifications off");
+    } else {
+      if ((await Notification.requestPermission()) !== "granted") { setStatus("notifications were not allowed"); return; }
+      const info = await app.connection.request({ type: "push_info" });
+      if (!info.public_key) { setStatus("this runtime has push turned off"); return; }
+      const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToBytes(info.public_key) });
+      const json = subscription.toJSON();
+      await app.connection.request({ type: "register_push_subscription", subscription: { endpoint: subscription.endpoint, p256dh: json.keys.p256dh, auth: json.keys.auth, label: navigator.userAgent.slice(0, 60) } });
+      setStatus("notifications on: Faults, approvals and finished Runs reach this device");
+    }
+  } catch (error) {
+    setStatus(`notifications: ${error.message}`);
+  }
+  refreshNotifyButton();
+};
+
+// ---- phones: a soft keyboard and the keys it lacks ------------------------
+
+const held = { control: false, alt: false };
+
+function sendKeyName(name, { ctrl = false, alt = false, text = null } = {}) {
+  const open = app.open;
+  if (!open?.writable) return;
+  const input = {
+    physical_key: name, logical_key: name, text,
+    modifiers: { shift: false, alt, control: ctrl, super_key: false, caps_lock: false, num_lock: false },
+    consumed_modifiers: NO_MODS, action: "press", composing: false,
+    unshifted_codepoint: [...name].length === 1 ? name : null,
+  };
+  app.connection.request({ type: "terminal_key", session_id: open.sessionId, input }, { surfaceId: open.surfaceId, controlEpoch: open.controlEpoch, timeoutMs: 10000 })
+    .catch((error) => setStatus(`key: ${error.message}`));
+}
+
+if (TOUCH) {
+  el.keybar.hidden = false;
+  el.screen.addEventListener("pointerup", () => { el.soft.focus({ preventScroll: true }); });
+  el.soft.addEventListener("focus", () => { app.focused = true; schedulePaint(); });
+  el.soft.addEventListener("blur", () => { app.focused = false; schedulePaint(); });
+  el.soft.addEventListener("keydown", (e) => {
+    // Hardware keyboards on tablets come through here too.
+    if (e.key === "Unidentified" || e.isComposing) return;
+    const input = keyInput(e);
+    if (!input) return;
+    e.preventDefault();
+    if (held.control || held.alt) { input.modifiers.control = input.modifiers.control || held.control; input.modifiers.alt = input.modifiers.alt || held.alt; if (held.control) input.text = null; releaseHeld(); }
+    const open = app.open;
+    if (!open?.writable) return;
+    app.connection.request({ type: "terminal_key", session_id: open.sessionId, input }, { surfaceId: open.surfaceId, controlEpoch: open.controlEpoch, timeoutMs: 10000 }).catch(() => {});
+  });
+  el.soft.addEventListener("input", () => {
+    // Text the soft keyboard composed (autocorrect, swipe, emoji) that keydown did not carry.
+    const text = el.soft.value;
+    el.soft.value = "";
+    if (!text) return;
+    for (const ch of text) {
+      if (ch === "\n") sendKeyName("enter");
+      else sendKeyName(ch === " " ? "space" : ch.toLowerCase(), { ctrl: held.control, alt: held.alt, text: held.control ? null : ch });
+    }
+    releaseHeld();
+  });
+  for (const b of el.keybar.querySelectorAll("button")) {
+    b.addEventListener("pointerdown", (e) => e.preventDefault());
+    b.onclick = () => {
+      if (b.dataset.mod) { held[b.dataset.mod] = !held[b.dataset.mod]; b.setAttribute("aria-pressed", String(held[b.dataset.mod])); return; }
+      const name = b.dataset.key;
+      const ctrl = b.dataset.ctrl === "1" || held.control;
+      sendKeyName(name, { ctrl, alt: held.alt, text: !ctrl && [...name].length === 1 ? name : null });
+      releaseHeld();
+      el.soft.focus({ preventScroll: true });
+    };
+  }
+  visualViewport?.addEventListener("resize", () => { app.renderer.measure(); schedulePaint(); clearTimeout(resizeTimer); resizeTimer = setTimeout(fitSession, 150); });
+}
+
+function releaseHeld() {
+  held.control = false; held.alt = false;
+  for (const b of el.keybar.querySelectorAll("button[data-mod]")) b.setAttribute("aria-pressed", "false");
+}
 
 // ---- painting --------------------------------------------------------------
 

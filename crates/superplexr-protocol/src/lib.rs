@@ -345,6 +345,22 @@ pub enum Request {
     TerminalViewers {
         session_id: SessionId,
     },
+    /// The runtime's Web Push application server key, for a browser to
+    /// subscribe with, and how many subscriptions it holds.
+    PushInfo,
+    /// Keep a browser's push subscription; the runtime notifies it when a
+    /// Fault opens, an approval waits, or a Run finishes.
+    RegisterPushSubscription {
+        subscription: PushSubscription,
+    },
+    ForgetPushSubscription {
+        endpoint: String,
+    },
+    /// Send a notice to every subscription now, to prove the path.
+    TestPush {
+        title: String,
+        body: String,
+    },
     /// The chapters of a session's recording: start, control changes,
     /// Faults, exit — each at a journal offset a replay can start from.
     TerminalChapters {
@@ -1154,6 +1170,19 @@ pub enum ViewerRole {
     Controller,
 }
 
+/// What a browser hands back from `PushManager.subscribe`, plus a label.
+/// The secret is never shown again once stored.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PushSubscription {
+    pub endpoint: String,
+    /// The browser's P-256 public key, base64url, 65 bytes uncompressed.
+    pub p256dh: String,
+    /// The browser's 16-byte auth secret, base64url.
+    pub auth: String,
+    #[serde(default)]
+    pub label: String,
+}
+
 fn default_speed_percent() -> u32 {
     100
 }
@@ -1386,6 +1415,18 @@ pub enum ResponseBody {
     TerminalReplayAccepted {
         session_id: SessionId,
         stream_id: u32,
+    },
+    PushInfo {
+        /// Absent when the runtime could not set up push (no state dir).
+        public_key: Option<String>,
+        subscriptions: Vec<PushSubscription>,
+    },
+    PushSent {
+        /// Endpoint and the push service's HTTP status; 0 means unreachable.
+        outcomes: Vec<(String, u16)>,
+    },
+    PushSubscriptionsChanged {
+        subscriptions: usize,
     },
     AgentRunLaunched {
         events: Vec<Event>,

@@ -172,3 +172,17 @@ code { font-family: var(--mono); font-size: 0.92em; }
   .sessions { width: 160px; }
   .hint { font-size: 13px; }
 }
+
+/* phones: the soft keyboard needs a real input; the key bar gives it what it lacks */
+.soft { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0.01; border: 0; padding: 0; resize: none; }
+.keybar { display: flex; gap: 4px; overflow-x: auto; padding: 4px 6px; border-top: 1px solid var(--line); background: var(--panel); }
+.keybar[hidden] { display: none; }
+.keybar button { flex: none; font: 13px var(--mono); padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--ground); color: var(--ink); }
+.keybar button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.stage { display: flex; flex-direction: column; }
+.stage #screen { flex: 1; min-height: 0; }
+@media (max-width: 720px) {
+  .bar { padding: 6px 8px; gap: 8px; }
+  .brand { display: none; }
+  .sessions { width: 120px; }
+}

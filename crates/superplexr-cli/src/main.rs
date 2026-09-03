@@ -337,6 +337,15 @@ enum CliCommand {
     TerminalViewers {
         session_id: SessionId,
     },
+    /// The runtime's push key and the browsers subscribed to notifications.
+    PushList,
+    /// Send a notification to every subscribed browser now.
+    PushTest {
+        #[arg(long, default_value = "superplexr")]
+        title: String,
+        #[arg(long, default_value = "notifications reach this device")]
+        body: String,
+    },
     /// The chapters of a session's recording: start, control changes,
     /// Faults, exit, each at a journal offset `replay` can start from.
     Chapters {
@@ -3352,6 +3361,8 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
         }
         CliCommand::TerminalViewers { session_id } => Request::TerminalViewers { session_id },
         CliCommand::Chapters { session_id } => Request::TerminalChapters { session_id },
+        CliCommand::PushList => Request::PushInfo,
+        CliCommand::PushTest { title, body } => Request::TestPush { title, body },
         CliCommand::TerminalControlRequest { session_id } => {
             Request::RequestTerminalControl { session_id }
         }

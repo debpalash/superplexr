@@ -3,6 +3,7 @@ mod device_store;
 mod engine_driver;
 mod fault_store;
 mod gateway;
+mod push;
 mod web;
 mod provider_status;
 mod realized_change;
@@ -172,6 +173,10 @@ enum RequestError {
     TooManyWaits,
     #[error("control of terminal session {session_id} was not offered to this participant")]
     ControlNotOffered { session_id: SessionId },
+    #[error("push notifications are not set up on this runtime")]
+    PushDisabled,
+    #[error("push: {0}")]
+    Push(String),
     #[error("client {client_id} does not control terminal session {session_id}")]
     NotController {
         session_id: SessionId,
@@ -346,6 +351,8 @@ struct AppState {
     devices: Mutex<DeviceStore>,
     /// Present when the network gateway is listening.
     gateway: Option<GatewayInfo>,
+    /// Web Push to subscribed browsers; `None` when it could not be set up.
+    push: Option<Arc<std::sync::Mutex<push::PushStore>>>,
     session_groups: Mutex<SessionGroupStore>,
     checkout_gate: Mutex<()>,
     agent_launch_gate: Mutex<()>,
@@ -509,6 +516,13 @@ async fn run_server(args: Args) -> Result<(), ServerError> {
         faults: Mutex::new(FaultStore::open(args.state_dir.join("faults.json"))?),
         devices: Mutex::new(DeviceStore::open(args.state_dir.join("devices.json"))?),
         gateway: gateway.as_ref().map(|prepared| prepared.info.clone()),
+        push: match push::PushStore::open(&args.state_dir) {
+            Ok(store) => Some(Arc::new(std::sync::Mutex::new(store))),
+            Err(error) => {
+                eprintln!("push notifications are off: {error}");
+                None
+            }
+        },
         session_groups: Mutex::new(SessionGroupStore::open(
             args.state_dir.join("session-groups.json"),
         )?),
@@ -2224,6 +2238,7 @@ async fn activity_snapshots(
 
 async fn publish_mission(state: &AppState, mission: Mission) {
     let _ = state.mission_events.send(mission.clone());
+    announce_approvals(state, &mission);
     let facts = state.provider_status.lock().await;
     let Ok(now) = provider_status::now_unix_micros() else {
         return;
@@ -2687,6 +2702,55 @@ async fn handle_request_with_context(
             publish_terminal(state, &projection.summary);
             Ok(accepted(session_id))
         }
+        Request::PushInfo => {
+            let (public_key, subscriptions) = match state.push.as_ref().and_then(|p| p.lock().ok()) {
+                Some(store) => (Some(store.public_key()), store.subscriptions()),
+                None => (None, Vec::new()),
+            };
+            Ok(ResponseBody::PushInfo {
+                public_key,
+                subscriptions,
+            })
+        }
+        Request::RegisterPushSubscription { subscription } => {
+            let store = state.push.as_ref().ok_or(RequestError::PushDisabled)?;
+            let mut store = store.lock().map_err(|_| RequestError::RegistryPoisoned)?;
+            store
+                .register(subscription)
+                .map_err(|error| RequestError::Push(error.to_string()))?;
+            Ok(ResponseBody::PushSubscriptionsChanged {
+                subscriptions: store.subscriptions().len(),
+            })
+        }
+        Request::ForgetPushSubscription { endpoint } => {
+            let store = state.push.as_ref().ok_or(RequestError::PushDisabled)?;
+            let mut store = store.lock().map_err(|_| RequestError::RegistryPoisoned)?;
+            store
+                .forget(&endpoint)
+                .map_err(|error| RequestError::Push(error.to_string()))?;
+            Ok(ResponseBody::PushSubscriptionsChanged {
+                subscriptions: store.subscriptions().len(),
+            })
+        }
+        Request::TestPush { title, body } => {
+            let Some(store) = state.push.clone() else {
+                return Err(RequestError::PushDisabled);
+            };
+            let outcomes = tokio::task::spawn_blocking(move || {
+                match store.lock() {
+                    Ok(mut store) => store.send_all(&push::Notice {
+                        title,
+                        body,
+                        url: "/".to_owned(),
+                        tag: "test".to_owned(),
+                    }),
+                    Err(_) => Vec::new(),
+                }
+            })
+            .await
+            .unwrap_or_default();
+            Ok(ResponseBody::PushSent { outcomes })
+        }
         Request::TerminalChapters { session_id } => {
             read_chapters(&state.terminal_state_dir, session_id)
         }
@@ -3084,6 +3148,7 @@ async fn handle_request_with_context(
                 None => FaultSource::OwnerHook,
             };
             let fault = state.faults.lock().await.report(fault, source)?;
+            announce_fault(state, &fault);
             Ok(ResponseBody::FaultRecorded { fault })
         }
         Request::ListFaults {
@@ -4988,6 +5053,83 @@ fn recover_terminal_history(
     Ok(records)
 }
 
+/// Tell every subscribed browser. Encryption and delivery are blocking work
+/// on a blocking thread; the caller never waits.
+fn announce(state: &AppState, notice: push::Notice) {
+    let Some(store) = state.push.clone() else {
+        return;
+    };
+    tokio::task::spawn_blocking(move || {
+        if let Ok(mut store) = store.lock() {
+            for (endpoint, status) in store.send_all(&notice) {
+                if !(200..300).contains(&status) {
+                    eprintln!("push to {endpoint} answered {status}");
+                }
+            }
+        }
+    });
+}
+
+/// An approval waiting is worth a phone's attention exactly once.
+fn announce_approvals(state: &AppState, mission: &Mission) {
+    use superplexr_core::AttentionKind;
+    let Some(store) = state.push.as_ref() else {
+        return;
+    };
+    let notices = mission
+        .attention_queue()
+        .into_iter()
+        .filter(|item| {
+            matches!(
+                item.kind,
+                AttentionKind::Approval | AttentionKind::HighRiskApproval
+            )
+        })
+        .map(|item| push::Notice {
+            title: match item.kind {
+                AttentionKind::HighRiskApproval => "High-risk approval waiting".to_owned(),
+                _ => "Approval waiting".to_owned(),
+            },
+            body: item.summary.clone(),
+            url: format!("/#mission={}", mission.id),
+            tag: format!("approval-{:?}", item.signal_id),
+        })
+        .collect::<Vec<_>>();
+    if notices.is_empty() {
+        return;
+    }
+    let fresh = match store.lock() {
+        Ok(mut store) => notices
+            .into_iter()
+            .filter(|notice| store.first_time(&notice.tag))
+            .collect::<Vec<_>>(),
+        Err(_) => return,
+    };
+    if fresh.is_empty() {
+        return;
+    }
+    let store = Arc::clone(store);
+    tokio::task::spawn_blocking(move || {
+        if let Ok(mut store) = store.lock() {
+            for notice in fresh {
+                store.send_all(&notice);
+            }
+        }
+    });
+}
+
+fn announce_fault(state: &AppState, fault: &superplexr_protocol::FaultSummary) {
+    announce(
+        state,
+        push::Notice {
+            title: "Fault opened".to_owned(),
+            body: fault.summary.clone(),
+            url: format!("/#fault={}", fault.fault_id),
+            tag: format!("fault-{}", fault.fault_id),
+        },
+    );
+}
+
 /// One line per event in `sessions/<id>/events.jsonl`: what happened, when,
 /// and where the journal was at that moment. Read back as chapters.
 fn append_session_event(
@@ -5493,13 +5635,14 @@ async fn record_terminal_fault(
         mission_id: binding.map(|binding| binding.mission_id),
         run_id: binding.map(|binding| binding.run_id),
     };
-    if let Err(error) = state
+    match state
         .faults
         .lock()
         .await
         .report(fault, FaultSource::TerminalExit)
     {
-        eprintln!("could not record Fault for terminal {session_id}: {error}");
+        Ok(fault) => announce_fault(state, &fault),
+        Err(error) => eprintln!("could not record Fault for terminal {session_id}: {error}"),
     }
 }
 
@@ -5574,13 +5717,14 @@ async fn record_command_fault(
         mission_id: binding.map(|binding| binding.mission_id),
         run_id: binding.map(|binding| binding.run_id),
     };
-    if let Err(error) = state
+    match state
         .faults
         .lock()
         .await
         .report(fault, FaultSource::TerminalExit)
     {
-        eprintln!("could not record Fault for terminal {session_id}: {error}");
+        Ok(fault) => announce_fault(state, &fault),
+        Err(error) => eprintln!("could not record Fault for terminal {session_id}: {error}"),
     }
 }
 
@@ -6020,6 +6164,7 @@ async fn finish_bound_run(
     outcome: FinishOutcome,
     summary: String,
 ) {
+    let summary_for_notice = summary.clone();
     let key = uuid::Uuid::new_v4();
     let result = state
         .store
@@ -6045,6 +6190,18 @@ async fn finish_bound_run(
         .await;
     match result {
         Ok((_, mission)) => {
+            announce(
+                state,
+                push::Notice {
+                    title: match outcome {
+                        FinishOutcome::Succeeded => "Run finished".to_owned(),
+                        _ => "Run failed".to_owned(),
+                    },
+                    body: summary_for_notice,
+                    url: format!("/#mission={}", binding.mission_id),
+                    tag: format!("run-{}", binding.run_id),
+                },
+            );
             publish_mission(state, mission).await;
         }
         Err(error) => eprintln!(
@@ -7029,6 +7186,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7118,6 +7276,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7225,6 +7384,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7400,6 +7560,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7604,6 +7765,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7863,6 +8025,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -8030,6 +8193,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -8206,6 +8370,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -8318,6 +8483,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -8533,6 +8699,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -8739,6 +8906,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -8855,6 +9023,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -9013,6 +9182,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -9255,6 +9425,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -9561,6 +9732,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -9737,6 +9909,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -10109,6 +10282,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -10285,6 +10459,7 @@ mod tests {
             faults: Mutex::new(FaultStore::transient()),
             devices: Mutex::new(DeviceStore::transient()),
             gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
