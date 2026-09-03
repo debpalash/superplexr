@@ -62,10 +62,26 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// waiting for it.
 const REPRODUCE_FAULT_TIMEOUT: Duration = Duration::from_secs(960);
 
+/// Headroom above a deadline the daemon has already been told to honour.
+///
+/// The daemon answers such requests itself when its own limit expires, so the
+/// client should outlast it and report that answer rather than pre-empt it.
+const RESPONSE_HEADROOM: Duration = Duration::from_secs(30);
+
 /// How long this request may take before the wait is treated as a failure.
-fn request_timeout(request: &Request) -> Duration {
+///
+/// Requests that carry their own deadline get that deadline plus headroom.
+/// Bounding those at the default would break exactly the callers who asked to
+/// wait longer than it.
+#[must_use]
+pub fn request_timeout(request: &Request) -> Duration {
     match request {
+        // Replay runs a real command; the daemon caps it at 900 seconds.
         Request::ReproduceFault { .. } => REPRODUCE_FAULT_TIMEOUT,
+        // The caller chose how long to wait for the terminal condition.
+        Request::TerminalWait { timeout_millis, .. } => {
+            Duration::from_millis(*timeout_millis).saturating_add(RESPONSE_HEADROOM)
+        }
         _ => DEFAULT_REQUEST_TIMEOUT,
     }
 }
@@ -1975,5 +1991,51 @@ mod tests {
 
         runtime.join().expect("test runtime should finish");
         std::fs::remove_dir_all(root).expect("test directory should be removable");
+    }
+}
+
+#[cfg(test)]
+mod request_timeout_tests {
+    use super::*;
+    use termi9ne_core::{FaultId, SessionId};
+
+    /// A request that carries its own deadline must outlast it.
+    ///
+    /// Bounding these at the default would break exactly the callers who asked
+    /// to wait longer than it, and they would see a client timeout instead of
+    /// the daemon's own answer.
+    #[test]
+    fn a_caller_chosen_wait_outlives_the_default_bound() {
+        let long_wait = Request::TerminalWait {
+            session_id: SessionId::new(),
+            condition: TerminalWaitCondition::Quiet { quiet_millis: 10 },
+            timeout_millis: 600_000,
+        };
+        let timeout = request_timeout(&long_wait);
+        assert!(
+            timeout > Duration::from_millis(600_000),
+            "a ten minute wait was bounded at {timeout:?}"
+        );
+        assert!(timeout > DEFAULT_REQUEST_TIMEOUT);
+    }
+
+    /// Replaying a Fault runs a real command, which the daemon caps at 900s.
+    #[test]
+    fn fault_replay_outlives_the_daemons_own_cap() {
+        let replay = Request::ReproduceFault {
+            fault_id: FaultId::new(),
+            timeout_seconds: Some(900),
+        };
+        assert!(request_timeout(&replay) > Duration::from_secs(900));
+    }
+
+    /// Everything else is bounded, so no caller can wait forever.
+    #[test]
+    fn ordinary_requests_are_bounded() {
+        let ordinary = Request::ListTerminals {
+            include_archived: false,
+        };
+        assert_eq!(request_timeout(&ordinary), DEFAULT_REQUEST_TIMEOUT);
+        assert!(DEFAULT_REQUEST_TIMEOUT <= Duration::from_secs(60));
     }
 }

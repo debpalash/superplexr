@@ -1485,10 +1485,20 @@ where
         .send_json(FrameKind::Request, 0, request)
         .await
         .map_err(ProtocolError::from)?;
-    let response: ServerResponse = read
-        .receive_json(FrameKind::Response, 0)
-        .await
-        .map_err(ProtocolError::from)?;
+    // Bound the wait. Without this a daemon that never answers — busy, wedged,
+    // or replaying a large journal — hangs the command forever, which is worse
+    // in a script or an agent loop than a reported failure.
+    let timeout = termi9ne_client::request_timeout(&request.action);
+    let response: ServerResponse =
+        tokio::time::timeout(timeout, read.receive_json(FrameKind::Response, 0))
+            .await
+            .map_err(|_| {
+                CliError::Protocol(ProtocolError::Io(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!("daemon did not answer within {timeout:?}"),
+                )))
+            })?
+            .map_err(ProtocolError::from)?;
     if response.version != PROTOCOL_VERSION {
         return Err(CliError::Version {
             actual: response.version,
