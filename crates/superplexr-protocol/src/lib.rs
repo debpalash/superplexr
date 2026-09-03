@@ -338,6 +338,13 @@ pub enum Request {
     RevokeShare {
         share_id: Uuid,
     },
+    /// Where the runtime's network gateway is, if it has one, so a link can
+    /// be composed on the host.
+    GatewayInfo,
+    /// Who is watching a terminal right now.
+    TerminalViewers {
+        session_id: SessionId,
+    },
     /// Atomically bind a ready planned Run to a durable PTY launch.
     LaunchAgentRun {
         mission_id: MissionId,
@@ -1076,6 +1083,32 @@ pub enum ShareRole {
     Controller,
 }
 
+/// One live subscription to a terminal, as others see it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ViewerSummary {
+    pub viewer_id: Uuid,
+    pub kind: ViewerKind,
+    /// The owner's own client kind, or the Share's label.
+    pub label: String,
+    pub role: ViewerRole,
+    pub since_micros: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerKind {
+    Owner,
+    Share,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerRole {
+    Owner,
+    Observer,
+    Controller,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ShareSummary {
     pub share_id: Uuid,
@@ -1228,6 +1261,15 @@ pub enum ResponseBody {
     },
     ShareIdentity {
         share: ShareSummary,
+    },
+    GatewayInfo {
+        /// `host:port` as advertised, or `None` when no gateway is listening.
+        advertised: Option<String>,
+        fingerprint: Option<String>,
+    },
+    TerminalViewers {
+        session_id: SessionId,
+        viewers: Vec<ViewerSummary>,
     },
     AgentRunLaunched {
         events: Vec<Event>,

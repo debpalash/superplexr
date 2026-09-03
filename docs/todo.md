@@ -153,6 +153,27 @@ scoped access uses share tokens over the same listener.
 - [ ] Scrollback in the browser (history pages over the wire)
 - [ ] IME / composition input
 
+## 3e. Rooms and streams (platform plan, phase 5 — streams built 2026-09-04)
+
+- [x] Streams: `superplexr stream <session>` mints a Share link; the gateway
+      admits a Share token at the handshake and binds the connection to it
+      (every request must carry the same token → `share_token_required`)
+- [x] Presence: subscriptions register on their terminal record for their
+      lifetime; `terminal-viewers`, `Request::TerminalViewers`, `👁` in the page
+- [x] `Request::GatewayInfo` so links can be composed on the host
+- [x] `ci/stream-smoke.sh`: link, viewer admitted and limited (no keys, no
+      token-less request, no owner request), presence, 50-viewer fan-out,
+      revocation → refused
+- [x] Fan-out cost measured 2026-09-04: 50 viewers on one session scrolling
+      20 lines/s, each subscribed at 30 Hz → 16.1 KB/s per viewer (max
+      16.1), 15.3 frames/s each, presence exact at 51 — under the plan's
+      20 KB/s gate without compression (the browser has no zstd)
+- [ ] Rooms: control handed, never seized — an explicit offer/accept
+      between participants on top of claim/release; per-participant
+      cursor and selection
+- [ ] Replay: journal playback at speed with Faults, Runs and hand-offs as
+      chapters
+
 ## 4. Terminal and desktop certification (Gate E)
 
 - [ ] Unicode / IME / Kitty keyboard / Neovim compatibility matrix

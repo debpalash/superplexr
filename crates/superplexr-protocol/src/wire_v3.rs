@@ -156,6 +156,10 @@ pub struct Hello {
     /// Over the network gateway: a pairing code, to be exchanged for a token.
     #[serde(default)]
     pub pairing_code: Option<String>,
+    /// Over the network gateway: a Share token, for a viewer who is not a
+    /// paired device. Every request on such a connection must carry it.
+    #[serde(default)]
+    pub share_token: Option<String>,
 }
 
 impl Hello {
@@ -174,6 +178,7 @@ impl Hello {
             device_id,
             device_token: None,
             pairing_code: None,
+            share_token: None,
         }
     }
 }

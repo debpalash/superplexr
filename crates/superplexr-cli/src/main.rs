@@ -129,6 +129,18 @@ enum CliCommand {
     ShareRevoke {
         share_id: Uuid,
     },
+    /// Mint a viewer link for one session: a Share scoped to it, composed
+    /// with the runtime's gateway address. Observers watch; `--controller`
+    /// lets the viewer claim control when nobody holds it.
+    Stream {
+        session_id: SessionId,
+        #[arg(long)]
+        controller: bool,
+        #[arg(long, default_value = "stream")]
+        label: String,
+        #[arg(long, default_value_t = 3_600)]
+        expires_in_seconds: u64,
+    },
     /// Keep an encrypted owner attachment to a remote superplexr runtime.
     RemoteForward {
         #[arg(value_parser = validate_ssh_destination)]
@@ -319,6 +331,11 @@ enum CliCommand {
         session_id: SessionId,
         #[arg(long, default_value_t = 300_000)]
         timeout_millis: u64,
+    },
+    /// Who is subscribed to a session right now: the owner's own screens
+    /// and viewers admitted by a Share, with their roles.
+    TerminalViewers {
+        session_id: SessionId,
     },
     /// Terminate a runtime-owned process.
     TerminalKill {
@@ -1342,6 +1359,14 @@ async fn main() -> Result<(), CliError> {
         CliCommand::Pair { code, label } => {
             return run_pair(gateway.as_deref(), fingerprint.as_deref(), &code, &label);
         }
+        CliCommand::Stream {
+            session_id,
+            controller,
+            label,
+            expires_in_seconds,
+        } => {
+            return run_stream(&socket, session_id, controller, &label, expires_in_seconds);
+        }
         CliCommand::Forget => {
             let address = gateway.as_deref().ok_or_else(|| {
                 CliError::Usage("--gateway host:port names the pairing to forget".to_owned())
@@ -1524,6 +1549,65 @@ fn run_pair(
             "device_id": device_id,
             "gateway": address,
             "credentials": path,
+        }))?
+    );
+    Ok(())
+}
+
+/// A Share for one session plus the gateway address: a link a viewer can
+/// open in a browser. The token is printed once, inside the link.
+fn run_stream(
+    socket: &Path,
+    session_id: SessionId,
+    controller: bool,
+    label: &str,
+    expires_in_seconds: u64,
+) -> Result<(), CliError> {
+    use superplexr_protocol::ShareRole;
+    let client = ControlClient::connect(socket)?;
+    let role = if controller {
+        ShareRole::Controller
+    } else {
+        ShareRole::Observer
+    };
+    let created = client.request(Request::CreateShare {
+        label: label.to_owned(),
+        role,
+        mission_ids: Vec::new(),
+        session_ids: vec![session_id],
+        expires_in_seconds,
+    })?;
+    let ResponseBody::ShareCreated { share, token } = created else {
+        return Err(CliError::Usage(
+            "runtime answered the share request with something else".to_owned(),
+        ));
+    };
+    let (advertised, fingerprint) = match client.request(Request::GatewayInfo)? {
+        ResponseBody::GatewayInfo {
+            advertised,
+            fingerprint,
+        } => (advertised, fingerprint),
+        _ => (None, None),
+    };
+    let url = advertised
+        .as_deref()
+        .map(|address| format!("https://{address}/#share={token}"));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "type": "stream",
+            "session_id": session_id,
+            "share_id": share.share_id,
+            "role": role,
+            "expires_at_micros": share.expires_at_micros,
+            "url": url,
+            "fingerprint": fingerprint,
+            "token": token,
+            "hint": if url.is_some() {
+                "viewers accept the runtime's certificate once; its fingerprint is above"
+            } else {
+                "no gateway is listening; start the runtime with --gateway host:port to serve viewers"
+            },
         }))?
     );
     Ok(())
@@ -3187,11 +3271,14 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
         CliCommand::PluginInstallAgentStatus { .. } => {
             unreachable!("plugin installation is handled before connecting to the runtime")
         }
+        CliCommand::TerminalViewers { session_id } => Request::TerminalViewers { session_id },
         CliCommand::DevicePair { label } => Request::CreateDevicePairing { label },
         CliCommand::DeviceList => Request::ListDevices,
         CliCommand::DeviceRevoke { device_id } => Request::RevokeDevice { device_id },
-        CliCommand::Pair { .. } | CliCommand::Forget => {
-            unreachable!("pairing and forgetting never reach the runtime as requests")
+        CliCommand::Pair { .. } | CliCommand::Forget | CliCommand::Stream { .. } => {
+            unreachable!(
+                "pairing, forgetting and stream links never reach the runtime as one request"
+            )
         }
         CliCommand::Ping => Request::Ping,
     };

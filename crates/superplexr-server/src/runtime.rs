@@ -243,6 +243,59 @@ impl Drop for SocketGuard {
 struct TerminalRecord {
     handle: Option<SessionHandle>,
     projection: Arc<RwLock<TerminalProjection>>,
+    /// Who is subscribed right now. Each subscription registers itself for
+    /// as long as its task lives, so presence is exact and costs nothing.
+    viewers: Arc<std::sync::Mutex<Vec<superplexr_protocol::ViewerSummary>>>,
+}
+
+/// A subscription's entry in its terminal's viewer list, removed when the
+/// subscription task ends for any reason.
+struct ViewerGuard {
+    viewers: Arc<std::sync::Mutex<Vec<superplexr_protocol::ViewerSummary>>>,
+    viewer_id: uuid::Uuid,
+}
+
+impl ViewerGuard {
+    fn register(record: &TerminalRecord, authority: &ClientAuthority) -> Self {
+        use superplexr_protocol::{ViewerKind, ViewerRole, ViewerSummary};
+        let (kind, label, role) = match authority {
+            ClientAuthority::Owner => (ViewerKind::Owner, "owner".to_owned(), ViewerRole::Owner),
+            ClientAuthority::Shared(share) => (
+                ViewerKind::Share,
+                share.label.clone(),
+                match share.role {
+                    ShareRole::Observer => ViewerRole::Observer,
+                    ShareRole::Controller => ViewerRole::Controller,
+                },
+            ),
+        };
+        let viewer_id = uuid::Uuid::new_v4();
+        let since_micros = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or_default();
+        if let Ok(mut viewers) = record.viewers.lock() {
+            viewers.push(ViewerSummary {
+                viewer_id,
+                kind,
+                label,
+                role,
+                since_micros,
+            });
+        }
+        Self {
+            viewers: Arc::clone(&record.viewers),
+            viewer_id,
+        }
+    }
+}
+
+impl Drop for ViewerGuard {
+    fn drop(&mut self) {
+        if let Ok(mut viewers) = self.viewers.lock() {
+            viewers.retain(|viewer| viewer.viewer_id != self.viewer_id);
+        }
+    }
 }
 
 impl TerminalRecord {
@@ -1077,6 +1130,7 @@ fn authorize_request(
     let read_allowed = match request {
         Request::Ping
         | Request::ShareIdentity
+        | Request::GatewayInfo
         | Request::Unsubscribe { .. }
         | Request::ListMissions
         | Request::SubscribeMissions => true,
@@ -1095,6 +1149,7 @@ fn authorize_request(
         | Request::TerminalWait { session_id, .. }
         | Request::TerminalHistoryFrame { session_id, .. }
         | Request::TerminalSearch { session_id, .. }
+        | Request::TerminalViewers { session_id }
         | Request::SubscribeTerminal { session_id, .. } => {
             terminal_in_share(state, share, *session_id)?
         }
@@ -1184,7 +1239,7 @@ async fn handle_connection_over(
     let _connection_count = ConnectionCount::enter(&state.open_connections);
     let mut read = AsyncWireReader::new(BufReader::new(read));
     let mut write = AsyncWireWriter::new(write);
-    let device = accept_wire_handshake(&mut read, &mut write, &state, transport).await?;
+    let admission = accept_wire_handshake(&mut read, &mut write, &state, transport).await?;
     let write = Arc::new(Mutex::new(write));
     let mut connection_client = None;
     let mut connection_authority = None;
@@ -1225,7 +1280,7 @@ async fn handle_connection_over(
         connection_client = Some(request.client_id);
         // Revocation takes effect at the device's next request, not its next
         // connection.
-        if let Some(device_id) = device
+        if let Admission::Device(device_id) = admission
             && !state.devices.lock().await.is_active(device_id)
         {
             write_connection_response(
@@ -1252,6 +1307,36 @@ async fn handle_connection_over(
             continue;
         }
 
+        // A viewer admitted by a Share is that Share and nothing else: a
+        // request without the token, or with another one, is refused before
+        // it can be read as the owner's.
+        if let Admission::Share(share_id) = admission {
+            let refusal = match request.share_token.as_deref() {
+                None => Some((
+                    "share_token_required",
+                    "this connection was admitted by a Share token and every request must carry that token",
+                )),
+                Some(token) => match state.shares.lock().await.authenticate(token) {
+                    Ok(share) if share.share_id == share_id => None,
+                    Ok(_) => Some((
+                        "share_mismatch",
+                        "this connection was admitted by a different Share",
+                    )),
+                    Err(_) => Some((
+                        "share_authorization_denied",
+                        "share token is invalid, expired, or revoked",
+                    )),
+                },
+            };
+            if let Some((code, message)) = refusal {
+                write_connection_response(
+                    &write,
+                    &ServerResponse::error(request.request_id, code, message),
+                )
+                .await?;
+                continue;
+            }
+        }
         let authority = match request.share_token.as_deref() {
             Some(token) => match state.shares.lock().await.authenticate(token) {
                 Ok(share) => ClientAuthority::Shared(share),
@@ -1520,6 +1605,17 @@ type ServerWireReader = AsyncWireReader<BufReader<BoxedRead>>;
 type ServerWireWriter = AsyncWireWriter<BoxedWrite>;
 
 /// What carried a connection, which decides what it may assume.
+/// Who a connection is, decided once at the handshake and held for its life.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Admission {
+    /// The Unix socket: the runtime's own user.
+    Owner,
+    /// A paired device over the gateway, with the owner's authority.
+    Device(uuid::Uuid),
+    /// A viewer admitted by a Share token; every request must carry it.
+    Share(uuid::Uuid),
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Transport {
     /// The peer's uid was verified; the owner is talking.
@@ -1672,12 +1768,12 @@ async fn accept_wire_handshake(
     writer: &mut ServerWireWriter,
     state: &AppState,
     transport: Transport,
-) -> Result<Option<uuid::Uuid>, ProtocolError> {
+) -> Result<Admission, ProtocolError> {
     let handshake = async {
         match transport {
             Transport::Unix => server_handshake(reader, writer, runtime_wire_id())
                 .await
-                .map(|_| None)
+                .map(|_| Admission::Owner)
                 .map_err(ProtocolError::from),
             Transport::Gateway => gateway_handshake(reader, writer, state).await,
         }
@@ -1699,7 +1795,7 @@ async fn gateway_handshake(
     reader: &mut ServerWireReader,
     writer: &mut ServerWireWriter,
     state: &AppState,
-) -> Result<Option<uuid::Uuid>, ProtocolError> {
+) -> Result<Admission, ProtocolError> {
     use superplexr_protocol::wire_v3::{Close, Hello, Welcome};
     let hello: Hello = reader.receive_json(FrameKind::Hello, 0).await?;
     let mut welcome = match Welcome::negotiate(&hello, runtime_wire_id()) {
@@ -1719,6 +1815,34 @@ async fn gateway_handshake(
             return Err(error.into());
         }
     };
+    if let Some(token) = hello.share_token.as_deref() {
+        let share = state.shares.lock().await.authenticate(token);
+        return match share {
+            Ok(share) => {
+                writer.send_json(FrameKind::Welcome, 0, &welcome).await?;
+                let compression = welcome.zstd_enabled();
+                reader.set_compression(compression);
+                writer.set_compression(compression);
+                Ok(Admission::Share(share.share_id))
+            }
+            Err(_) => {
+                writer
+                    .send_json(
+                        FrameKind::Close,
+                        0,
+                        &Close {
+                            code: "gateway_unauthorized".to_owned(),
+                            message: "this Share link is invalid, expired, or revoked".to_owned(),
+                        },
+                    )
+                    .await?;
+                Err(ProtocolError::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "invalid share refused at the gateway",
+                )))
+            }
+        };
+    }
     let admitted = {
         let mut devices = state.devices.lock().await;
         if let Some(code) = hello.pairing_code.as_deref() {
@@ -1738,7 +1862,7 @@ async fn gateway_handshake(
             let compression = welcome.zstd_enabled();
             reader.set_compression(compression);
             writer.set_compression(compression);
-            Ok(Some(summary.device_id))
+            Ok(Admission::Device(summary.device_id))
         }
         _ => {
             writer
@@ -2237,6 +2361,8 @@ async fn handle_subscription(
             return Ok(());
         }
     };
+    // Present for as long as this task lives, whatever ends it.
+    let _viewer = ViewerGuard::register(&record, &authority);
 
     writer
         .accept(
@@ -2387,6 +2513,22 @@ async fn handle_request_with_context(
         agent_identity,
     } = context;
     match request {
+        Request::GatewayInfo => Ok(ResponseBody::GatewayInfo {
+            advertised: state.gateway.as_ref().map(|gateway| gateway.advertised.clone()),
+            fingerprint: state.gateway.as_ref().map(|gateway| gateway.fingerprint.clone()),
+        }),
+        Request::TerminalViewers { session_id } => {
+            let record = terminal_record(state, session_id)?;
+            let viewers = record
+                .viewers
+                .lock()
+                .map(|viewers| viewers.clone())
+                .unwrap_or_default();
+            Ok(ResponseBody::TerminalViewers {
+                session_id,
+                viewers,
+            })
+        }
         Request::Ping => Ok(ResponseBody::Pong),
         Request::RuntimeDiagnostics => runtime_diagnostics(state).await,
         Request::ListPlugins => Ok(plugin_list(&state.plugins)),
@@ -4416,6 +4558,7 @@ fn start_terminal(
         .insert(
             session_id,
             TerminalRecord {
+                viewers: Arc::default(),
                 handle: Some(handle),
                 projection,
             },
@@ -4617,6 +4760,7 @@ fn recover_terminal_history(
         records.insert(
             spec.session_id,
             TerminalRecord {
+                viewers: Arc::default(),
                 handle: None,
                 projection: Arc::new(RwLock::new(TerminalProjection {
                     summary,
@@ -6009,6 +6153,7 @@ mod tests {
         let mut frame = model.frame().expect("frame should render");
         frame.sequence = 7;
         let record = TerminalRecord {
+            viewers: Arc::default(),
             handle: None,
             projection: Arc::new(RwLock::new(TerminalProjection {
                 summary: TerminalSessionSummary {
@@ -7085,6 +7230,7 @@ mod tests {
             .insert(
                 session_id,
                 TerminalRecord {
+                    viewers: Arc::default(),
                     handle: None,
                     projection: Arc::new(RwLock::new(TerminalProjection {
                         summary: TerminalSessionSummary {
@@ -7369,6 +7515,7 @@ mod tests {
             terminals: RwLock::new(HashMap::from([(
                 session_id,
                 TerminalRecord {
+                    viewers: Arc::default(),
                     handle: None,
                     projection: Arc::new(RwLock::new(TerminalProjection {
                         summary,
@@ -7527,6 +7674,7 @@ mod tests {
             terminals: RwLock::new(HashMap::from([(
                 session_id,
                 TerminalRecord {
+                    viewers: Arc::default(),
                     handle: None,
                     projection: Arc::new(RwLock::new(TerminalProjection {
                         summary: TerminalSessionSummary {

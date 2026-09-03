@@ -28,6 +28,13 @@ const el = {
 const DEVICE_KEY = "superplexr.device";
 const LAST_SESSION_KEY = "superplexr.last-session";
 
+/** A viewer link carries a Share token after the hash; it never touches storage. */
+function shareTokenFromLink() {
+  const match = /(?:^#|[#&])share=([^&]+)/.exec(location.hash);
+  return match ? decodeURIComponent(match[1]) : null;
+}
+const SHARE_TOKEN = shareTokenFromLink();
+
 function loadDevice() {
   try {
     const raw = localStorage.getItem(DEVICE_KEY);
@@ -47,9 +54,10 @@ function forgetDevice() {
 // ---- the connection --------------------------------------------------------
 
 class Connection {
-  constructor(device, { pairingCode = null, onEvent, onState, onClose }) {
+  constructor(device, { pairingCode = null, shareToken = null, onEvent, onState, onClose }) {
     this.device = device;
     this.pairingCode = pairingCode;
+    this.shareToken = shareToken;
     this.onEvent = onEvent;
     this.onState = onState;
     this.onClose = onClose;
@@ -64,7 +72,9 @@ class Connection {
     this.ws = new WebSocket(`${scheme}://${location.host}/ws`);
     this.ws.binaryType = "arraybuffer";
     this.ws.onopen = () => {
-      this.send(encodeJson(Kind.Hello, 0, hello(this.clientId, device.id, { deviceToken: device.token, pairingCode }), this.sequencer));
+      const greeting = hello(this.clientId, device.id, { deviceToken: shareToken ? null : device.token, pairingCode });
+      greeting.share_token = shareToken;
+      this.send(encodeJson(Kind.Hello, 0, greeting, this.sequencer));
     };
     this.ws.onmessage = (event) => {
       this.reader.push(new Uint8Array(event.data));
@@ -130,6 +140,7 @@ class Connection {
       request_id: requestId,
       surface_id: surfaceId,
       control_epoch: controlEpoch,
+      share_token: this.shareToken,
       action,
     };
     return new Promise((resolve, reject) => {
@@ -204,6 +215,8 @@ const app = {
   open: null, // { sessionId, surfaceId, controlEpoch, writable, streamId, frame, selection, dirty }
   renderer: new Renderer(el.screen),
   focused: false,
+  share: null, // ShareSummary when this page was opened from a viewer link
+  viewers: [],
 };
 
 function setLink(state, text) {
@@ -216,15 +229,25 @@ function connect({ pairingCode = null } = {}) {
   setLink("connecting", pairingCode ? "pairing" : "connecting");
   app.connection = new Connection(app.device, {
     pairingCode,
-    onState: (state, welcome) => {
+    shareToken: SHARE_TOKEN,
+    onState: async (state, welcome) => {
       if (state === "live") {
         app.reconnectDelay = 1000;
         setLink("live", `${location.host} · ${welcome.runtime_version}`);
         el.pair.hidden = true;
         el.pairError.hidden = true;
         el.main.hidden = false;
-        el.newShell.hidden = false;
-        el.forget.hidden = false;
+        el.newShell.hidden = !!SHARE_TOKEN;
+        el.forget.hidden = !!SHARE_TOKEN;
+        if (SHARE_TOKEN) {
+          try {
+            const identity = await app.connection.request({ type: "share_identity" });
+            app.share = identity.share;
+            setLink("live", `${location.host} · shared as “${app.share.label}” · ${app.share.role}`);
+          } catch (error) {
+            setStatus(`share: ${error.message}`);
+          }
+        }
         refreshSessions();
         clearInterval(app.listTimer);
         app.listTimer = setInterval(refreshSessions, 4000);
@@ -235,6 +258,10 @@ function connect({ pairingCode = null } = {}) {
     onEvent: () => {},
     onClose: ({ refused, reason }) => {
       clearInterval(app.listTimer);
+      if (refused && refused.code === "gateway_unauthorized" && SHARE_TOKEN) {
+        showRefusedLink(refused.message);
+        return;
+      }
       if (refused && refused.code === "gateway_unauthorized") {
         app.device.token = null;
         saveDevice(app.device);
@@ -270,6 +297,16 @@ function showPairing(error) {
   el.pairCode.focus();
 }
 
+function showRefusedLink(message) {
+  el.main.hidden = true;
+  el.pair.hidden = false;
+  el.pairForm.hidden = true;
+  setLink("refused", "link refused");
+  el.pairError.textContent = message ?? "this viewer link is invalid, expired, or revoked";
+  el.pairError.hidden = false;
+  el.pair.append(el.pairError);
+}
+
 function safeGet(key) {
   try { return localStorage.getItem(key); } catch { return null; }
 }
@@ -280,8 +317,12 @@ async function refreshSessions() {
   if (!app.connection?.welcome) return;
   try {
     const body = await app.connection.request({ type: "list_terminals", include_archived: false });
-    app.sessions = body.terminals ?? [];
+    let sessions = body.terminals ?? [];
+    if (app.share?.session_ids?.length) sessions = sessions.filter((s) => app.share.session_ids.includes(s.session_id));
+    app.sessions = sessions;
     renderSessions();
+    if (app.open?.sessionId) refreshViewers();
+    else if (SHARE_TOKEN && sessions.length && !app.open) openSession(sessions[0].session_id).catch(() => {});
   } catch (error) {
     console.warn("list_terminals", error);
   }
@@ -322,6 +363,25 @@ function renderSessions() {
   }));
 }
 
+async function refreshViewers() {
+  const open = app.open;
+  if (!open || !app.connection?.welcome) return;
+  try {
+    const body = await app.connection.request({ type: "terminal_viewers", session_id: open.sessionId });
+    if (app.open === open) {
+      app.viewers = body.viewers ?? [];
+      schedulePaint();
+    }
+  } catch {}
+}
+
+function viewersText() {
+  const n = app.viewers.length;
+  if (!n) return "";
+  const shares = app.viewers.filter((v) => v.kind === "share").length;
+  return `👁 ${n}${shares ? ` (${shares} via link)` : ""}`;
+}
+
 function setStatus(text) {
   el.status.textContent = text;
 }
@@ -330,12 +390,14 @@ function updateControlBadge() {
   if (!app.open) { el.control.hidden = true; return; }
   el.control.hidden = false;
   el.control.dataset.writable = String(app.open.writable);
-  el.control.textContent = app.open.writable ? "in control" : "watching · click to take control";
+  const canTake = !SHARE_TOKEN || app.share?.role === "controller";
+  el.control.textContent = app.open.writable ? "in control" : canTake ? "watching · click to take control" : "watching";
 }
 
 el.control.onclick = async () => {
   if (!app.open || app.open.writable) return;
-  await claimControl(true);
+  // A Share may claim only what nobody holds; the owner may take.
+  await claimControl(!SHARE_TOKEN);
 };
 
 async function claimControl(force) {
@@ -390,6 +452,7 @@ async function openSession(sessionId, { surfaceId = null } = {}) {
   }
   open.streamId = accepted.stream_id;
   connection.streams.set(accepted.stream_id, (frame) => onStreamFrame(open, frame));
+  refreshViewers();
   el.screen.focus();
 }
 
@@ -459,6 +522,8 @@ function schedulePaint() {
     if (f.current_directory) parts.push(shortCwd(f.current_directory));
     parts.push(`${f.grid.columns}×${f.grid.rows}`);
     parts.push(open.writable ? "control" : "watching");
+    const eyes = viewersText();
+    if (eyes) parts.push(eyes);
     if (f.mouse_tracking) parts.push("mouse");
     setStatus(parts.join(" · "));
   });
@@ -601,5 +666,5 @@ el.forget.onclick = () => {
   showPairing(null);
 };
 
-if (app.device.token) connect();
+if (SHARE_TOKEN || app.device.token) connect();
 else showPairing(null);

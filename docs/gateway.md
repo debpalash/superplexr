@@ -76,6 +76,33 @@ unpaired browser refused, pairing, a shell started from the page,
 subscribing, typing and reading the echo out of protobuf frames, and an
 off-host origin refused.
 
+## Streams
+
+A stream is a Share with a link. `superplexr stream <session>` mints an
+Observer Share scoped to that one session (`--controller` for one that may
+claim control when nobody holds it) and prints
+`https://host:7373/#share=<token>`; the token lives after the hash, so it
+never reaches a server log, and the page never stores it.
+
+A viewer who opens the link is admitted at the handshake by the Share
+token instead of a device token, and the connection is then that Share and
+nothing else: every request must carry the same token or it is refused as
+`share_token_required` before it can be read with the owner's authority.
+The Share's own rules apply on top — an Observer may snapshot, subscribe,
+list, search and ask who is watching; a Controller may also type and claim;
+neither may reach devices, other sessions, or the owner's requests.
+Revoking the Share (`share-revoke`) ends its viewers at their next request
+and their live subscriptions at once.
+
+Presence is exact: each subscription registers itself on its terminal for
+as long as its task lives, so `terminal-viewers <session>` and the page's
+`👁` count show who is watching now, owner screens and links alike.
+
+`ci/stream-smoke.sh` walks it: a link minted on the host, a viewer admitted
+and painted, its limits (no keys, no token-less request, no owner request),
+presence seen by the owner, fifty viewers on one scrolling session with
+bytes per viewer measured, revocation ending the viewer.
+
 ## What it is not
 
 - Not a relay or a cloud: the device connects to the runtime directly. NAT
