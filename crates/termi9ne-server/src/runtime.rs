@@ -2408,6 +2408,33 @@ async fn handle_request_with_context(
             let fault = state.faults.lock().await.record_repro(fault_id, receipt)?;
             Ok(ResponseBody::FaultRecorded { fault })
         }
+        Request::ClassifyFault {
+            fault_id,
+            runs,
+            timeout_seconds,
+            isolated,
+        } => {
+            // Replays run without the store lock: each one is a real command.
+            let fault = state.faults.lock().await.get(fault_id)?;
+            let runs = u32::from(
+                runs.unwrap_or(DEFAULT_CLASSIFY_RUNS)
+                    .clamp(MIN_CLASSIFY_RUNS, MAX_CLASSIFY_RUNS),
+            );
+            let (classification, receipt) = classify_fault(
+                &fault,
+                runs,
+                timeout_seconds,
+                isolated,
+                &state.terminal_state_dir,
+            )
+            .await;
+            let fault = state
+                .faults
+                .lock()
+                .await
+                .record_classification(fault_id, classification, receipt)?;
+            Ok(ResponseBody::FaultRecorded { fault })
+        }
         Request::GuardFaults {
             limit,
             timeout_seconds,
@@ -4490,6 +4517,211 @@ const MAX_REPRO_TIMEOUT_SECONDS: u16 = 900;
 /// Replay a Fault's exact command in its recorded directory and report what
 /// happened. A replay that cannot run at all is recorded as an error, never as
 /// a pass: only a command that actually ran and succeeded clears a Fault.
+/// Replays in one classification sample when the caller names no count.
+///
+/// Five is enough to tell "always" from "sometimes" for the common case of a
+/// failure that shows up a good fraction of the time; a rarer one needs more,
+/// and the caller can ask, up to a ceiling that keeps one request bounded.
+const DEFAULT_CLASSIFY_RUNS: u8 = 5;
+const MIN_CLASSIFY_RUNS: u8 = 2;
+const MAX_CLASSIFY_RUNS: u8 = 25;
+
+/// Replay a Fault repeatedly and summarise how often it failed.
+///
+/// Returns the sample and the receipt that becomes the Fault's current
+/// evidence: a failing one if any replay failed, otherwise the last. The
+/// store sets `reproduced` from the sample's failure count, so a lucky pass
+/// inside a mixed sample can never close the Fault.
+async fn classify_fault(
+    fault: &termi9ne_protocol::FaultSummary,
+    runs: u32,
+    timeout_seconds: Option<u16>,
+    isolated: bool,
+    state_dir: &std::path::Path,
+) -> (
+    termi9ne_protocol::FaultClassification,
+    termi9ne_protocol::ReproReceipt,
+) {
+    let classified_at_unix_micros = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_micros() as u64)
+        .unwrap_or_default();
+    let timeout = Duration::from_secs(u64::from(
+        timeout_seconds
+            .unwrap_or(DEFAULT_REPRO_TIMEOUT_SECONDS)
+            .clamp(1, MAX_REPRO_TIMEOUT_SECONDS),
+    ));
+    let mut failures = 0;
+    let mut errors = 0;
+    let mut revision = None;
+    let mut failing = None;
+    let mut last = None;
+    for index in 0..runs {
+        let receipt = if isolated {
+            let fault = fault.clone();
+            let root = state_dir.join("fault-worktrees");
+            tokio::task::spawn_blocking(move || isolated_replay(&fault, timeout, &root, index))
+                .await
+                .unwrap_or_else(|error| replay_error(format!("replay task failed: {error}")))
+        } else {
+            reproduce_fault(fault, timeout_seconds).await
+        };
+        if receipt.error.is_some() {
+            errors += 1;
+        } else if receipt.reproduced {
+            failures += 1;
+            if failing.is_none() {
+                failing = Some(receipt.clone());
+            }
+        }
+        if revision.is_none() {
+            revision.clone_from(&receipt.revision);
+        }
+        last = Some(receipt);
+    }
+    let classification = termi9ne_protocol::FaultClassification {
+        classified_at_unix_micros,
+        runs,
+        failures,
+        errors,
+        verdict: termi9ne_protocol::FaultClassification::verdict_for(runs, failures, errors),
+        isolated,
+        revision,
+    };
+    let receipt = failing
+        .or(last)
+        .unwrap_or_else(|| replay_error("no replay ran".to_owned()));
+    (classification, receipt)
+}
+
+/// A receipt for a replay that never ran.
+fn replay_error(error: String) -> termi9ne_protocol::ReproReceipt {
+    termi9ne_protocol::ReproReceipt {
+        attempted_at_unix_micros: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_micros() as u64)
+            .unwrap_or_default(),
+        reproduced: false,
+        exit_code: None,
+        output: String::new(),
+        duration_ms: 0,
+        revision: None,
+        error: Some(error),
+    }
+}
+
+/// One replay in a fresh detached worktree of the Fault directory's
+/// repository, at its current HEAD, run from the same relative directory.
+///
+/// The worktree is removed afterwards whatever happened. A directory outside
+/// a repository cannot be isolated this way and yields an error receipt
+/// rather than a silent in-place run, so the sample says what it measured.
+fn isolated_replay(
+    fault: &termi9ne_protocol::FaultSummary,
+    timeout: Duration,
+    worktree_root: &std::path::Path,
+    index: u32,
+) -> termi9ne_protocol::ReproReceipt {
+    let attempted_at_unix_micros = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_micros() as u64)
+        .unwrap_or_default();
+    let repo_root = match git_output(&fault.cwd, &["rev-parse", "--show-toplevel"]) {
+        Some(root) => PathBuf::from(root),
+        None => {
+            return replay_error(format!(
+                "{} is not inside a git repository, so it cannot be isolated",
+                fault.cwd.display()
+            ));
+        }
+    };
+    let relative = fault
+        .cwd
+        .strip_prefix(&repo_root)
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
+    let worktree = worktree_root
+        .join(fault.fault_id.to_string())
+        .join(index.to_string());
+    if let Err(error) = std::fs::create_dir_all(worktree_root) {
+        return replay_error(format!("worktree root is unavailable: {error}"));
+    }
+    let added = StdCommand::new("git")
+        .args(["worktree", "add", "--detach", "--force"])
+        .arg(&worktree)
+        .arg("HEAD")
+        .current_dir(&repo_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output();
+    match added {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            return replay_error(format!(
+                "git worktree add failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Err(error) => return replay_error(format!("git is unavailable: {error}")),
+    }
+    let started = Instant::now();
+    let outcome = run_repro(&fault.command, &worktree.join(relative), timeout);
+    let duration_ms = started.elapsed().as_millis() as u64;
+    // Remove it even if the replay failed to start; a leftover worktree would
+    // pin the branch state and fill the disk.
+    let _ = StdCommand::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(&worktree)
+        .current_dir(&repo_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let _ = std::fs::remove_dir_all(&worktree);
+    match outcome {
+        Ok(ReproOutcome {
+            exit_code,
+            output,
+            revision,
+        }) => termi9ne_protocol::ReproReceipt {
+            attempted_at_unix_micros,
+            reproduced: exit_code != Some(0),
+            exit_code,
+            output: truncate_output(&output),
+            duration_ms,
+            revision,
+            error: None,
+        },
+        Err(error) => termi9ne_protocol::ReproReceipt {
+            attempted_at_unix_micros,
+            reproduced: false,
+            exit_code: None,
+            output: String::new(),
+            duration_ms,
+            revision: None,
+            error: Some(error),
+        },
+    }
+}
+
+fn git_output(directory: &std::path::Path, args: &[&str]) -> Option<String> {
+    let output = StdCommand::new("git")
+        .args(args)
+        .current_dir(directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
 /// Resolved Faults re-checked in one guard pass when the caller names no limit.
 ///
 /// Each check runs a real command, so a pass is deliberately a bounded slice of
@@ -5447,6 +5679,253 @@ mod tests {
 
         assert!(frame_tail(&test_frame(Vec::new())).is_empty());
         assert!(frame_tail(&test_frame(vec![row("  ")])).is_empty());
+    }
+
+    async fn report_for_classification(
+        state: &Arc<AppState>,
+        command: &str,
+        cwd: &std::path::Path,
+    ) -> termi9ne_protocol::FaultSummary {
+        match handle_request(
+            Request::ReportFault {
+                fault: termi9ne_protocol::FaultInput {
+                    kind: termi9ne_protocol::FaultKind::TestFailed,
+                    command: command.to_owned(),
+                    cwd: cwd.to_path_buf(),
+                    exit_code: Some(1),
+                    revision: None,
+                    summary: "sometimes".to_owned(),
+                    output: "failing".to_owned(),
+                    session_id: None,
+                    mission_id: None,
+                    run_id: None,
+                },
+            },
+            Uuid::new_v4(),
+            state,
+        )
+        .await
+        .expect("owner should report a Fault")
+        {
+            ResponseBody::FaultRecorded { fault } => fault,
+            body => panic!("unexpected report response: {body:?}"),
+        }
+    }
+
+    async fn classify(
+        state: &Arc<AppState>,
+        fault_id: termi9ne_core::FaultId,
+        runs: u8,
+        isolated: bool,
+    ) -> termi9ne_protocol::FaultClassification {
+        match handle_request(
+            Request::ClassifyFault {
+                fault_id,
+                runs: Some(runs),
+                timeout_seconds: Some(30),
+                isolated,
+            },
+            Uuid::new_v4(),
+            state,
+        )
+        .await
+        .expect("owner should classify a Fault")
+        {
+            ResponseBody::FaultRecorded { fault } => fault
+                .classification
+                .expect("classification should be recorded"),
+            body => panic!("unexpected classify response: {body:?}"),
+        }
+    }
+
+    /// A failure that happens some of the time is told apart from one that
+    /// is always there, and neither a lucky pass nor a sample can close it.
+    #[tokio::test]
+    async fn classification_tells_flaky_from_real_and_flaky_stays_open() {
+        let root = std::env::temp_dir().join(format!("termi9ne-fault-classify-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("test root should be creatable");
+        let state = Arc::new(AppState {
+            store: Mutex::new(
+                MissionStore::open(root.join("missions"))
+                    .await
+                    .expect("mission store should open"),
+            ),
+            scheduler_policies: Mutex::new(
+                SchedulerPolicyStore::open(root.join("scheduler-policies.json"))
+                    .expect("scheduler policy store should open"),
+            ),
+            shares: Mutex::new(
+                ShareStore::open(root.join("shares.json")).expect("share store should open"),
+            ),
+            run_checkouts: Mutex::new(
+                RunCheckoutStore::open(root.join("run-checkouts.json"), root.join("run-checkouts"))
+                    .expect("Run checkout store should open"),
+            ),
+            checkout_gate: Mutex::new(()),
+            agent_launch_gate: Mutex::new(()),
+            terminals: RwLock::new(HashMap::new()),
+            terminal_state_dir: root.clone(),
+            agent_socket_path: root.join("agent.sock"),
+            mission_events: broadcast::channel(256).0,
+            activity_events: broadcast::channel(512).0,
+            terminal_events: broadcast::channel(256).0,
+            session_group_events: broadcast::channel(256).0,
+            share_revocations: broadcast::channel(64).0,
+            started_at: Instant::now(),
+            open_connections: AtomicUsize::new(0),
+            agent_connections: AtomicUsize::new(0),
+            active_waits: AtomicUsize::new(0),
+            plugins: PluginPublisher::disabled(),
+            provider_status: Mutex::new(ProviderStatusStore::transient()),
+            run_evidence: Mutex::new(RunEvidenceStore::transient()),
+            faults: Mutex::new(FaultStore::transient()),
+            session_groups: Mutex::new(
+                SessionGroupStore::open(root.join("session-groups.json"))
+                    .expect("Session group store should open"),
+            ),
+        });
+
+        // A counter file makes the command fail on odd runs only.
+        let flaky = report_for_classification(
+            &state,
+            "c=$(cat n 2>/dev/null || echo 0); c=$((c+1)); echo $c > n; test $((c % 2)) -eq 0",
+            &root,
+        )
+        .await;
+        let sample = classify(&state, flaky.fault_id, 4, false).await;
+        assert_eq!(sample.verdict, termi9ne_protocol::FaultVerdict::Flaky);
+        assert_eq!((sample.runs, sample.failures, sample.errors), (4, 2, 0));
+        assert!(!sample.isolated);
+        // The last replay passed, and that must not be enough.
+        assert!(matches!(
+            handle_request(
+                Request::ResolveFault {
+                    fault_id: flaky.fault_id,
+                    note: "passed once".to_owned(),
+                },
+                Uuid::new_v4(),
+                &state,
+            )
+            .await,
+            Err(RequestError::Fault(fault_store::FaultError::Unproven(_)))
+        ));
+
+        let real = report_for_classification(&state, "false", &root).await;
+        let sample = classify(&state, real.fault_id, 3, false).await;
+        assert_eq!(sample.verdict, termi9ne_protocol::FaultVerdict::Real);
+        assert_eq!((sample.runs, sample.failures), (3, 3));
+
+        // Outside a repository an isolated run cannot happen, and says so
+        // rather than quietly running in place.
+        let sample = classify(&state, real.fault_id, 2, true).await;
+        assert_eq!(sample.verdict, termi9ne_protocol::FaultVerdict::Inconclusive);
+        assert_eq!(sample.errors, 2);
+        assert!(sample.isolated);
+
+        std::fs::remove_dir_all(&root).expect("test root should be removable");
+    }
+
+    /// Isolated replays run in fresh worktrees of the repository and leave
+    /// none behind.
+    #[tokio::test]
+    async fn isolated_classification_uses_fresh_worktrees_and_cleans_up() {
+        let root = std::env::temp_dir().join(format!("termi9ne-fault-isolated-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("test root should be creatable");
+        let state = Arc::new(AppState {
+            store: Mutex::new(
+                MissionStore::open(root.join("missions"))
+                    .await
+                    .expect("mission store should open"),
+            ),
+            scheduler_policies: Mutex::new(
+                SchedulerPolicyStore::open(root.join("scheduler-policies.json"))
+                    .expect("scheduler policy store should open"),
+            ),
+            shares: Mutex::new(
+                ShareStore::open(root.join("shares.json")).expect("share store should open"),
+            ),
+            run_checkouts: Mutex::new(
+                RunCheckoutStore::open(root.join("run-checkouts.json"), root.join("run-checkouts"))
+                    .expect("Run checkout store should open"),
+            ),
+            checkout_gate: Mutex::new(()),
+            agent_launch_gate: Mutex::new(()),
+            terminals: RwLock::new(HashMap::new()),
+            terminal_state_dir: root.clone(),
+            agent_socket_path: root.join("agent.sock"),
+            mission_events: broadcast::channel(256).0,
+            activity_events: broadcast::channel(512).0,
+            terminal_events: broadcast::channel(256).0,
+            session_group_events: broadcast::channel(256).0,
+            share_revocations: broadcast::channel(64).0,
+            started_at: Instant::now(),
+            open_connections: AtomicUsize::new(0),
+            agent_connections: AtomicUsize::new(0),
+            active_waits: AtomicUsize::new(0),
+            plugins: PluginPublisher::disabled(),
+            provider_status: Mutex::new(ProviderStatusStore::transient()),
+            run_evidence: Mutex::new(RunEvidenceStore::transient()),
+            faults: Mutex::new(FaultStore::transient()),
+            session_groups: Mutex::new(
+                SessionGroupStore::open(root.join("session-groups.json"))
+                    .expect("Session group store should open"),
+            ),
+        });
+
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).expect("repo dir");
+        let git = |args: &[&str]| {
+            let status = StdCommand::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .expect("git should run");
+            assert!(status.success(), "git {args:?} should succeed");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(repo.join("probe.sh"), "exit 1\n").expect("probe");
+        git(&["add", "probe.sh"]);
+        git(&[
+            "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+            "commit", "-q", "-m", "probe",
+        ]);
+        // An untracked file that only exists in place. The command needs it,
+        // so it passes in place and fails in a fresh worktree: the difference
+        // isolation makes, made observable.
+        std::fs::write(repo.join("only-here"), "x").expect("untracked");
+
+        let fault =
+            report_for_classification(&state, "test -f probe.sh && test -f only-here", &repo)
+                .await;
+        let sample = classify(&state, fault.fault_id, 3, true).await;
+        assert!(sample.isolated);
+        assert_eq!(sample.verdict, termi9ne_protocol::FaultVerdict::Real);
+        assert_eq!((sample.runs, sample.failures, sample.errors), (3, 3, 0));
+        assert!(sample.revision.is_some(), "the worktree's revision is recorded");
+
+        let listed = StdCommand::new("git")
+            .args(["worktree", "list", "--porcelain"])
+            .current_dir(&repo)
+            .output()
+            .expect("git should run");
+        let worktrees = String::from_utf8_lossy(&listed.stdout)
+            .lines()
+            .filter(|line| line.starts_with("worktree "))
+            .count();
+        assert_eq!(worktrees, 1, "every replay worktree must be removed");
+        let leftovers = std::fs::read_dir(root.join("fault-worktrees").join(fault.fault_id.to_string()))
+            .map(|entries| entries.count())
+            .unwrap_or(0);
+        assert_eq!(leftovers, 0, "no replay directory may be left behind");
+
+        // In place, the untracked file is visible and the command passes.
+        let sample = classify(&state, fault.fault_id, 2, false).await;
+        assert_eq!(sample.verdict, termi9ne_protocol::FaultVerdict::Passing);
+
+        std::fs::remove_dir_all(&root).expect("test root should be removable");
     }
 
     /// A Fault that was proven fixed must not be able to come back unnoticed.

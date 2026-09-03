@@ -65,6 +65,8 @@ const REPRODUCE_FAULT_TIMEOUT: Duration = Duration::from_secs(960);
 /// The daemon's own default guard batch size, used only to size the wait when
 /// the caller names no limit. The daemon remains the authority on the batch.
 const DEFAULT_GUARD_LIMIT_HINT: u16 = 20;
+/// The daemon's default classification sample size, used only to size the wait.
+const DEFAULT_CLASSIFY_RUNS_HINT: u8 = 5;
 
 /// Headroom above a deadline the daemon has already been told to honour.
 ///
@@ -82,6 +84,9 @@ pub fn request_timeout(request: &Request) -> Duration {
     match request {
         // Replay runs a real command; the daemon caps it at 900 seconds.
         Request::ReproduceFault { .. } => REPRODUCE_FAULT_TIMEOUT,
+        // A sample is several such replays in series.
+        Request::ClassifyFault { runs, .. } => REPRODUCE_FAULT_TIMEOUT
+            .saturating_mul(u32::from(runs.unwrap_or(DEFAULT_CLASSIFY_RUNS_HINT)).max(1)),
         // A guard pass is many such replays in series, so it needs room for
         // all of them rather than for one.
         Request::GuardFaults { limit, .. } => REPRODUCE_FAULT_TIMEOUT
@@ -1079,6 +1084,25 @@ impl ControlClient {
 
     /// Replay a Fault's command and attach the receipt. This runs the recorded
     /// command, so it may take as long as that command takes.
+    /// Replay a Fault several times and record how often it fails.
+    pub fn classify_fault(
+        &self,
+        fault_id: FaultId,
+        runs: Option<u8>,
+        timeout_seconds: Option<u16>,
+        isolated: bool,
+    ) -> Result<FaultSummary, ClientError> {
+        match self.request(Request::ClassifyFault {
+            fault_id,
+            runs,
+            timeout_seconds,
+            isolated,
+        })? {
+            ResponseBody::FaultRecorded { fault } => Ok(fault),
+            body => Err(ClientError::UnexpectedResponse(Box::new(body))),
+        }
+    }
+
     /// Re-run the replay of resolved Faults and reopen any that fail again.
     ///
     /// Returns every Fault checked, and those that regressed.

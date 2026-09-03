@@ -17,7 +17,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use termi9ne_core::{FaultId, MissionId, RunId, SessionId};
-use termi9ne_protocol::{
+use termi9ne_protocol::{FaultClassification, 
     FaultInput, FaultSource, FaultState, FaultSummary, ReproReceipt,
 };
 use thiserror::Error;
@@ -160,6 +160,7 @@ impl FaultStore {
             fix_run_id: None,
             proof: None,
             regressions: 0,
+            classification: None,
         };
         validate_summary(&fault)?;
         if self.faults.len() >= MAX_FAULTS {
@@ -269,6 +270,37 @@ impl FaultStore {
             note,
             at_unix_micros,
         };
+        let updated = fault.clone();
+        self.persist()?;
+        Ok(updated)
+    }
+
+    /// Attach a repeated-replay sample to a Fault.
+    ///
+    /// The sample also becomes the Fault's current replay evidence, with
+    /// `reproduced` set if it failed at all. That is deliberate: a Fault that
+    /// fails one time in five must not become resolvable because the fifth
+    /// replay happened to pass. Only a sample with no failures counts as a
+    /// passing replay.
+    pub(crate) fn record_classification(
+        &mut self,
+        fault_id: FaultId,
+        classification: FaultClassification,
+        receipt: ReproReceipt,
+    ) -> Result<FaultSummary, FaultError> {
+        let fault = self
+            .faults
+            .get_mut(&fault_id.to_string())
+            .ok_or(FaultError::Unknown(fault_id))?;
+        fault.repro_attempts = fault
+            .repro_attempts
+            .saturating_add(classification.runs);
+        fault.repro = Some(ReproReceipt {
+            reproduced: classification.failures > 0,
+            output: truncate_output(&receipt.output),
+            ..receipt
+        });
+        fault.classification = Some(classification);
         let updated = fault.clone();
         self.persist()?;
         Ok(updated)
@@ -505,7 +537,7 @@ pub(crate) fn repro_directory(cwd: &Path) -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use termi9ne_protocol::FaultKind;
+    use termi9ne_protocol::{FaultKind, FaultVerdict};
 
     fn input(command: &str) -> FaultInput {
         FaultInput {
@@ -815,6 +847,57 @@ mod tests {
             store.record_guard_replay(open.fault_id, receipt(true)),
             Err(FaultError::NotResolved(_))
         ));
+    }
+
+    /// A failure that happens some of the time must not become resolvable
+    /// because one replay happened to pass.
+    #[test]
+    fn a_flaky_fault_cannot_be_resolved_on_a_lucky_pass() {
+        let mut store = FaultStore::transient();
+        let fault = store
+            .report(input("cargo test flaky"), FaultSource::OwnerHook)
+            .expect("fault");
+        let sample = |runs, failures, errors| FaultClassification {
+            classified_at_unix_micros: 9,
+            runs,
+            failures,
+            errors,
+            verdict: FaultClassification::verdict_for(runs, failures, errors),
+            isolated: false,
+            revision: None,
+        };
+
+        // Two failures in five: flaky, and the last replay passing is not proof.
+        let flaky = store
+            .record_classification(fault.fault_id, sample(5, 2, 0), receipt(false))
+            .expect("sample recorded");
+        assert_eq!(flaky.classification.as_ref().map(|c| c.verdict), Some(FaultVerdict::Flaky));
+        assert_eq!(flaky.repro_attempts, 5);
+        assert!(!flaky.repro_passes(), "a mixed sample is not a passing replay");
+        assert!(matches!(
+            store.resolve(fault.fault_id, "it passed once".to_owned()),
+            Err(FaultError::Unproven(_))
+        ));
+
+        // Five failures in five: real.
+        let real = store
+            .record_classification(fault.fault_id, sample(5, 5, 0), receipt(true))
+            .expect("sample recorded");
+        assert_eq!(real.classification.as_ref().map(|c| c.verdict), Some(FaultVerdict::Real));
+
+        // Five passes in five is the only sample that permits resolution.
+        let passing = store
+            .record_classification(fault.fault_id, sample(5, 0, 0), receipt(false))
+            .expect("sample recorded");
+        assert_eq!(passing.classification.as_ref().map(|c| c.verdict), Some(FaultVerdict::Passing));
+        assert!(passing.repro_passes());
+        store
+            .resolve(fault.fault_id, "passes consistently".to_owned())
+            .expect("a consistently passing Fault resolves");
+
+        // Replays that never ran say nothing.
+        assert_eq!(FaultClassification::verdict_for(5, 0, 5), FaultVerdict::Inconclusive);
+        assert_eq!(FaultClassification::verdict_for(5, 3, 2), FaultVerdict::Real);
     }
 
     #[test]

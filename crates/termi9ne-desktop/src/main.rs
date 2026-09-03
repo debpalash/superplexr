@@ -7026,7 +7026,7 @@ fn create_surfaces(window: &mut Window, cx: &mut App, control: &ControlClient) -
         .collect::<Vec<_>>();
     sessions.sort_by_key(|(session_id, _, _, _, _, _, _)| session_id.to_string());
     sessions.truncate(64);
-    if sessions.is_empty() && !control.is_shared() {
+    if needs_fresh_shell(sessions.iter().map(|(_, status, ..)| *status)) && !control.is_shared() {
         let session = spawn_shell(control);
         sessions.push((
             session.id(),
@@ -7070,6 +7070,20 @@ fn create_surfaces(window: &mut Window, cx: &mut App, control: &ControlClient) -
             },
         )
         .collect()
+}
+
+/// Whether launching should open a shell.
+///
+/// Opening only when there were no sessions at all meant a daemon restart,
+/// which ends every process, landed the person on a sidebar of finished rows
+/// with nothing to type into. A launch with nothing running gets a prompt,
+/// the way any terminal does; finished sessions stay listed beside it.
+fn needs_fresh_shell(
+    statuses: impl IntoIterator<Item = termi9ne_protocol::TerminalSessionStatus>,
+) -> bool {
+    !statuses
+        .into_iter()
+        .any(|status| status == termi9ne_protocol::TerminalSessionStatus::Running)
 }
 
 #[cfg(not(test))]
@@ -7357,6 +7371,16 @@ fn read_share_token(path: &Path) -> Result<String, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A launch with nothing running must open a shell, even when finished
+    /// sessions are listed: after a daemon restart every row is finished.
+    #[test]
+    fn a_launch_with_nothing_running_opens_a_shell() {
+        use termi9ne_protocol::TerminalSessionStatus::{Exited, Failed, Running};
+        assert!(needs_fresh_shell([]));
+        assert!(needs_fresh_shell([Exited, Exited, Failed]));
+        assert!(!needs_fresh_shell([Exited, Running]));
+    }
     use gpui::{AnyWindowHandle, TestAppContext};
 
     #[test]
@@ -7640,6 +7664,7 @@ mod tests {
             fix_run_id: None,
             proof: None,
             regressions: 0,
+            classification: None,
         };
         let closed = FaultSummary {
             fault_id: termi9ne_core::FaultId::new(),

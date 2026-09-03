@@ -596,6 +596,25 @@ enum CliCommand {
         #[arg(long)]
         timeout_seconds: Option<u16>,
     },
+    /// Replay a Fault several times and record how often it fails.
+    ///
+    /// One replay gives one verdict; a failure that happens one time in five
+    /// looks fixed four times out of five. The sample says whether it is
+    /// always there, sometimes there, or gone, and a Fault that is sometimes
+    /// there cannot be resolved on a lucky pass.
+    FaultClassify {
+        fault_id: FaultId,
+        /// Replays to attempt (2-25, default 5).
+        #[arg(long)]
+        runs: Option<u8>,
+        #[arg(long)]
+        timeout_seconds: Option<u16>,
+        /// Run each replay in a fresh worktree of the directory's revision.
+        /// Removes state carried between runs, but also untracked files and
+        /// build caches.
+        #[arg(long)]
+        isolated: bool,
+    },
     /// Re-run the replay of resolved Faults and reopen any that fail again.
     ///
     /// Runs their recorded commands. This is what keeps a resolution true: a
@@ -1360,6 +1379,26 @@ fn fault_brief(fault: &termi9ne_protocol::FaultSummary) -> String {
         "replay:  {replay} ({} attempts)",
         fault.repro_attempts
     );
+    if let Some(sample) = &fault.classification {
+        let verdict = match sample.verdict {
+            termi9ne_protocol::FaultVerdict::Real => "real",
+            termi9ne_protocol::FaultVerdict::Flaky => "flaky",
+            termi9ne_protocol::FaultVerdict::Passing => "passing",
+            termi9ne_protocol::FaultVerdict::Inconclusive => "inconclusive",
+        };
+        let _ = writeln!(
+            brief,
+            "sample:  {verdict} · {}/{} failed{}{}",
+            sample.failures,
+            sample.runs,
+            if sample.errors > 0 {
+                format!(" · {} could not run", sample.errors)
+            } else {
+                String::new()
+            },
+            if sample.isolated { " · isolated" } else { "" }
+        );
+    }
     let _ = writeln!(brief, "\n--- failing output ---");
     brief.push_str(fault.output.trim_end());
     brief.push('\n');
@@ -2532,6 +2571,17 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
             fault_id,
             timeout_seconds,
         },
+        CliCommand::FaultClassify {
+            fault_id,
+            runs,
+            timeout_seconds,
+            isolated,
+        } => Request::ClassifyFault {
+            fault_id,
+            runs,
+            timeout_seconds,
+            isolated,
+        },
         CliCommand::FaultGuard {
             limit,
             timeout_seconds,
@@ -3085,6 +3135,7 @@ mod tests {
             fix_run_id: None,
             proof: None,
             regressions: 0,
+            classification: None,
         };
 
         let never = fault_brief(&base);

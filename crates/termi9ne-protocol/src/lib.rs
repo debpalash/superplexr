@@ -278,6 +278,21 @@ pub enum Request {
         fault_id: FaultId,
         note: String,
     },
+    /// Replay a Fault several times and record how often it fails, so a
+    /// failure that is always there can be told from one that only sometimes
+    /// is. This executes the recorded command repeatedly.
+    ClassifyFault {
+        fault_id: FaultId,
+        /// Replays to attempt. Bounded by the daemon.
+        #[serde(default)]
+        runs: Option<u8>,
+        /// Abort each replay after this many seconds.
+        #[serde(default)]
+        timeout_seconds: Option<u16>,
+        /// Run each replay in a fresh worktree of the directory's revision.
+        #[serde(default)]
+        isolated: bool,
+    },
     /// Re-run the replay of Faults that were resolved, and reopen any that
     /// fail again. This executes their recorded commands.
     ///
@@ -852,6 +867,64 @@ pub struct ReproReceipt {
     pub error: Option<String>,
 }
 
+/// What repeated replays of a Fault showed.
+///
+/// One replay gives one verdict, and a failure that happens one time in five
+/// looks fixed four times out of five. Recording the distribution is what
+/// separates a failure that is always there from one that only sometimes is.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FaultClassification {
+    pub classified_at_unix_micros: u64,
+    /// Replays attempted.
+    pub runs: u32,
+    /// Replays that failed the way the Fault does.
+    pub failures: u32,
+    /// Replays that could not run at all; they count as neither.
+    #[serde(default)]
+    pub errors: u32,
+    pub verdict: FaultVerdict,
+    /// True when each replay ran in its own fresh worktree of the revision
+    /// rather than in the recorded directory. Isolation removes state carried
+    /// between runs, but also untracked files and build caches, so it changes
+    /// what is being measured; the record says which it was.
+    pub isolated: bool,
+    /// Revision the replays ran at, when one is known.
+    #[serde(default)]
+    pub revision: Option<String>,
+}
+
+/// The shape of a Fault's failures across a sample of replays.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FaultVerdict {
+    /// Failed every time it ran.
+    Real,
+    /// Failed some of the time: nondeterministic, or dependent on state.
+    Flaky,
+    /// Never failed in the sample.
+    Passing,
+    /// Too few replays ran to say.
+    Inconclusive,
+}
+
+impl FaultClassification {
+    /// Classify a sample. Errors are excluded from the ratio: a replay that
+    /// never ran says nothing about the failure.
+    #[must_use]
+    pub fn verdict_for(runs: u32, failures: u32, errors: u32) -> FaultVerdict {
+        let ran = runs.saturating_sub(errors);
+        if ran == 0 {
+            FaultVerdict::Inconclusive
+        } else if failures == 0 {
+            FaultVerdict::Passing
+        } else if failures >= ran {
+            FaultVerdict::Real
+        } else {
+            FaultVerdict::Flaky
+        }
+    }
+}
+
 /// Lifecycle of a Fault. A Fault leaves `Open` only through evidence
 /// (`Resolved`, which requires a passing repro) or an explicit owner
 /// `Dismissed` note.
@@ -904,6 +977,9 @@ pub struct FaultSummary {
     /// happened once, and only a count distinguishes them.
     #[serde(default)]
     pub regressions: u32,
+    /// The most recent repeated-replay sample, when one has run.
+    #[serde(default)]
+    pub classification: Option<FaultClassification>,
 }
 
 impl FaultSummary {

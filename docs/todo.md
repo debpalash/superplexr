@@ -27,9 +27,11 @@ breaks. A Fault closes only when a replay actually passes.
 Remaining:
 
 - [ ] **Bisect a Fault across Candidates** — find which Run introduced it.
-      Needs Candidate patch history, not the Fault store.
-- [ ] **Flaky vs real** — re-run N× in isolated worktrees, classify, record
-      the distribution rather than one verdict. **Next.**
+      Needs Candidate patch history, not the Fault store. **Next.**
+- [x] **Flaky vs real** — `fault classify` replays N× (optionally each in a
+      fresh worktree) and records runs/failures/errors with a verdict of
+      real, flaky, passing or inconclusive; a flaky Fault cannot be resolved
+      on a lucky pass; verified end to end including worktree cleanup
 - [x] **Fault → Run** — `fault fix` plans a Run with the Fault as its
       objective, links the two, and launches the configured engine driver;
       verified that a Run claiming success still cannot close the Fault
