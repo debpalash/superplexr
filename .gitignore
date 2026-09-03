@@ -2,6 +2,7 @@
 /dist/
 /.superplexr/
 /.superplexr-dev/
+/.termi9ne-dev/
 /.DS_Store
 *.swp
 *.swo
