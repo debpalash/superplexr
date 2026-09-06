@@ -73,6 +73,13 @@ trait FaultBackend {
         fault_id: FaultId,
         timeout_seconds: Option<u16>,
     ) -> Result<FaultSummary, String>;
+    fn classify(
+        &self,
+        fault_id: FaultId,
+        runs: Option<u8>,
+        timeout_seconds: Option<u16>,
+        isolated: bool,
+    ) -> Result<FaultSummary, String>;
     fn guard(
         &self,
         limit: Option<u16>,
@@ -120,6 +127,18 @@ impl FaultBackend for ControlBackend {
     ) -> Result<FaultSummary, String> {
         self.client
             .reproduce_fault(fault_id, timeout_seconds)
+            .map_err(|error| error.to_string())
+    }
+
+    fn classify(
+        &self,
+        fault_id: FaultId,
+        runs: Option<u8>,
+        timeout_seconds: Option<u16>,
+        isolated: bool,
+    ) -> Result<FaultSummary, String> {
+        self.client
+            .classify_fault(fault_id, runs, timeout_seconds, isolated)
             .map_err(|error| error.to_string())
     }
 
@@ -392,6 +411,20 @@ fn tool_definitions() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "fault_classify",
+            "description": "Replay a Fault several times and record how often it fails: real (always), flaky (sometimes) or passing (never). Runs the recorded command repeatedly. A flaky Fault cannot be resolved on a single passing replay, so use this before fault_resolve when a failure is intermittent.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "fault_id": {"type": "string"},
+                    "runs": {"type": "integer", "minimum": 2, "maximum": 25},
+                    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 900},
+                    "isolated": {"type": "boolean", "description": "Run each replay in a fresh git worktree. Removes state between runs, but also untracked files and build caches."}
+                },
+                "required": ["fault_id"]
+            }
+        }),
+        json!({
             "name": "fault_guard",
             "description": "Re-run the replay of Faults that were previously resolved and reopen any that fail again. Runs their recorded commands. Use this after changing code to check that nothing you fixed has come back.",
             "inputSchema": {
@@ -543,6 +576,29 @@ fn run_tool(backend: &impl FaultBackend, name: &str, arguments: &Value) -> Resul
             Ok(json!({
                 "fault": fault,
                 "still_fails": !fault.repro_passes(),
+            }))
+        }
+        "fault_classify" => {
+            let fault_id = fault_id_argument(arguments)?;
+            let runs = arguments
+                .get("runs")
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok());
+            let timeout_seconds = arguments
+                .get("timeout_seconds")
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok());
+            let isolated = arguments
+                .get("isolated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let fault = backend.classify(fault_id, runs, timeout_seconds, isolated)?;
+            let sample = fault.classification.clone();
+            Ok(json!({
+                "fault": fault,
+                "verdict": sample.as_ref().map(|s| s.verdict),
+                "runs": sample.as_ref().map(|s| s.runs),
+                "failures": sample.as_ref().map(|s| s.failures),
             }))
         }
         "fault_guard" => {
@@ -720,6 +776,7 @@ mod tests {
             fix_run_id: None,
             proof: None,
             regressions: 0,
+            classification: None,
         }
     }
 
@@ -753,6 +810,30 @@ mod tests {
                 .find(|fault| fault.fault_id == fault_id)
                 .cloned()
                 .ok_or_else(|| format!("no Fault {fault_id}"))
+        }
+
+        fn classify(
+            &self,
+            fault_id: FaultId,
+            runs: Option<u8>,
+            timeout_seconds: Option<u16>,
+            isolated: bool,
+        ) -> Result<FaultSummary, String> {
+            self.calls
+                .borrow_mut()
+                .push(format!("classify:{runs:?}:{timeout_seconds:?}:{isolated}"));
+            let mut fault = self.get(fault_id)?;
+            let runs = u32::from(runs.unwrap_or(5));
+            fault.classification = Some(ultraplexr_protocol::FaultClassification {
+                classified_at_unix_micros: 4,
+                runs,
+                failures: 2,
+                errors: 0,
+                verdict: ultraplexr_protocol::FaultVerdict::Flaky,
+                isolated,
+                revision: None,
+            });
+            Ok(fault)
         }
 
         fn guard(
@@ -853,6 +934,43 @@ mod tests {
             .to_owned()
     }
 
+    /// The classify tool returns the distribution, not a single verdict.
+    #[test]
+    fn the_classify_tool_reports_the_sample() {
+        let open = sample(true);
+        let backend = FakeBackend {
+            faults: vec![open.clone()],
+            ..FakeBackend::default()
+        };
+        let line = json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {
+                "name": "fault_classify",
+                "arguments": {"fault_id": open.fault_id.to_string(), "runs": 4, "isolated": true}
+            }
+        })
+        .to_string();
+        let response: Value =
+            serde_json::from_str(&handle_line(&backend, &line).expect("response")).unwrap();
+        let payload: Value = serde_json::from_str(
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .expect("tool result text"),
+        )
+        .expect("tool result should be JSON");
+        assert_eq!(payload["verdict"], json!("flaky"));
+        assert_eq!(payload["runs"], json!(4));
+        assert_eq!(payload["failures"], json!(2));
+        assert_eq!(payload["fault"]["classification"]["isolated"], json!(true));
+        assert_eq!(
+            backend.calls.borrow().as_slice(),
+            ["classify:Some(4):None:true", "get"],
+            "the tool must pass the caller's bounds through"
+        );
+    }
+
     /// The guard tool reports what came back, so an agent can act on it.
     #[test]
     fn the_guard_tool_reports_which_faults_regressed() {
@@ -918,6 +1036,7 @@ mod tests {
                 "fault_list",
                 "fault_show",
                 "fault_repro",
+                "fault_classify",
                 "fault_guard",
                 "fault_resolve",
                 "fault_dismiss",

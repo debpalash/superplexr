@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<title>ultraplexr</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#161b22">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="ultraplexr">
+<link rel="apple-touch-icon" href="/icon.svg">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23161b22'/%3E%3Cpath d='M4 5l3 3-3 3M8 11h4' stroke='%2358d3a3' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="bar">
+  <span class="brand">ultraplexr</span>
+  <span id="link" class="link" data-state="connecting">connecting</span>
+  <span class="grow"></span>
+  <div id="control" class="control" hidden></div>
+  <button id="notify" class="button quiet" hidden title="be told here when a Fault opens, an approval waits, or a Run finishes">🔔 notify</button>
+  <button id="replay-toggle" class="button quiet" hidden title="play this session's recording">▶ replay</button>
+  <button id="new-shell" class="button" hidden>new shell</button>
+  <button id="forget" class="button quiet" hidden title="forget this device's pairing">forget</button>
+</header>
+
+<section id="pair" class="pair" hidden>
+  <form id="pair-form">
+    <p class="lede">Pair this browser with the runtime.</p>
+    <p class="hint">On the machine that runs ultraplexr: <code>ultraplexr device-pair --label browser</code>, then type the code it shows.</p>
+    <label>Pairing code <input id="pair-code" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="9" placeholder="XXXX-XXXX" required></label>
+    <button class="button" type="submit">pair</button>
+    <p id="pair-error" class="error" hidden></p>
+  </form>
+</section>
+
+<main id="main" class="main" hidden>
+  <nav id="sessions" class="sessions" aria-label="sessions"></nav>
+  <section class="stage">
+    <canvas id="screen" tabindex="0" aria-label="terminal"></canvas>
+    <textarea id="soft" class="soft" aria-label="keyboard" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+    <div id="keybar" class="keybar" hidden>
+      <button data-key="escape">esc</button><button data-key="tab">tab</button><button data-mod="control">ctrl</button><button data-mod="alt">alt</button>
+      <button data-key="up">↑</button><button data-key="down">↓</button><button data-key="left">←</button><button data-key="right">→</button>
+      <button data-key="c" data-ctrl="1">^C</button><button data-key="d" data-ctrl="1">^D</button><button data-key="-">-</button><button data-key="/">/</button><button data-key="|">|</button>
+    </div>
+    <div id="empty" class="empty">pick a session, or start a shell</div>
+    <div id="replay" class="replay" hidden></div>
+    <div id="status" class="status"></div>
+  </section>
+</main>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

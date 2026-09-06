@@ -127,7 +127,11 @@ message FullFrameV1 {
 
 message RowReplacement {
   uint32 visible_index = 1;
+  // The replaced cells. With `span` set they cover start_column.. rather
+  // than the whole row; `wrapped` on the row still applies to the whole row.
   Row row = 2;
+  uint32 start_column = 3;
+  bool span = 4;
 }
 
 message FrameDeltaV1 {

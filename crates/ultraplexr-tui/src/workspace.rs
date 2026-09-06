@@ -73,6 +73,7 @@ pub struct Workspace {
 impl Workspace {
     /// Local-only admission of a worker-prepared observing pane. Return the old
     /// or unused pane to its worker for cancellation/destruction off the UI.
+    #[allow(clippy::result_large_err, reason = "callers match on the pane")]
     pub(crate) fn install_prepared(
         &mut self,
         pane: Pane,

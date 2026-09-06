@@ -49,10 +49,11 @@ async fn cancelling_a_partial_search_frame_shuts_down_the_shared_socket() {
     let (_, write) = tokio::net::UnixStream::from_std(server)
         .expect("async socket")
         .into_split();
+    let write: Box<dyn tokio::io::AsyncWrite + Unpin + Send> = Box::new(write);
     let wire = Arc::new(Mutex::new(AsyncWireWriter::new(write)));
     let writer = Writer {
         wire: wire.clone(),
-        socket,
+        socket: Some(socket),
         stream_id: 1,
         access: &access,
     };
@@ -93,10 +94,11 @@ async fn search_writer_rechecks_revocation_after_waiting_for_the_writer() {
     let (_, write) = tokio::net::UnixStream::from_std(server)
         .expect("async socket")
         .into_split();
+    let write: Box<dyn tokio::io::AsyncWrite + Unpin + Send> = Box::new(write);
     let wire = Arc::new(Mutex::new(AsyncWireWriter::new(write)));
     let writer = Writer {
         wire: wire.clone(),
-        socket,
+        socket: Some(socket),
         stream_id: 1,
         access: &access,
     };

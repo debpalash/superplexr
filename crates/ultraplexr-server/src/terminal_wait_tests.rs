@@ -29,6 +29,7 @@ async fn exit_wait_awaits_the_authoritative_projection_after_native_exit() {
     let frame = handle.snapshot().expect("initial frame");
     let record = TerminalRecord {
         handle: Some(handle.clone()),
+        viewers: Arc::new(std::sync::Mutex::new(Vec::new())),
         projection: Arc::new(RwLock::new(TerminalProjection {
             summary: TerminalSessionSummary {
                 session_id: id,
@@ -46,6 +47,9 @@ async fn exit_wait_awaits_the_authoritative_projection_after_native_exit() {
                 controller_surface_id: None,
                 controller_share_id: None,
                 control_epoch: 0,
+                control_offer: None,
+                control_requests: Vec::new(),
+                cwd: None,
             },
             frame: Some(frame),
             final_event: None,

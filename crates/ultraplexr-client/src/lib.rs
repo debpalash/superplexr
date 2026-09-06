@@ -17,9 +17,9 @@ pub use metadata::{
 mod receive_queue;
 #[cfg(test)]
 mod receive_wire_tests;
+mod terminal_input;
 #[cfg(test)]
 mod verification_wire_tests;
-mod terminal_input;
 pub use terminal_input::{TerminalInput, TerminalInputLease};
 #[cfg(test)]
 mod input_writer_tests;
@@ -29,6 +29,8 @@ pub use search_stream::{SearchCancel, SearchStream};
 #[cfg(test)]
 use std::os::unix::net::UnixStream;
 use transport::{Connector, TransportReader, TransportWriter, UnixSocketConnector};
+pub mod gateway;
+pub use gateway::{Endpoint, GatewayEndpoint};
 
 use std::{
     collections::HashMap,
@@ -91,6 +93,8 @@ const REPRODUCE_FAULT_TIMEOUT: Duration = Duration::from_secs(960);
 /// The daemon's own default guard batch size, used only to size the wait when
 /// the caller names no limit. The daemon remains the authority on the batch.
 const DEFAULT_GUARD_LIMIT_HINT: u16 = 20;
+/// The daemon's default classification sample size, used only to size the wait.
+const DEFAULT_CLASSIFY_RUNS_HINT: u8 = 5;
 
 /// Headroom above a deadline the daemon has already been told to honour.
 ///
@@ -108,6 +112,9 @@ pub fn request_timeout(request: &Request) -> Duration {
     match request {
         // Replay runs a real command; the daemon caps it at 900 seconds.
         Request::ReproduceFault { .. } => REPRODUCE_FAULT_TIMEOUT,
+        // A sample is several such replays in series.
+        Request::ClassifyFault { runs, .. } => REPRODUCE_FAULT_TIMEOUT
+            .saturating_mul(u32::from(runs.unwrap_or(DEFAULT_CLASSIFY_RUNS_HINT)).max(1)),
         // A guard pass is many such replays in series, so it needs room for
         // all of them rather than for one.
         Request::GuardFaults { limit, .. } => REPRODUCE_FAULT_TIMEOUT
@@ -155,8 +162,12 @@ pub enum ClientError {
     ControlPoisoned,
     #[error("daemon did not answer within {timeout:?}")]
     RequestTimeout { timeout: Duration },
+    #[error("the gateway refused this device ({code}): {message}")]
+    GatewayRefused { code: String, message: String },
 }
 
+/// Multiplexed request/response and subscription streams over one connection,
+/// whether a Unix socket locally or a TLS session over the gateway.
 struct MultiplexedWire {
     writer: Mutex<TransportWriter>,
     pending: Mutex<HashMap<Uuid, PendingResponse>>,
@@ -525,6 +536,33 @@ impl ControlClient {
         Self::connect_with_optional_share(socket_path, None)
     }
 
+    /// Reach a runtime over its TLS gateway as a paired device, or pair now
+    /// if the endpoint carries a pairing code. Returns the client and, on a
+    /// pairing, the device token — shown once, never again.
+    pub fn connect_gateway(
+        gateway: GatewayEndpoint,
+    ) -> Result<(Self, Option<String>), ClientError> {
+        use transport::GatewayConnector;
+        // The code is spent on first use; the connector settles the endpoint
+        // and reconnects with the token from then on.
+        let connector = Arc::new(GatewayConnector::new(gateway));
+        let client_id = Uuid::new_v4();
+        let stream = connect_wire(connector.as_ref(), client_id)?;
+        let minted = connector.take_minted_token();
+        let client = Self {
+            connector,
+            client_id,
+            share_token: None,
+            share_role: None,
+            stream: Arc::new(Mutex::new(stream)),
+            group_mutations: Arc::new(Mutex::new(())),
+        };
+        match client.request(Request::Ping)? {
+            ResponseBody::Pong => Ok((client, minted)),
+            body => Err(ClientError::UnexpectedResponse(Box::new(body))),
+        }
+    }
+
     pub fn connect_as_observer(
         socket_path: impl AsRef<Path>,
         share_token: impl Into<String>,
@@ -776,6 +814,7 @@ impl ControlClient {
                 surface_id,
                 control_epoch: Arc::new(AtomicU64::new(terminal.control_epoch)),
                 control: self.clone(),
+                max_hz: None,
             }),
             body => Err(ClientError::UnexpectedResponse(Box::new(body))),
         }
@@ -787,6 +826,7 @@ impl ControlClient {
             surface_id: Uuid::new_v4(),
             control_epoch: Arc::new(AtomicU64::new(0)),
             control: self.clone(),
+            max_hz: None,
         }
     }
 
@@ -1341,6 +1381,25 @@ impl ControlClient {
 
     /// Replay a Fault's command and attach the receipt. This runs the recorded
     /// command, so it may take as long as that command takes.
+    /// Replay a Fault several times and record how often it fails.
+    pub fn classify_fault(
+        &self,
+        fault_id: FaultId,
+        runs: Option<u8>,
+        timeout_seconds: Option<u16>,
+        isolated: bool,
+    ) -> Result<FaultSummary, ClientError> {
+        match self.request(Request::ClassifyFault {
+            fault_id,
+            runs,
+            timeout_seconds,
+            isolated,
+        })? {
+            ResponseBody::FaultRecorded { fault } => Ok(fault),
+            body => Err(ClientError::UnexpectedResponse(Box::new(body))),
+        }
+    }
+
     /// Re-run the replay of resolved Faults and reopen any that fail again.
     ///
     /// Returns every Fault checked, and those that regressed.
@@ -1722,6 +1781,8 @@ pub struct DaemonSession {
     surface_id: Uuid,
     control_epoch: Arc<AtomicU64>,
     control: ControlClient,
+    /// Most frames per second to ask the runtime for; `None` takes its default.
+    max_hz: Option<u16>,
 }
 
 impl DaemonSession {
@@ -2156,10 +2217,69 @@ impl DaemonSession {
         })
     }
 
+    /// Ask the runtime for at most this many frames per second. A remote
+    /// viewer on a slow link wants fewer, larger deltas rather than every
+    /// publish; nothing is lost, each delta carries every change since the
+    /// last one sent.
+    #[must_use]
+    pub fn with_max_hz(mut self, max_hz: u16) -> Self {
+        self.max_hz = Some(max_hz);
+        self
+    }
+
+    /// Play this session's recording from a journal offset at a speed
+    /// (100 = its own pace). Frames arrive as on a live subscription; the
+    /// receiver ends when the recording does.
+    pub fn subscribe_replay(
+        &self,
+        from_offset: u64,
+        speed_percent: u32,
+    ) -> Result<Receiver<ServerEvent>, ClientError> {
+        let stream = self.control.subscription_wire()?;
+        let request = self
+            .control
+            .client_request(Request::SubscribeTerminalReplay {
+                session_id: self.session_id,
+                from_offset,
+                speed_percent,
+                max_hz: self.max_hz,
+            });
+        let response = stream.exchange(&request)?;
+        let subscription = match decode_response(&request, response)? {
+            ResponseBody::TerminalReplayAccepted { stream_id, .. } => stream.subscribe(
+                stream_id,
+                self.control
+                    .client_request(Request::Unsubscribe { stream_id }),
+            )?,
+            body => return Err(ClientError::UnexpectedResponse(Box::new(body))),
+        };
+        let (send, receive) = std::sync::mpsc::channel();
+        let session_id = self.session_id;
+        thread::Builder::new()
+            .name(format!("ultraplexr-client-replay-{session_id}"))
+            .spawn(move || {
+                let subscription = subscription;
+                while let Ok(event) = subscription.receive_terminal() {
+                    if send.send(event).is_err() {
+                        break;
+                    }
+                }
+            })?;
+        Ok(receive)
+    }
+
+    /// The chapters of this session's recording.
+    pub fn chapters(&self) -> Result<ResponseBody, ClientError> {
+        self.control.request(Request::TerminalChapters {
+            session_id: self.session_id,
+        })
+    }
+
     fn open_subscription(&self) -> Result<MultiplexedSubscription, ClientError> {
         let stream = self.control.subscription_wire()?;
         let request = self.control.client_request(Request::SubscribeTerminal {
             session_id: self.session_id,
+            max_hz: self.max_hz,
         });
         let response = stream.exchange(&request)?;
         match decode_response(&request, response)? {

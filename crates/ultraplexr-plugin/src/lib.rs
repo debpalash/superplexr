@@ -707,10 +707,6 @@ fn spawn_plugin(
         // Existing external plugins keep their launch contract after upgrade.
         .env("TERMI9NE_PLUGIN_ID", &descriptor.manifest.id)
         .env(
-            "TERMI9NE_PLUGIN_PROTOCOL_VERSION",
-            PLUGIN_PROTOCOL_VERSION.to_string(),
-        )
-        .env(
             "ULTRAPLEXR_PLUGIN_PROTOCOL_VERSION",
             PLUGIN_PROTOCOL_VERSION.to_string(),
         )

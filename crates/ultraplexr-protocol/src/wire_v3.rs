@@ -152,6 +152,16 @@ pub struct Hello {
     pub protocol: ProtocolRange,
     pub features: Vec<String>,
     pub device_id: Uuid,
+    /// Over the network gateway: the token this device was given at pairing.
+    #[serde(default)]
+    pub device_token: Option<String>,
+    /// Over the network gateway: a pairing code, to be exchanged for a token.
+    #[serde(default)]
+    pub pairing_code: Option<String>,
+    /// Over the network gateway: a Share token, for a viewer who is not a
+    /// paired device. Every request on such a connection must carry it.
+    #[serde(default)]
+    pub share_token: Option<String>,
 }
 
 impl Hello {
@@ -168,6 +178,9 @@ impl Hello {
             },
             features: supported_features(),
             device_id,
+            device_token: None,
+            pairing_code: None,
+            share_token: None,
         }
     }
 }
@@ -187,10 +200,14 @@ pub struct Welcome {
     pub connection_id: Uuid,
     pub limits: WireLimits,
     pub server_time_unix_micros: u64,
+    /// Set once, on the connection that completed a pairing: the device's
+    /// token. The runtime never sends it again.
+    #[serde(default)]
+    pub device_token: Option<String>,
 }
 
 impl Welcome {
-    fn negotiate(hello: &Hello, runtime_id: Uuid) -> Result<Self, WireError> {
+    pub fn negotiate(hello: &Hello, runtime_id: Uuid) -> Result<Self, WireError> {
         if hello.protocol.major != WIRE_MAJOR || hello.protocol.min_minor > WIRE_MINOR {
             return Err(WireError::NoCommonVersion);
         }
@@ -216,6 +233,7 @@ impl Welcome {
             selected_minor: WIRE_MINOR,
             features,
             connection_id: Uuid::new_v4(),
+            device_token: None,
             limits: WireLimits {
                 max_payload_bytes: MAX_PAYLOAD_BYTES as u32,
                 max_uncompressed_bytes: MAX_UNCOMPRESSED_BYTES as u32,
@@ -580,6 +598,34 @@ impl<R> BlockingWireReader<R> {
     }
 }
 
+impl<R> BlockingWireReader<R> {
+    /// A reader over a fresh stream, with no buffered bytes and no
+    /// compression until a handshake negotiates it.
+    pub fn new(io: R) -> Self {
+        Self {
+            io,
+            received: Default::default(),
+            compression: false,
+        }
+    }
+
+    /// Apply the compression a handshake negotiated.
+    pub fn set_compression(&mut self, enabled: bool) {
+        self.compression = enabled;
+    }
+
+    /// Swap the underlying stream for another representation of it — a
+    /// boxed trait object, say — keeping bytes already buffered and the
+    /// negotiated compression, so nothing read past the handshake is lost.
+    pub fn map_io<T>(self, map: impl FnOnce(R) -> T) -> BlockingWireReader<T> {
+        BlockingWireReader {
+            io: map(self.io),
+            received: self.received,
+            compression: self.compression,
+        }
+    }
+}
+
 impl<R: Read> BlockingWireReader<R> {
     pub fn receive(&mut self) -> Result<ReceivedFrame, WireError> {
         let mut header_bytes = [0; HEADER_BYTES];
@@ -607,6 +653,31 @@ impl<W> BlockingWireWriter<W> {
     #[must_use]
     pub const fn get_ref(&self) -> &W {
         &self.io
+    }
+}
+
+impl<W> BlockingWireWriter<W> {
+    /// A writer over a fresh stream; see [`BlockingWireReader::new`].
+    pub fn new(io: W) -> Self {
+        Self {
+            io,
+            sent: Default::default(),
+            compression: false,
+        }
+    }
+
+    /// Apply the compression a handshake negotiated.
+    pub fn set_compression(&mut self, enabled: bool) {
+        self.compression = enabled;
+    }
+
+    /// See [`BlockingWireReader::map_io`].
+    pub fn map_io<T>(self, map: impl FnOnce(W) -> T) -> BlockingWireWriter<T> {
+        BlockingWireWriter {
+            io: map(self.io),
+            sent: self.sent,
+            compression: self.compression,
+        }
     }
 }
 

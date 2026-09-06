@@ -17,6 +17,8 @@ use std::{fmt, str::FromStr};
 /// Marker lines that make an installed block findable and replaceable.
 pub(crate) const BEGIN_MARKER: &str = "# >>> ultraplexr shell integration >>>";
 pub(crate) const END_MARKER: &str = "# <<< ultraplexr shell integration <<<";
+/// Markers written before the rename. A startup file carrying one of these
+/// blocks is upgraded in place rather than gaining a second block.
 const LEGACY_BEGIN_MARKER: &str = "# >>> termi9ne shell integration >>>";
 const LEGACY_END_MARKER: &str = "# <<< termi9ne shell integration <<<";
 
@@ -94,7 +96,7 @@ fn body(shell: Shell) -> String {
 /// before it runs, and `precmd` knows its status afterwards.
 const ZSH: &str = r#"# Reports each command's exit status to ultraplexr so failures become Faults.
 # Inert outside a ultraplexr terminal, and never changes $?.
-if [[ -n "${ULTRAPLEXR_SESSION:-${TERMI9NE_SESSION:-}}" ]] && [[ -o interactive ]]; then
+if [[ -n "$ULTRAPLEXR_SESSION" ]] && [[ -o interactive ]]; then
   autoload -Uz add-zsh-hook
 
   __ultraplexr_preexec() {
@@ -106,6 +108,12 @@ if [[ -n "${ULTRAPLEXR_SESSION:-${TERMI9NE_SESSION:-}}" ]] && [[ -o interactive 
   __ultraplexr_precmd() {
     local __ultraplexr_status=$?
     printf '\e]133;D;%s\a' "$__ultraplexr_status"
+    # Report the directory too, so the session can be named by where it runs.
+    printf '\e]7;file://%s%s\a' "$HOST" "$PWD"
+    # Leave the keyboard in plain mode at the prompt. A program that enabled
+    # the Kitty keyboard protocol and crashed would otherwise leave the shell
+    # typing out key events as text. Ignored by terminals without it.
+    printf '\e[=0;1u'
     printf '\e]133;A\a'
     return $__ultraplexr_status
   }
@@ -120,7 +128,7 @@ fi
 /// command of a compound statement or during the prompt itself.
 const BASH: &str = r#"# Reports each command's exit status to ultraplexr so failures become Faults.
 # Inert outside a ultraplexr terminal, and never changes $?.
-if [ -n "${ULTRAPLEXR_SESSION:-${TERMI9NE_SESSION:-}}" ] && [ -n "$PS1" ]; then
+if [ -n "$ULTRAPLEXR_SESSION" ] && [ -n "$PS1" ]; then
   __ultraplexr_preexec() {
     # Skip while the prompt command runs, and report only the first command
     # of a line.
@@ -133,6 +141,10 @@ if [ -n "${ULTRAPLEXR_SESSION:-${TERMI9NE_SESSION:-}}" ] && [ -n "$PS1" ]; then
   __ultraplexr_precmd() {
     local __ultraplexr_status=$?
     printf '\e]133;D;%s\a' "$__ultraplexr_status"
+    # Report the directory too, so the session can be named by where it runs.
+    printf '\e]7;file://%s%s\a' "$HOSTNAME" "$PWD"
+    # Leave the keyboard in plain mode at the prompt; see the zsh snippet.
+    printf '\e[=0;1u'
     printf '\e]133;A\a'
     __ultraplexr_armed=1
     return $__ultraplexr_status
@@ -151,7 +163,7 @@ fi
 /// fish has first-class events, so no trap gymnastics are needed.
 const FISH: &str = r#"# Reports each command's exit status to ultraplexr so failures become Faults.
 # Inert outside a ultraplexr terminal.
-if begin; set -q ULTRAPLEXR_SESSION; or set -q TERMI9NE_SESSION; end; and status is-interactive
+if set -q ULTRAPLEXR_SESSION; and status is-interactive
     function __ultraplexr_preexec --on-event fish_preexec
         printf '\e]133;C;%s\a' "$argv[1]"
     end
@@ -159,6 +171,10 @@ if begin; set -q ULTRAPLEXR_SESSION; or set -q TERMI9NE_SESSION; end; and status
     function __ultraplexr_postexec --on-event fish_postexec
         set -l __ultraplexr_status $status
         printf '\e]133;D;%s\a' $__ultraplexr_status
+        # Report the directory too, so the session can be named by where it runs.
+        printf '\e]7;file://%s%s\a' (hostname) "$PWD"
+        # Leave the keyboard in plain mode at the prompt; see the zsh snippet.
+        printf '\e[=0;1u'
         printf '\e]133;A\a'
     end
 end
@@ -248,6 +264,12 @@ mod tests {
             assert!(snippet.contains(r"\e]133;C;%s\a"), "{shell}");
             assert!(snippet.contains(r"\e]133;D;%s\a"), "{shell}");
             assert!(snippet.contains(r"\e]133;A\a"), "{shell}");
+            // The directory is reported at every prompt, so a Session can be
+            // named by where it runs even before any command finishes.
+            assert!(snippet.contains(r"\e]7;file://%s%s\a"), "{shell}");
+            // The keyboard is returned to plain mode at every prompt, so a
+            // crashed TUI cannot leave the shell typing key events as text.
+            assert!(snippet.contains(r"\e[=0;1u"), "{shell}");
             // Inert outside ultraplexr.
             assert!(snippet.contains("ULTRAPLEXR_SESSION"), "{shell}");
         }
@@ -300,6 +322,24 @@ mod tests {
         assert!(updated.contains("alias c=d\n"));
         assert_eq!(updated.matches(BEGIN_MARKER).count(), 1);
         assert!(updated.contains("BASH_COMMAND"));
+    }
+
+    /// A startup file from before the rename is upgraded, not duplicated.
+    #[test]
+    fn a_block_from_before_the_rename_is_replaced_in_place() {
+        let legacy = format!(
+            "alias a=b\n{LEGACY_BEGIN_MARKER}\nif [[ -n \"$TERMI9NE_SESSION\" ]]; then :; fi\n{LEGACY_END_MARKER}\nalias c=d\n"
+        );
+        let (updated, outcome) = install_into(&legacy, Shell::Zsh);
+        assert_eq!(outcome, InstallOutcome::Updated);
+        assert!(
+            !updated.contains(LEGACY_BEGIN_MARKER),
+            "the old block must go"
+        );
+        assert!(!updated.contains("TERMI9NE_SESSION"));
+        assert_eq!(updated.matches(BEGIN_MARKER).count(), 1);
+        assert!(updated.starts_with("alias a=b\n"));
+        assert!(updated.ends_with("alias c=d\n"));
     }
 
     #[test]

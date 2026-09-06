@@ -109,7 +109,7 @@ async fn writer_queue_rechecks_durable_revocation_without_a_notification() {
     let access = fixture.access();
     let (server, peer) = UnixStream::pair().expect("real wire");
     let (_read, write) = server.into_split();
-    let writer = Arc::new(Mutex::new(AsyncWireWriter::new(write)));
+    let writer = Arc::new(Mutex::new(AsyncWireWriter::new(Box::new(write) as Box<dyn tokio::io::AsyncWrite + Unpin + Send>)));
     let held = writer.lock().await;
     let queued = Notify::new();
     let response = ServerResponse::success(
@@ -148,7 +148,7 @@ async fn revocation_interrupts_a_partially_written_response() {
     let access = fixture.access();
     let (server, mut peer) = UnixStream::pair().expect("real wire");
     let (_read, write) = server.into_split();
-    let writer = Arc::new(Mutex::new(AsyncWireWriter::new(write)));
+    let writer = Arc::new(Mutex::new(AsyncWireWriter::new(Box::new(write) as Box<dyn tokio::io::AsyncWrite + Unpin + Send>)));
     // Larger than normal Unix socket buffers; no peer drain until revocation.
     let response = ServerResponse::success(
         Uuid::new_v4(),

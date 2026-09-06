@@ -16,11 +16,15 @@ test = false
 [dependencies]
 clap.workspace = true
 libc.workspace = true
+rcgen.workspace = true
+ring.workspace = true
+rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-rustls.workspace = true
 ultraplexr-core = { path = "../ultraplexr-core" }
 ultraplexr-plugin = { path = "../ultraplexr-plugin" }
 ultraplexr-protocol = { path = "../ultraplexr-protocol" }

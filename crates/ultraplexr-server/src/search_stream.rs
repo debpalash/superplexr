@@ -79,7 +79,7 @@ impl Jobs {
         authority: ClientAuthority,
         state: Arc<AppState>,
         wire: SharedServerWireWriter,
-        socket: Arc<UnixStream>,
+        socket: Option<Arc<UnixStream>>,
     ) -> bool {
         let Ok(permit) = SEARCH_SLOTS.try_acquire() else {
             return false;
@@ -153,8 +153,10 @@ impl Jobs {
             });
             // Include acceptance writer queueing in the lifetime bound too.
             let result = tokio::time::timeout(Duration::from_secs(17), guarded).await;
-            if !matches!(result, Ok(Ok(()))) {
-                let _ = writer.socket.shutdown(Shutdown::Both);
+            if !matches!(result, Ok(Ok(())))
+                && let Some(socket) = &writer.socket
+            {
+                let _ = socket.shutdown(Shutdown::Both);
             }
         });
         self.0.insert(
@@ -181,7 +183,7 @@ pub(super) struct Spec {
 
 struct Writer<'a> {
     wire: SharedServerWireWriter,
-    socket: Arc<UnixStream>,
+    socket: Option<Arc<UnixStream>>,
     stream_id: u32,
     access: &'a share_request::Access<'a>,
 }
@@ -202,7 +204,7 @@ impl Writer<'_> {
     ) -> Result<(), ServerError> {
         let mut wire = self.wire.lock().await;
         self.access.revalidate().await?;
-        let mut interrupted = PartialWrite(Some(self.socket.clone()));
+        let mut interrupted = PartialWrite(self.socket.clone());
         wire.send_json(kind, stream_id, value)
             .await
             .map_err(ProtocolError::from)?;

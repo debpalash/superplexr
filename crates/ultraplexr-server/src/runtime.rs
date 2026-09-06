@@ -1,4 +1,5 @@
 mod agent_channel;
+mod device_store;
 mod engine_driver;
 mod fault_store;
 mod history_search;
@@ -6,6 +7,9 @@ mod search_stream;
 mod wait_tasks;
 #[cfg(test)]
 mod terminal_wait_tests;
+mod gateway;
+mod push;
+mod web;
 mod provider_status;
 mod realized_change;
 mod review_artifact;
@@ -38,7 +42,9 @@ use std::{
 };
 
 use clap::Parser;
+use device_store::{DeviceError, DeviceStore};
 use fault_store::{FaultStore, repro_directory, truncate_output};
+use gateway::GatewayInfo;
 use provider_status::ProviderStatusStore;
 use run_checkout::RunCheckoutStore;
 use run_evidence::RunEvidenceStore;
@@ -76,7 +82,6 @@ use tokio::{
     io::BufReader,
     net::{
         UnixListener, UnixStream,
-        unix::{OwnedReadHalf, OwnedWriteHalf},
     },
     sync::{Mutex, broadcast, mpsc},
 };
@@ -88,6 +93,10 @@ struct Args {
     socket: PathBuf,
     #[arg(long, default_value_os_t = ultraplexr_protocol::default_state_dir())]
     state_dir: PathBuf,
+    /// Listen for paired devices over TLS at this address, e.g. `0.0.0.0:7373`.
+    /// Off unless given; nothing on the network is ever reachable unpaired.
+    #[arg(long)]
+    gateway: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -116,6 +125,10 @@ enum ServerError {
     RunEvidence(#[from] run_evidence::RunEvidenceError),
     #[error(transparent)]
     Fault(#[from] fault_store::FaultError),
+    #[error(transparent)]
+    Device(#[from] device_store::DeviceError),
+    #[error("gateway: {0}")]
+    Gateway(String),
     #[error(transparent)]
     SessionGroup(#[from] session_group_store::SessionGroupError),
     #[error(transparent)]
@@ -166,6 +179,12 @@ enum RequestError {
     WaitStreamClosed,
     #[error("runtime terminal wait limit is occupied")]
     TooManyWaits,
+    #[error("control of terminal session {session_id} was not offered to this participant")]
+    ControlNotOffered { session_id: SessionId },
+    #[error("push notifications are not set up on this runtime")]
+    PushDisabled,
+    #[error("push: {0}")]
+    Push(String),
     #[error("client {client_id} does not control terminal session {session_id}")]
     NotController {
         session_id: SessionId,
@@ -212,6 +231,10 @@ enum RequestError {
     #[error(transparent)]
     Fault(#[from] fault_store::FaultError),
     #[error(transparent)]
+    Device(#[from] device_store::DeviceError),
+    #[error("the network gateway is not enabled on this runtime; start it with --gateway")]
+    GatewayDisabled,
+    #[error(transparent)]
     SessionGroup(#[from] session_group_store::SessionGroupError),
     #[error("global agent concurrency limit {0} is occupied")]
     GlobalAgentConcurrencyLimit(u16),
@@ -235,6 +258,73 @@ impl Drop for SocketGuard {
 struct TerminalRecord {
     handle: Option<SessionHandle>,
     projection: Arc<RwLock<TerminalProjection>>,
+    /// Who is subscribed right now. Each subscription registers itself for
+    /// as long as its task lives, so presence is exact and costs nothing.
+    viewers: Arc<std::sync::Mutex<Vec<ultraplexr_protocol::ViewerSummary>>>,
+}
+
+/// A subscription's entry in its terminal's viewer list, removed when the
+/// subscription task ends for any reason.
+struct ViewerGuard {
+    viewers: Arc<std::sync::Mutex<Vec<ultraplexr_protocol::ViewerSummary>>>,
+    viewer_id: uuid::Uuid,
+}
+
+impl ViewerGuard {
+    fn register(
+        record: &TerminalRecord,
+        authority: &ClientAuthority,
+        client_id: uuid::Uuid,
+        surface_id: Option<uuid::Uuid>,
+    ) -> Self {
+        use ultraplexr_protocol::{Participant, ViewerKind, ViewerRole, ViewerSummary};
+        let (kind, label, role) = match authority {
+            ClientAuthority::Owner => (ViewerKind::Owner, "owner".to_owned(), ViewerRole::Owner),
+            ClientAuthority::Shared(share) => (
+                ViewerKind::Share,
+                share.label.clone(),
+                match share.role {
+                    ShareRole::Observer => ViewerRole::Observer,
+                    ShareRole::Controller => ViewerRole::Controller,
+                },
+            ),
+        };
+        let viewer_id = uuid::Uuid::new_v4();
+        let since_micros = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_micros() as u64)
+            .unwrap_or_default();
+        if let Ok(mut viewers) = record.viewers.lock() {
+            viewers.push(ViewerSummary {
+                viewer_id,
+                kind,
+                label: label.clone(),
+                role,
+                since_micros,
+                participant: Participant {
+                    client_id,
+                    surface_id,
+                    share_id: match authority {
+                        ClientAuthority::Owner => None,
+                        ClientAuthority::Shared(share) => Some(share.share_id),
+                    },
+                    label,
+                },
+            });
+        }
+        Self {
+            viewers: Arc::clone(&record.viewers),
+            viewer_id,
+        }
+    }
+}
+
+impl Drop for ViewerGuard {
+    fn drop(&mut self) {
+        if let Ok(mut viewers) = self.viewers.lock() {
+            viewers.retain(|viewer| viewer.viewer_id != self.viewer_id);
+        }
+    }
 }
 
 impl TerminalRecord {
@@ -266,6 +356,11 @@ struct AppState {
     provider_status: Mutex<ProviderStatusStore>,
     run_evidence: Mutex<RunEvidenceStore>,
     faults: Mutex<FaultStore>,
+    devices: Mutex<DeviceStore>,
+    /// Present when the network gateway is listening.
+    gateway: Option<GatewayInfo>,
+    /// Web Push to subscribed browsers; `None` when it could not be set up.
+    push: Option<Arc<std::sync::Mutex<push::PushStore>>>,
     session_groups: Mutex<SessionGroupStore>,
     checkout_gate: Mutex<()>,
     agent_launch_gate: Mutex<()>,
@@ -357,12 +452,20 @@ pub async fn run_from_env() -> Result<(), String> {
 ///
 /// This is used by the desktop's hidden daemon process. Errors are converted
 /// to text so private server implementation types do not leak into callers.
-pub fn run_blocking(socket: PathBuf, state_dir: PathBuf) -> Result<(), String> {
+pub fn run_blocking(
+    socket: PathBuf,
+    state_dir: PathBuf,
+    gateway: Option<String>,
+) -> Result<(), String> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .map_err(|error| format!("failed to construct daemon runtime: {error}"))?
-        .block_on(run_server(Args { socket, state_dir }))
+        .block_on(run_server(Args {
+            socket,
+            state_dir,
+            gateway,
+        }))
         .map_err(|error| error.to_string())
 }
 
@@ -375,10 +478,21 @@ async fn run_server(args: Args) -> Result<(), ServerError> {
             secure_directory(parent)?;
         }
     }
+    if let Some(previous) = carry_forward_state(&args.state_dir)? {
+        eprintln!(
+            "ultraplexr: carried state forward from {} into {}",
+            previous.display(),
+            args.state_dir.display()
+        );
+    }
     tokio::fs::create_dir_all(&args.state_dir).await?;
     secure_directory(&args.state_dir)?;
     secure_existing_state(&args.state_dir)?;
     secure_terminal_history(&args.state_dir)?;
+    let gateway = match args.gateway.as_deref() {
+        Some(address) => Some(prepare_gateway(&args.state_dir, address).await?),
+        None => None,
+    };
     let plugin_supervisor = PluginSupervisor::start(args.state_dir.join("plugins"))?;
     let plugin_publisher = plugin_supervisor.publisher();
     let agent_socket_path = args.state_dir.canonicalize()?.join("agent.sock");
@@ -408,6 +522,15 @@ async fn run_server(args: Args) -> Result<(), ServerError> {
             args.state_dir.join("run-evidence.json"),
         )?),
         faults: Mutex::new(FaultStore::open(args.state_dir.join("faults.json"))?),
+        devices: Mutex::new(DeviceStore::open(args.state_dir.join("devices.json"))?),
+        gateway: gateway.as_ref().map(|prepared| prepared.info.clone()),
+        push: match push::PushStore::open(&args.state_dir) {
+            Ok(store) => Some(Arc::new(std::sync::Mutex::new(store))),
+            Err(error) => {
+                eprintln!("push notifications are off: {error}");
+                None
+            }
+        },
         session_groups: Mutex::new(SessionGroupStore::open(
             args.state_dir.join("session-groups.json"),
         )?),
@@ -439,9 +562,36 @@ async fn run_server(args: Args) -> Result<(), ServerError> {
     let share_expiry_task = tokio::spawn(expire_shares(Arc::clone(&state)));
     let provider_expiry_task = tokio::spawn(expire_provider_facts(Arc::clone(&state)));
     println!("ultraplexr runtime listening at {}", args.socket.display());
+    if let Some(prepared) = &gateway {
+        println!(
+            "ultraplexr gateway listening at {} ({})",
+            prepared.info.advertised, prepared.info.fingerprint
+        );
+    }
+    let gateway_listener = gateway.as_ref().map(|prepared| &prepared.listener);
+    let gateway_acceptor = gateway.as_ref().map(|prepared| prepared.acceptor.clone());
 
     loop {
         tokio::select! {
+            accepted = async { gateway_listener.expect("guarded by the branch condition").accept().await },
+                if gateway_listener.is_some() =>
+            {
+                let (tcp, peer) = accepted?;
+                let acceptor = gateway_acceptor.clone().expect("guarded by the branch condition");
+                let state = Arc::clone(&state);
+                tokio::spawn(async move {
+                    match acceptor.accept(tcp).await {
+                        Ok(tls) => {
+                            // The wire, or a browser: web::serve reads the
+                            // first bytes and chooses.
+                            if let Err(error) = web::serve(tls, state, peer).await {
+                                eprintln!("gateway connection from {peer} ended: {error}");
+                            }
+                        }
+                        Err(error) => eprintln!("gateway tls accept from {peer} failed: {error}"),
+                    }
+                });
+            }
             accepted = listener.accept() => {
                 let (stream, _) = accepted?;
                 verify_peer(&stream)?;
@@ -703,6 +853,75 @@ fn secure_terminal_history(state_dir: &std::path::Path) -> Result<(), std::io::E
     Ok(())
 }
 
+/// When a protocol version bump moves the state directory from `vN-1` to
+/// `vN`, copy the previous version's state forward on first start, so a wire
+/// change never costs a person their sessions, Faults or workspaces.
+///
+/// Sockets and the daemon log are not copied. Nothing is removed from the
+/// old directory, so the older runtime can still be run beside this one.
+fn carry_forward_state(state_dir: &std::path::Path) -> Result<Option<PathBuf>, std::io::Error> {
+    // The desktop creates the directory (for the socket) before the daemon
+    // starts, so existence says nothing; state does.
+    if holds_state(state_dir)? {
+        return Ok(None);
+    }
+    let Some(name) = state_dir.file_name().and_then(|name| name.to_str()) else {
+        return Ok(None);
+    };
+    let Some(version) = name.strip_prefix('v').and_then(|v| v.parse::<u16>().ok()) else {
+        return Ok(None);
+    };
+    let Some(parent) = state_dir.parent() else {
+        return Ok(None);
+    };
+    let previous = parent.join(format!("v{}", version.saturating_sub(1)));
+    if version == 0 || !previous.is_dir() {
+        return Ok(None);
+    }
+    copy_state_tree(&previous, state_dir)?;
+    Ok(Some(previous))
+}
+
+/// True when a state directory already holds anything worth keeping: every
+/// entry that is not a socket or the log counts.
+fn holds_state(dir: &std::path::Path) -> Result<bool, std::io::Error> {
+    if !dir.exists() {
+        return Ok(false);
+    }
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name == "daemon.log" || name.ends_with(".sock") {
+            continue;
+        }
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+fn copy_state_tree(from: &std::path::Path, to: &std::path::Path) -> Result<(), std::io::Error> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let name = entry.file_name();
+        let target = to.join(&name);
+        if file_type.is_symlink() || file_type.is_socket() {
+            continue;
+        }
+        if name == "daemon.log" || name.to_string_lossy().ends_with(".sock") {
+            continue;
+        }
+        if file_type.is_dir() {
+            copy_state_tree(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 fn verify_peer(stream: &UnixStream) -> Result<(), std::io::Error> {
     let mut uid = 0;
@@ -839,9 +1058,11 @@ async fn handle_agent_connection(
     let _connection_count = ConnectionCount::enter(&state.open_connections);
     let _agent_connection_count = ConnectionCount::enter(&state.agent_connections);
     let (read, write) = stream.into_split();
+    let read: BoxedRead = Box::new(read);
+    let write: BoxedWrite = Box::new(write);
     let mut read = AsyncWireReader::new(BufReader::new(read));
     let mut write = AsyncWireWriter::new(write);
-    accept_wire_handshake(&mut read, &mut write).await?;
+    accept_wire_handshake(&mut read, &mut write, &state, Transport::Unix).await?;
     let mut connection_client = None;
     loop {
         let request: ClientRequest = match read
@@ -856,6 +1077,24 @@ async fn handle_agent_connection(
                     std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
                 ) =>
             {
+                // A dead connection holds no control: release every terminal
+                // this client held, whatever share admitted it.
+                if let Some(client_id) = connection_client
+                    && let Ok(terminals) = state.terminals.read()
+                {
+                    for record in terminals.values() {
+                        if let Ok(mut projection) = record.projection.write()
+                            && projection.summary.controller_client_id == Some(client_id)
+                        {
+                            projection.summary.controller_client_id = None;
+                            projection.summary.controller_surface_id = None;
+                            projection.summary.controller_share_id = None;
+                            projection.summary.control_epoch =
+                                next_control_epoch(projection.summary.control_epoch);
+                            publish_terminal(&state, &projection.summary);
+                        }
+                    }
+                }
                 return Ok(());
             }
             Err(error) => return Err(error.into()),
@@ -947,6 +1186,7 @@ fn authorize_request(
     let read_allowed = match request {
         Request::Ping
         | Request::ShareIdentity
+        | Request::GatewayInfo
         | Request::Unsubscribe { .. }
         | Request::TerminalSearchAck { .. }
         | Request::TerminalSearchCancel { .. }
@@ -970,7 +1210,10 @@ fn authorize_request(
         | Request::TerminalHistoryFrame { session_id, .. }
         | Request::TerminalSearch { session_id, .. }
         | Request::TerminalSearchStart { session_id, .. }
-        | Request::SubscribeTerminal { session_id } => {
+        | Request::TerminalViewers { session_id }
+        | Request::TerminalChapters { session_id }
+        | Request::SubscribeTerminalReplay { session_id, .. }
+        | Request::SubscribeTerminal { session_id, .. } => {
             terminal_in_share(state, share, *session_id)?
         }
         _ => false,
@@ -991,6 +1234,12 @@ fn authorize_request(
             }
             Request::ClaimTerminalControl { session_id, force } => {
                 !force && terminal_in_share(state, share, *session_id)?
+            }
+            Request::RequestTerminalControl { session_id }
+            | Request::OfferTerminalControl { session_id, .. }
+            | Request::AcceptTerminalControl { session_id }
+            | Request::WithdrawTerminalControl { session_id } => {
+                terminal_in_share(state, share, *session_id)?
             }
             _ => false,
         };
@@ -1046,21 +1295,36 @@ fn filter_response(
 }
 
 async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(), ServerError> {
-    let _connection_count = ConnectionCount::enter(&state.open_connections);
     let stream = stream.into_std()?;
     let shutdown = Arc::new(stream.try_clone()?);
     let stream = UnixStream::from_std(stream)?;
     let (read, write) = stream.into_split();
+    handle_connection_over(Box::new(read), Box::new(write), state, Transport::Unix, Some(shutdown))
+        .await
+}
+
+async fn handle_connection_over(
+    read: BoxedRead,
+    write: BoxedWrite,
+    state: Arc<AppState>,
+    transport: Transport,
+    shutdown: Option<Arc<std::os::unix::net::UnixStream>>,
+) -> Result<(), ServerError> {
+    let _connection_count = ConnectionCount::enter(&state.open_connections);
     let mut read = AsyncWireReader::new(BufReader::new(read));
     let mut write = AsyncWireWriter::new(write);
-    let welcome = accept_wire_handshake(&mut read, &mut write).await?;
-    let search_supported = welcome.features.iter().any(|feature| feature == ultraplexr_protocol::search_stream::FEATURE);
-    let snapshots_supported = welcome.features.iter().any(|feature| feature == ultraplexr_protocol::collection_stream::FEATURE);
+    let admission = accept_wire_handshake(&mut read, &mut write, &state, transport).await?;
+    // Protocol v26 negotiates no per-feature flags: the version gate below
+    // admits only v26 peers, which implement the full search/snapshot set.
+    let search_supported = true;
+    let snapshots_supported = true;
     let write = Arc::new(Mutex::new(write));
     let mut connection = share_request::ConnectionTasks::new(Arc::clone(&state));
+    let mut connection_client = None;
     let mut next_stream_id = 1_u32;
     let mut searches = search_stream::Jobs::default();
-    let mut waits = wait_tasks::Jobs::new(Arc::clone(&shutdown));
+    let mut waits = wait_tasks::Jobs::new(shutdown.clone());
+    let mut subscriptions = HashMap::<u32, tokio::task::JoinHandle<()>>::new();
     loop {
         let request: ClientRequest = match read
             .receive_json(FrameKind::Request, 0)
@@ -1074,11 +1338,29 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
                     std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
                 ) =>
             {
+                // A dead connection holds no control: release every terminal
+                // this client held, whatever share admitted it.
+                if let Some(client_id) = connection_client
+                    && let Ok(terminals) = state.terminals.read()
+                {
+                    for record in terminals.values() {
+                        if let Ok(mut projection) = record.projection.write()
+                            && projection.summary.controller_client_id == Some(client_id)
+                        {
+                            projection.summary.controller_client_id = None;
+                            projection.summary.controller_surface_id = None;
+                            projection.summary.controller_share_id = None;
+                            projection.summary.control_epoch =
+                                next_control_epoch(projection.summary.control_epoch);
+                            publish_terminal(&state, &projection.summary);
+                        }
+                    }
+                }
                 return Ok(());
             }
             Err(error) => return Err(error.into()),
         };
-        if connection.client_id.is_some_and(|client_id| client_id != request.client_id) {
+        if connection_client.is_some_and(|client_id| client_id != request.client_id) {
             let response = ServerResponse::error(
                 request.request_id,
                 "client_identity_changed",
@@ -1087,7 +1369,23 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
             write_connection_response(&write, &response).await?;
             continue;
         }
-        connection.client_id = Some(request.client_id);
+        connection_client = Some(request.client_id);
+        // Revocation takes effect at the device's next request, not its next
+        // connection.
+        if let Admission::Device(device_id) = admission
+            && !state.devices.lock().await.is_active(device_id)
+        {
+            write_connection_response(
+                &write,
+                &ServerResponse::error(
+                    request.request_id,
+                    "device_revoked",
+                    "this device's access to the runtime was revoked",
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
         if request.version != PROTOCOL_VERSION {
             let response = ServerResponse::error(
                 request.request_id,
@@ -1101,6 +1399,36 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
             continue;
         }
 
+        // A viewer admitted by a Share is that Share and nothing else: a
+        // request without the token, or with another one, is refused before
+        // it can be read as the owner's.
+        if let Admission::Share(share_id) = admission {
+            let refusal = match request.share_token.as_deref() {
+                None => Some((
+                    "share_token_required",
+                    "this connection was admitted by a Share token and every request must carry that token",
+                )),
+                Some(token) => match state.shares.lock().await.authenticate(token) {
+                    Ok(share) if share.share_id == share_id => None,
+                    Ok(_) => Some((
+                        "share_mismatch",
+                        "this connection was admitted by a different Share",
+                    )),
+                    Err(_) => Some((
+                        "share_authorization_denied",
+                        "share token is invalid, expired, or revoked",
+                    )),
+                },
+            };
+            if let Some((code, message)) = refusal {
+                write_connection_response(
+                    &write,
+                    &ServerResponse::error(request.request_id, code, message),
+                )
+                .await?;
+                continue;
+            }
+        }
         let authority = match request.share_token.as_deref() {
             Some(token) => match state.shares.lock().await.authenticate(token) {
                 Ok(share) => ClientAuthority::Shared(share),
@@ -1149,6 +1477,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
             && matches!(
                 &request.action,
                 Request::SubscribeTerminal { .. }
+                    | Request::SubscribeTerminalReplay { .. }
                     | Request::SubscribeMissions
                     | Request::SubscribeRunActivities { .. }
                     | Request::SubscribeTerminals
@@ -1186,7 +1515,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
                 }
                 let spec = search_stream::Spec { request_id: request.request_id, search_id, session_id, stream_id: next_stream_id, query, case_sensitive, limit: limit.min(1000) };
                 next_stream_id += 1;
-                if !searches.start(spec, authority, Arc::clone(&state), Arc::clone(&write), Arc::clone(&shutdown)) {
+                if !searches.start(spec, authority, Arc::clone(&state), Arc::clone(&write), shutdown.clone()) {
                     write_connection_response(&write, &ServerResponse::error(request.request_id, "search_process_limit", "eight search streams are already active in this runtime process")).await?;
                 }
                 continue;
@@ -1227,12 +1556,45 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
                 access.run(access.write_response(&write, &response)).await?;
                 continue;
             }
-            Request::SubscribeTerminal { session_id } => {
+            Request::SubscribeTerminalReplay {
+                session_id,
+                from_offset,
+                speed_percent,
+                max_hz,
+            } => {
                 let stream_id = next_stream_id;
                 next_stream_id = next_stream_id.saturating_add(1);
                 let writer = SubscriptionWriter {
                     wire: Arc::clone(&write),
-                    shutdown: Arc::clone(&shutdown),
+                    shutdown: shutdown.clone(),
+                    stream_id,
+                };
+                let ending = writer.clone();
+                let state = Arc::clone(&state);
+                subscriptions.insert(
+                    stream_id,
+                    tokio::spawn(async move {
+                        let _ = handle_replay(
+                            request.request_id,
+                            session_id,
+                            from_offset,
+                            speed_percent,
+                            max_hz,
+                            state,
+                            writer,
+                        )
+                        .await;
+                        ending.end().await;
+                    }),
+                );
+                continue;
+            }
+            Request::SubscribeTerminal { session_id, max_hz } => {
+                let stream_id = next_stream_id;
+                next_stream_id = next_stream_id.saturating_add(1);
+                let writer = SubscriptionWriter {
+                    wire: Arc::clone(&write),
+                    shutdown: shutdown.clone(),
                     stream_id,
                 };
                 let ending = writer.clone();
@@ -1243,7 +1605,12 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
                         let _ = handle_subscription(
                             request.request_id,
                             session_id,
-                            authority,
+                            max_hz,
+                            Subscriber {
+                                client_id: request.client_id,
+                                surface_id: request.surface_id,
+                                authority,
+                            },
                             state,
                             writer,
                         )
@@ -1258,7 +1625,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
                 next_stream_id = next_stream_id.saturating_add(1);
                 let writer = SubscriptionWriter {
                     wire: Arc::clone(&write),
-                    shutdown: Arc::clone(&shutdown),
+                    shutdown: shutdown.clone(),
                     stream_id,
                 };
                 let ending = writer.clone();
@@ -1284,7 +1651,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
                 next_stream_id = next_stream_id.saturating_add(1);
                 let writer = SubscriptionWriter {
                     wire: Arc::clone(&write),
-                    shutdown: Arc::clone(&shutdown),
+                    shutdown: shutdown.clone(),
                     stream_id,
                 };
                 let ending = writer.clone();
@@ -1311,7 +1678,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
                 next_stream_id = next_stream_id.saturating_add(1);
                 let writer = SubscriptionWriter {
                     wire: Arc::clone(&write),
-                    shutdown: Arc::clone(&shutdown),
+                    shutdown: shutdown.clone(),
                     stream_id,
                 };
                 let ending = writer.clone();
@@ -1337,7 +1704,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
                 next_stream_id = next_stream_id.saturating_add(1);
                 let writer = SubscriptionWriter {
                     wire: Arc::clone(&write),
-                    shutdown: Arc::clone(&shutdown),
+                    shutdown: shutdown.clone(),
                     stream_id,
                 };
                 let ending = writer.clone();
@@ -1409,8 +1776,63 @@ async fn handle_connection(stream: UnixStream, state: Arc<AppState>) -> Result<(
     }
 }
 
-type ServerWireReader = AsyncWireReader<BufReader<OwnedReadHalf>>;
-type ServerWireWriter = AsyncWireWriter<OwnedWriteHalf>;
+/// A connection's byte streams, whatever carries them: a Unix socket for
+/// local clients, TLS over TCP for paired devices.
+type BoxedRead = Box<dyn tokio::io::AsyncRead + Unpin + Send>;
+type BoxedWrite = Box<dyn tokio::io::AsyncWrite + Unpin + Send>;
+type ServerWireReader = AsyncWireReader<BufReader<BoxedRead>>;
+type ServerWireWriter = AsyncWireWriter<BoxedWrite>;
+
+/// What carried a connection, which decides what it may assume.
+/// Who a connection is, decided once at the handshake and held for its life.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Admission {
+    /// The Unix socket: the runtime's own user.
+    Owner,
+    /// A paired device over the gateway, with the owner's authority.
+    Device(uuid::Uuid),
+    /// A viewer admitted by a Share token; every request must carry it.
+    Share(uuid::Uuid),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Transport {
+    /// The peer's uid was verified; the owner is talking.
+    Unix,
+    /// Nothing is assumed: the handshake must present a paired device.
+    Gateway,
+}
+
+/// Bind the gateway and load its identity. Failing here fails startup: a
+/// runtime asked to listen on the network must not silently listen nowhere.
+async fn prepare_gateway(
+    state_dir: &std::path::Path,
+    address: &str,
+) -> Result<PreparedGateway, ServerError> {
+    let identity = gateway::load_or_create_identity(state_dir).map_err(ServerError::Gateway)?;
+    let config = gateway::server_config(&identity).map_err(ServerError::Gateway)?;
+    let listener = tokio::net::TcpListener::bind(address)
+        .await
+        .map_err(|error| ServerError::Gateway(format!("bind {address}: {error}")))?;
+    let bound = listener
+        .local_addr()
+        .map(|addr| addr.to_string())
+        .unwrap_or_else(|_| address.to_owned());
+    Ok(PreparedGateway {
+        listener,
+        acceptor: tokio_rustls::TlsAcceptor::from(config),
+        info: GatewayInfo {
+            fingerprint: identity.fingerprint,
+            advertised: bound,
+        },
+    })
+}
+
+struct PreparedGateway {
+    listener: tokio::net::TcpListener,
+    acceptor: tokio_rustls::TlsAcceptor,
+    info: GatewayInfo,
+}
 type SharedServerWireWriter = Arc<Mutex<ServerWireWriter>>;
 
 async fn write_connection_response(
@@ -1427,7 +1849,7 @@ async fn write_connection_response(
 #[derive(Clone)]
 struct SubscriptionWriter {
     wire: SharedServerWireWriter,
-    shutdown: Arc<std::os::unix::net::UnixStream>,
+    shutdown: Option<Arc<std::os::unix::net::UnixStream>>,
     stream_id: u32,
 }
 
@@ -1446,7 +1868,7 @@ impl Drop for SubscriptionWriteGuard {
 impl SubscriptionWriter {
     async fn response(&self, response: &ServerResponse) -> Result<(), ProtocolError> {
         let mut wire = self.wire.lock().await;
-        let mut partial = SubscriptionWriteGuard(Some(self.shutdown.clone()));
+        let mut partial = SubscriptionWriteGuard(self.shutdown.clone());
         wire.send_json(FrameKind::Response, 0, response)
             .await
             .map_err(ProtocolError::from)?;
@@ -1461,7 +1883,7 @@ impl SubscriptionWriter {
 
     async fn event<T: serde::Serialize>(&self, value: &T) -> Result<(), ProtocolError> {
         let mut wire = self.wire.lock().await;
-        let mut partial = SubscriptionWriteGuard(Some(self.shutdown.clone()));
+        let mut partial = SubscriptionWriteGuard(self.shutdown.clone());
         wire.send_json(FrameKind::EventBatch, self.stream_id, value)
             .await
             .map_err(ProtocolError::from)?;
@@ -1476,7 +1898,7 @@ impl SubscriptionWriter {
     ) -> Result<(), ProtocolError> {
         if !enabled { return Ok(()); }
         let mut wire = self.wire.lock().await;
-        let mut partial = SubscriptionWriteGuard(Some(self.shutdown.clone()));
+        let mut partial = SubscriptionWriteGuard(self.shutdown.clone());
         wire.send_json(FrameKind::MetadataSnapshot, self.stream_id, &marker)
             .await.map_err(ProtocolError::from)?;
         partial.0 = None;
@@ -1498,7 +1920,7 @@ impl SubscriptionWriter {
 
     async fn terminal(&self, value: &ServerEvent) -> Result<(), ProtocolError> {
         let mut wire = self.wire.lock().await;
-        let mut partial = SubscriptionWriteGuard(Some(self.shutdown.clone()));
+        let mut partial = SubscriptionWriteGuard(self.shutdown.clone());
         write_server_event_v3_on_stream(&mut wire, self.stream_id, value).await?;
         partial.0 = None;
         Ok(())
@@ -1506,7 +1928,7 @@ impl SubscriptionWriter {
 
     async fn end(&self) {
         let mut wire = self.wire.lock().await;
-        let mut partial = SubscriptionWriteGuard(Some(self.shutdown.clone()));
+        let mut partial = SubscriptionWriteGuard(self.shutdown.clone());
         let result = wire
             .send_json(
                 FrameKind::Close,
@@ -1575,23 +1997,127 @@ fn runtime_wire_id() -> uuid::Uuid {
     *ID.get_or_init(uuid::Uuid::new_v4)
 }
 
+/// Complete the wire handshake. Over the gateway this is also where a
+/// device is admitted or refused; returns its id when one was.
 async fn accept_wire_handshake(
     reader: &mut ServerWireReader,
     writer: &mut ServerWireWriter,
-) -> Result<ultraplexr_protocol::wire_v3::Welcome, ProtocolError> {
-    let (_, welcome) = tokio::time::timeout(
-        Duration::from_secs(5),
-        server_handshake(reader, writer, runtime_wire_id()),
-    )
+    state: &AppState,
+    transport: Transport,
+) -> Result<Admission, ProtocolError> {
+    let handshake = async {
+        match transport {
+            Transport::Unix => server_handshake(reader, writer, runtime_wire_id())
+                .await
+                .map(|_| Admission::Owner)
+                .map_err(ProtocolError::from),
+            Transport::Gateway => gateway_handshake(reader, writer, state).await,
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(5), handshake)
     .await
     .map_err(|_| {
         ProtocolError::Io(std::io::Error::new(
             std::io::ErrorKind::TimedOut,
-            "local protocol handshake exceeded five seconds",
+            "protocol handshake exceeded five seconds",
         ))
     })?
-    .map_err(ProtocolError::from)?;
-    Ok(welcome)
+}
+
+/// The gateway's handshake: the same negotiation as the Unix socket, with
+/// admission in the middle. A connection that presents neither a pairing
+/// code nor a device token is closed before any request is read.
+async fn gateway_handshake(
+    reader: &mut ServerWireReader,
+    writer: &mut ServerWireWriter,
+    state: &AppState,
+) -> Result<Admission, ProtocolError> {
+    use ultraplexr_protocol::wire_v3::{Close, Hello, Welcome};
+    let hello: Hello = reader.receive_json(FrameKind::Hello, 0).await?;
+    let mut welcome = match Welcome::negotiate(&hello, runtime_wire_id()) {
+        Ok(welcome) => welcome,
+        Err(error) => {
+            writer
+                .send_json(
+                    FrameKind::Close,
+                    0,
+                    &Close {
+                        code: "unsupported_protocol".to_owned(),
+                        message: "upgrade ultraplexr so the device and runtime share protocol v3"
+                            .to_owned(),
+                    },
+                )
+                .await?;
+            return Err(error.into());
+        }
+    };
+    if let Some(token) = hello.share_token.as_deref() {
+        let share = state.shares.lock().await.authenticate(token);
+        return match share {
+            Ok(share) => {
+                writer.send_json(FrameKind::Welcome, 0, &welcome).await?;
+                let compression = welcome.zstd_enabled();
+                reader.set_compression(compression);
+                writer.set_compression(compression);
+                Ok(Admission::Share(share.share_id))
+            }
+            Err(_) => {
+                writer
+                    .send_json(
+                        FrameKind::Close,
+                        0,
+                        &Close {
+                            code: "gateway_unauthorized".to_owned(),
+                            message: "this Share link is invalid, expired, or revoked".to_owned(),
+                        },
+                    )
+                    .await?;
+                Err(ProtocolError::Io(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "invalid share refused at the gateway",
+                )))
+            }
+        };
+    }
+    let admitted = {
+        let mut devices = state.devices.lock().await;
+        if let Some(code) = hello.pairing_code.as_deref() {
+            devices
+                .complete_pairing(code, hello.device_id)
+                .map(|(summary, token)| (summary, Some(token)))
+        } else if let Some(token) = hello.device_token.as_deref() {
+            devices.authenticate(token).map(|summary| (summary, None))
+        } else {
+            Err(DeviceError::Unauthorized)
+        }
+    };
+    match admitted {
+        Ok((summary, minted)) if summary.device_id == hello.device_id => {
+            welcome.device_token = minted;
+            writer.send_json(FrameKind::Welcome, 0, &welcome).await?;
+            let compression = welcome.zstd_enabled();
+            reader.set_compression(compression);
+            writer.set_compression(compression);
+            Ok(Admission::Device(summary.device_id))
+        }
+        _ => {
+            writer
+                .send_json(
+                    FrameKind::Close,
+                    0,
+                    &Close {
+                        code: "gateway_unauthorized".to_owned(),
+                        message: "this device is not paired with the runtime; pair it with a code from `ultraplexr device-pair`"
+                            .to_owned(),
+                    },
+                )
+                .await?;
+            Err(ProtocolError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "unpaired device refused at the gateway",
+            )))
+        }
+    }
 }
 
 async fn handle_terminal_index_subscription(
@@ -1932,6 +2458,7 @@ async fn activity_snapshots(
 
 async fn publish_mission(state: &AppState, mission: Mission) {
     let _ = state.mission_events.send(mission.clone());
+    announce_approvals(state, &mission);
     let facts = state.provider_status.lock().await;
     let Ok(now) = provider_status::now_unix_micros() else {
         return;
@@ -2020,10 +2547,108 @@ fn plugin_list(plugins: &PluginPublisher) -> ResponseBody {
     }
 }
 
+/// Frames per second a subscriber receives when it names no preference.
+///
+/// The session actor publishes at up to 125 Hz; no display shows more than
+/// this, and a remote viewer asks for less.
+const DEFAULT_SUBSCRIBER_HZ: u16 = 60;
+const MAX_SUBSCRIBER_HZ: u16 = 125;
+
+fn subscriber_interval(max_hz: Option<u16>) -> Duration {
+    let hz = max_hz
+        .unwrap_or(DEFAULT_SUBSCRIBER_HZ)
+        .clamp(1, MAX_SUBSCRIBER_HZ);
+    Duration::from_micros(1_000_000 / u64::from(hz))
+}
+
+/// Caps how often one subscriber is sent a frame.
+///
+/// Deltas are computed against the last frame *sent*, so a frame that
+/// arrives inside the interval is simply held and the next send carries every
+/// change since. Only the newest held frame matters; older ones are dropped
+/// unseen, which is the point.
+struct RateGate {
+    interval: Duration,
+    last_sent: Instant,
+    pending: Option<Arc<ultraplexr_terminal::FullFrame>>,
+}
+
+impl RateGate {
+    fn new(interval: Duration, now: Instant) -> Self {
+        Self {
+            interval,
+            last_sent: now.checked_sub(interval).unwrap_or(now),
+            pending: None,
+        }
+    }
+
+    /// Offer a new frame. Returns it if it should go out now.
+    fn offer(
+        &mut self,
+        frame: Arc<ultraplexr_terminal::FullFrame>,
+        now: Instant,
+    ) -> Option<Arc<ultraplexr_terminal::FullFrame>> {
+        if now.duration_since(self.last_sent) >= self.interval {
+            self.pending = None;
+            self.last_sent = now;
+            Some(frame)
+        } else {
+            self.pending = Some(frame);
+            None
+        }
+    }
+
+    /// Release the held frame unconditionally: the interval elapsed, or an
+    /// event that must not overtake it is about to be sent.
+    fn flush(&mut self, now: Instant) -> Option<Arc<ultraplexr_terminal::FullFrame>> {
+        let frame = self.pending.take()?;
+        self.last_sent = now;
+        Some(frame)
+    }
+
+    fn holding(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    fn deadline(&self) -> Instant {
+        self.last_sent + self.interval
+    }
+}
+
+/// The event that carries `frame` to a subscriber whose last frame was
+/// `previous`: a delta when one can be computed, else the full frame.
+fn frame_event(
+    session_id: SessionId,
+    previous: Option<&ultraplexr_terminal::FullFrame>,
+    frame: &Arc<ultraplexr_terminal::FullFrame>,
+) -> ServerEvent {
+    previous
+        .and_then(|previous| FrameDelta::between(previous, frame))
+        .map_or_else(
+            || ServerEvent::TerminalFrame {
+                session_id,
+                frame: Box::new((**frame).clone()),
+            },
+            |delta| ServerEvent::TerminalDelta {
+                session_id,
+                delta: Box::new(delta),
+            },
+        )
+}
+
+/// Who a subscription belongs to: the connection's authority and the screen
+/// (client and surface) that asked, which is what an offer of control names.
+struct Subscriber {
+    client_id: uuid::Uuid,
+    surface_id: Option<uuid::Uuid>,
+    authority: ClientAuthority,
+}
+
 async fn handle_subscription(
     request_id: uuid::Uuid,
     session_id: SessionId,
-    authority: ClientAuthority,
+    max_hz: Option<u16>,
+    subscriber: Subscriber,
     state: Arc<AppState>,
     writer: SubscriptionWriter,
 ) -> Result<(), ServerError> {
@@ -2040,6 +2665,13 @@ async fn handle_subscription(
             return Ok(());
         }
     };
+    // Present for as long as this task lives, whatever ends it.
+    let Subscriber {
+        client_id,
+        surface_id,
+        authority,
+    } = subscriber;
+    let _viewer = ViewerGuard::register(&record, &authority, client_id, surface_id);
 
     writer
         .accept(
@@ -2100,6 +2732,7 @@ async fn handle_subscription(
             }
         })?;
 
+    let mut gate = RateGate::new(subscriber_interval(max_hz), Instant::now());
     loop {
         let event = tokio::select! {
             event = event_receive.recv() => event,
@@ -2107,11 +2740,30 @@ async fn handle_subscription(
                 if share_was_revoked(&authority, revoked) { return Ok(()); }
                 continue;
             }
+            () = tokio::time::sleep_until(tokio::time::Instant::from_std(gate.deadline())),
+                if gate.holding() =>
+            {
+                if let Some(frame) = gate.flush(Instant::now()) {
+                    let outbound = frame_event(session_id, previous_frame.as_deref(), &frame);
+                    previous_frame = Some(frame);
+                    writer.terminal(&outbound).await?;
+                }
+                continue;
+            }
         };
         let Some(event) = event else {
             return Ok(());
         };
         let terminal = is_terminal_event(&event);
+        // Nothing but a newer frame may overtake a held frame: flush it before
+        // any other kind of event. A newer frame simply replaces it.
+        if !matches!(event, SessionEvent::Frame(_))
+            && let Some(frame) = gate.flush(Instant::now())
+        {
+            let outbound = frame_event(session_id, previous_frame.as_deref(), &frame);
+            previous_frame = Some(frame);
+            writer.terminal(&outbound).await?;
+        }
         match event {
             SessionEvent::Frame(frame) => {
                 if previous_frame
@@ -2120,28 +2772,20 @@ async fn handle_subscription(
                 {
                     continue;
                 }
-                let outbound = previous_frame
-                    .as_ref()
-                    .and_then(|previous| FrameDelta::between(previous, &frame))
-                    .map_or_else(
-                        || ServerEvent::TerminalFrame {
-                            session_id,
-                            frame: Box::new((*frame).clone()),
-                        },
-                        |delta| ServerEvent::TerminalDelta {
-                            session_id,
-                            delta: Box::new(delta),
-                        },
-                    );
-                previous_frame = Some(frame);
-                writer.terminal(&outbound).await?;
+                if let Some(frame) = gate.offer(frame, Instant::now()) {
+                    let outbound = frame_event(session_id, previous_frame.as_deref(), &frame);
+                    previous_frame = Some(frame);
+                    writer.terminal(&outbound).await?;
+                }
                 continue;
             }
             SessionEvent::ForegroundProcessChanged { .. } => continue,
             event => {
-                writer
-                    .terminal(&protocol_event(session_id, event))
-                    .await?
+                // Command blocks and foreground changes ride other streams; a
+                // kind this stream does not carry must never end it.
+                if let Some(event) = protocol_event(session_id, event) {
+                    writer.terminal(&event).await?;
+                }
             }
         }
         if terminal {
@@ -2178,6 +2822,174 @@ async fn handle_request_with_context(
         agent_identity,
     } = context;
     match request {
+        Request::RequestTerminalControl { session_id } => {
+            let record = terminal_record(state, session_id)?;
+            record.live_handle(session_id)?;
+            let me = participant_of(state, client_id, surface_id, share_id).await;
+            let mut projection = record
+                .projection
+                .write()
+                .map_err(|_| RequestError::RegistryPoisoned)?;
+            let holds = projection.summary.controller_client_id == Some(client_id)
+                && projection.summary.controller_surface_id == surface_id;
+            if !holds
+                && !projection
+                    .summary
+                    .control_requests
+                    .iter()
+                    .any(|hand| hand.same_identity(&me))
+            {
+                projection.summary.control_requests.push(me);
+            }
+            publish_terminal(state, &projection.summary);
+            Ok(accepted(session_id))
+        }
+        Request::OfferTerminalControl { session_id, to } => {
+            let record = terminal_record(state, session_id)?;
+            record.live_handle(session_id)?;
+            require_controller(&record, session_id, client_id, surface_id, control_epoch, share_id)?;
+            let from = participant_of(state, client_id, surface_id, share_id).await;
+            let mut projection = record
+                .projection
+                .write()
+                .map_err(|_| RequestError::RegistryPoisoned)?;
+            projection.summary.control_offer = Some(Box::new(ultraplexr_protocol::ControlOffer {
+                from,
+                to,
+                control_epoch: projection.summary.control_epoch,
+            }));
+            publish_terminal(state, &projection.summary);
+            Ok(accepted(session_id))
+        }
+        Request::AcceptTerminalControl { session_id } => {
+            let record = terminal_record(state, session_id)?;
+            record.live_handle(session_id)?;
+            let me = participant_of(state, client_id, surface_id, share_id).await;
+            let mut projection = record
+                .projection
+                .write()
+                .map_err(|_| RequestError::RegistryPoisoned)?;
+            let offered = projection
+                .summary
+                .control_offer
+                .as_ref()
+                .is_some_and(|offer| {
+                    offer.control_epoch == projection.summary.control_epoch
+                        && offer.to.as_ref().is_none_or(|to| to.same_identity(&me))
+                });
+            if !offered {
+                return Err(RequestError::ControlNotOffered { session_id });
+            }
+            projection.summary.control_epoch = next_control_epoch(projection.summary.control_epoch);
+            projection.summary.controller_client_id = Some(client_id);
+            projection.summary.controller_surface_id = surface_id;
+            projection.summary.controller_share_id = share_id;
+            projection.summary.control_offer = None;
+            projection
+                .summary
+                .control_requests
+                .retain(|hand| !hand.same_identity(&me));
+            append_session_event(
+                &state.terminal_state_dir,
+                session_id,
+                ultraplexr_protocol::ChapterKind::Control,
+                &format!("control → {}", me.label),
+                None,
+            );
+            publish_terminal(state, &projection.summary);
+            Ok(ResponseBody::TerminalControlChanged {
+                session_id,
+                control_epoch: projection.summary.control_epoch,
+            })
+        }
+        Request::WithdrawTerminalControl { session_id } => {
+            let record = terminal_record(state, session_id)?;
+            let me = participant_of(state, client_id, surface_id, share_id).await;
+            let mut projection = record
+                .projection
+                .write()
+                .map_err(|_| RequestError::RegistryPoisoned)?;
+            let holds = projection.summary.controller_client_id == Some(client_id)
+                && projection.summary.controller_surface_id == surface_id;
+            if holds {
+                projection.summary.control_offer = None;
+            } else {
+                projection
+                    .summary
+                    .control_requests
+                    .retain(|hand| !hand.same_identity(&me));
+            }
+            publish_terminal(state, &projection.summary);
+            Ok(accepted(session_id))
+        }
+        Request::PushInfo => {
+            let (public_key, subscriptions) = match state.push.as_ref().and_then(|p| p.lock().ok()) {
+                Some(store) => (Some(store.public_key()), store.subscriptions()),
+                None => (None, Vec::new()),
+            };
+            Ok(ResponseBody::PushInfo {
+                public_key,
+                subscriptions,
+            })
+        }
+        Request::RegisterPushSubscription { subscription } => {
+            let store = state.push.as_ref().ok_or(RequestError::PushDisabled)?;
+            let mut store = store.lock().map_err(|_| RequestError::RegistryPoisoned)?;
+            store
+                .register(subscription)
+                .map_err(|error| RequestError::Push(error.to_string()))?;
+            Ok(ResponseBody::PushSubscriptionsChanged {
+                subscriptions: store.subscriptions().len(),
+            })
+        }
+        Request::ForgetPushSubscription { endpoint } => {
+            let store = state.push.as_ref().ok_or(RequestError::PushDisabled)?;
+            let mut store = store.lock().map_err(|_| RequestError::RegistryPoisoned)?;
+            store
+                .forget(&endpoint)
+                .map_err(|error| RequestError::Push(error.to_string()))?;
+            Ok(ResponseBody::PushSubscriptionsChanged {
+                subscriptions: store.subscriptions().len(),
+            })
+        }
+        Request::TestPush { title, body } => {
+            let Some(store) = state.push.clone() else {
+                return Err(RequestError::PushDisabled);
+            };
+            let outcomes = tokio::task::spawn_blocking(move || {
+                match store.lock() {
+                    Ok(mut store) => store.send_all(&push::Notice {
+                        title,
+                        body,
+                        url: "/".to_owned(),
+                        tag: "test".to_owned(),
+                    }),
+                    Err(_) => Vec::new(),
+                }
+            })
+            .await
+            .unwrap_or_default();
+            Ok(ResponseBody::PushSent { outcomes })
+        }
+        Request::TerminalChapters { session_id } => {
+            read_chapters(&state.terminal_state_dir, session_id)
+        }
+        Request::GatewayInfo => Ok(ResponseBody::GatewayInfo {
+            advertised: state.gateway.as_ref().map(|gateway| gateway.advertised.clone()),
+            fingerprint: state.gateway.as_ref().map(|gateway| gateway.fingerprint.clone()),
+        }),
+        Request::TerminalViewers { session_id } => {
+            let record = terminal_record(state, session_id)?;
+            let viewers = record
+                .viewers
+                .lock()
+                .map(|viewers| viewers.clone())
+                .unwrap_or_default();
+            Ok(ResponseBody::TerminalViewers {
+                session_id,
+                viewers,
+            })
+        }
         Request::Ping => Ok(ResponseBody::Pong),
         Request::RuntimeDiagnostics => runtime_diagnostics(state).await,
         Request::ListPlugins => Ok(plugin_list(&state.plugins)),
@@ -2562,6 +3374,7 @@ async fn handle_request_with_context(
                 None => FaultSource::OwnerHook,
             };
             let fault = state.faults.lock().await.report(fault, source)?;
+            announce_fault(state, &fault);
             Ok(ResponseBody::FaultRecorded { fault })
         }
         Request::ListFaults {
@@ -2589,6 +3402,33 @@ async fn handle_request_with_context(
             let fault = state.faults.lock().await.get(fault_id)?;
             let receipt = reproduce_fault(&fault, timeout_seconds).await;
             let fault = state.faults.lock().await.record_repro(fault_id, receipt)?;
+            Ok(ResponseBody::FaultRecorded { fault })
+        }
+        Request::ClassifyFault {
+            fault_id,
+            runs,
+            timeout_seconds,
+            isolated,
+        } => {
+            // Replays run without the store lock: each one is a real command.
+            let fault = state.faults.lock().await.get(fault_id)?;
+            let runs = u32::from(
+                runs.unwrap_or(DEFAULT_CLASSIFY_RUNS)
+                    .clamp(MIN_CLASSIFY_RUNS, MAX_CLASSIFY_RUNS),
+            );
+            let (classification, receipt) = classify_fault(
+                &fault,
+                runs,
+                timeout_seconds,
+                isolated,
+                &state.terminal_state_dir,
+            )
+            .await;
+            let fault = state
+                .faults
+                .lock()
+                .await
+                .record_classification(fault_id, classification, receipt)?;
             Ok(ResponseBody::FaultRecorded { fault })
         }
         Request::GuardFaults {
@@ -2654,6 +3494,26 @@ async fn handle_request_with_context(
             let evidence = state.run_evidence.lock().await.list(mission_id, run_id);
             Ok(ResponseBody::RunEvidence { evidence })
         }
+        Request::CreateDevicePairing { label } => {
+            let gateway = state.gateway.clone().ok_or(RequestError::GatewayDisabled)?;
+            let code = state
+                .devices
+                .lock()
+                .await
+                .begin_pairing(label, ultraplexr_protocol::DeviceRole::Owner)?;
+            Ok(ResponseBody::DevicePairing {
+                code,
+                fingerprint: gateway.fingerprint,
+                gateway: gateway.advertised,
+                expires_in_seconds: device_store::PAIRING_TTL_SECONDS,
+            })
+        }
+        Request::ListDevices => Ok(ResponseBody::Devices {
+            devices: state.devices.lock().await.list(),
+        }),
+        Request::RevokeDevice { device_id } => Ok(ResponseBody::DeviceRevoked {
+            device: state.devices.lock().await.revoke(device_id)?,
+        }),
         Request::CreateShare {
             label,
             role,
@@ -3086,6 +3946,7 @@ async fn handle_request_with_context(
         Request::ClaimTerminalControl { session_id, force } => {
             let record = terminal_record(state, session_id)?;
             record.live_handle(session_id)?;
+            let taker = participant_of(state, client_id, surface_id, share_id).await;
             let mut projection = record
                 .projection
                 .write()
@@ -3105,6 +3966,18 @@ async fn handle_request_with_context(
                 projection.summary.controller_client_id = Some(client_id);
                 projection.summary.controller_surface_id = surface_id;
                 projection.summary.controller_share_id = share_id;
+                projection.summary.control_offer = None;
+                projection
+                    .summary
+                    .control_requests
+                    .retain(|hand| hand.client_id != client_id || hand.surface_id != surface_id);
+                append_session_event(
+                    &state.terminal_state_dir,
+                    session_id,
+                    ultraplexr_protocol::ChapterKind::Control,
+                    &format!("control → {}", taker.label),
+                    None,
+                );
             }
             publish_terminal(state, &projection.summary);
             Ok(ResponseBody::TerminalControlChanged {
@@ -3123,7 +3996,15 @@ async fn handle_request_with_context(
             projection.summary.controller_client_id = None;
             projection.summary.controller_surface_id = None;
             projection.summary.controller_share_id = None;
+            projection.summary.control_offer = None;
             projection.summary.control_epoch = next_control_epoch(projection.summary.control_epoch);
+            append_session_event(
+                &state.terminal_state_dir,
+                session_id,
+                ultraplexr_protocol::ChapterKind::Control,
+                "control released",
+                None,
+            );
             publish_terminal(state, &projection.summary);
             Ok(ResponseBody::TerminalControlChanged {
                 session_id,
@@ -3139,6 +4020,7 @@ async fn handle_request_with_context(
         | Request::SubscribeRunActivities { .. }
         | Request::SubscribeTerminals
         | Request::SubscribeSessionGroups { .. }
+        | Request::SubscribeTerminalReplay { .. }
         | Request::SubscribeTerminal { .. } => {
             unreachable!("subscriptions are handled per stream")
         }
@@ -4044,12 +4926,29 @@ async fn compensate_failed_launch(
     }
 }
 
+/// A shell that does not know this machine — a browser, a phone — leaves
+/// the program and directory empty and gets the runtime user's login shell
+/// in their home, which is what "new shell" means on every other screen.
+fn fill_in_shell_defaults(spec: &mut TerminalSessionSpec) {
+    if spec.program.as_os_str().is_empty() {
+        spec.program = std::env::var_os("SHELL")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/bin/sh"));
+    }
+    if spec.cwd.as_os_str().is_empty() {
+        spec.cwd = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/"));
+    }
+}
+
 fn start_terminal(
     mut spec: TerminalSessionSpec,
     client_id: uuid::Uuid,
     surface_id: Option<uuid::Uuid>,
     state: &Arc<AppState>,
 ) -> Result<ResponseBody, RequestError> {
+    fill_in_shell_defaults(&mut spec);
     // Shell integration keys off this: it stays inert in terminals ultraplexr
     // does not own, so a person's shell behaves normally elsewhere.
     spec.environment_delta.insert(
@@ -4075,7 +4974,15 @@ fn start_terminal(
         _ => return Err(RequestError::InvalidAgentBinding),
     };
     persist_terminal_spec(&spec, &state.terminal_state_dir)?;
+    append_session_event(
+        &state.terminal_state_dir,
+        spec.session_id,
+        ultraplexr_protocol::ChapterKind::Started,
+        &spec.program.to_string_lossy(),
+        None,
+    );
     let session_id = spec.session_id;
+    let spawn_cwd = spec.cwd.clone();
     let (handle, events) = SessionHandle::spawn_subscribed(
         SessionSpec {
             id: session_id,
@@ -4104,6 +5011,9 @@ fn start_terminal(
         controller_surface_id: surface_id,
         controller_share_id: None,
         control_epoch: 1,
+        control_offer: None,
+        control_requests: Vec::new(),
+        cwd: Some(spawn_cwd),
     };
     let projection = Arc::new(RwLock::new(TerminalProjection {
         summary: summary.clone(),
@@ -4124,6 +5034,7 @@ fn start_terminal(
         .insert(
             session_id,
             TerminalRecord {
+                viewers: Arc::default(),
                 handle: Some(handle),
                 projection,
             },
@@ -4351,10 +5262,14 @@ fn recover_terminal_history(
             controller_surface_id: None,
             controller_share_id: None,
             control_epoch: 0,
+            control_offer: None,
+            control_requests: Vec::new(),
+            cwd: Some(spec.cwd.clone()),
         };
         records.insert(
             spec.session_id,
             TerminalRecord {
+                viewers: Arc::default(),
                 handle: None,
                 projection: Arc::new(RwLock::new(TerminalProjection {
                     summary,
@@ -4370,6 +5285,336 @@ fn recover_terminal_history(
         );
     }
     Ok(records)
+}
+
+/// Tell every subscribed browser. Encryption and delivery are blocking work
+/// on a blocking thread; the caller never waits.
+fn announce(state: &AppState, notice: push::Notice) {
+    let Some(store) = state.push.clone() else {
+        return;
+    };
+    tokio::task::spawn_blocking(move || {
+        if let Ok(mut store) = store.lock() {
+            for (endpoint, status) in store.send_all(&notice) {
+                if !(200..300).contains(&status) {
+                    eprintln!("push to {endpoint} answered {status}");
+                }
+            }
+        }
+    });
+}
+
+/// An approval waiting is worth a phone's attention exactly once.
+fn announce_approvals(state: &AppState, mission: &Mission) {
+    use ultraplexr_core::AttentionKind;
+    let Some(store) = state.push.as_ref() else {
+        return;
+    };
+    let notices = mission
+        .attention_queue()
+        .into_iter()
+        .filter(|item| {
+            matches!(
+                item.kind,
+                AttentionKind::Approval | AttentionKind::HighRiskApproval
+            )
+        })
+        .map(|item| push::Notice {
+            title: match item.kind {
+                AttentionKind::HighRiskApproval => "High-risk approval waiting".to_owned(),
+                _ => "Approval waiting".to_owned(),
+            },
+            body: item.summary.clone(),
+            url: format!("/#mission={}", mission.id),
+            tag: format!("approval-{:?}", item.signal_id),
+        })
+        .collect::<Vec<_>>();
+    if notices.is_empty() {
+        return;
+    }
+    let fresh = match store.lock() {
+        Ok(mut store) => notices
+            .into_iter()
+            .filter(|notice| store.first_time(&notice.tag))
+            .collect::<Vec<_>>(),
+        Err(_) => return,
+    };
+    if fresh.is_empty() {
+        return;
+    }
+    let store = Arc::clone(store);
+    tokio::task::spawn_blocking(move || {
+        if let Ok(mut store) = store.lock() {
+            for notice in fresh {
+                store.send_all(&notice);
+            }
+        }
+    });
+}
+
+fn announce_fault(state: &AppState, fault: &ultraplexr_protocol::FaultSummary) {
+    announce(
+        state,
+        push::Notice {
+            title: "Fault opened".to_owned(),
+            body: fault.summary.clone(),
+            url: format!("/#fault={}", fault.fault_id),
+            tag: format!("fault-{}", fault.fault_id),
+        },
+    );
+}
+
+/// One line per event in `sessions/<id>/events.jsonl`: what happened, when,
+/// and where the journal was at that moment. Read back as chapters.
+fn append_session_event(
+    state_dir: &std::path::Path,
+    session_id: SessionId,
+    kind: ultraplexr_protocol::ChapterKind,
+    label: &str,
+    fault_id: Option<ultraplexr_core::FaultId>,
+) {
+    let directory = state_dir.join("sessions").join(session_id.to_string());
+    let journal_offset = std::fs::metadata(directory.join("output.raw"))
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    let at_micros = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_micros() as u64)
+        .unwrap_or_default();
+    let line = serde_json::json!({
+        "at_micros": at_micros,
+        "journal_offset": journal_offset,
+        "kind": kind,
+        "label": label,
+        "fault_id": fault_id,
+    });
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let written = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(directory.join("events.jsonl"))
+        .and_then(|mut file| {
+            use std::io::Write as _;
+            writeln!(file, "{line}")
+        });
+    if let Err(error) = written {
+        eprintln!("could not record a session event for {session_id}: {error}");
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct SessionEventLine {
+    at_micros: u64,
+    journal_offset: u64,
+    kind: ultraplexr_protocol::ChapterKind,
+    label: String,
+    #[serde(default)]
+    fault_id: Option<ultraplexr_core::FaultId>,
+}
+
+fn read_chapters(
+    state_dir: &std::path::Path,
+    session_id: SessionId,
+) -> Result<ResponseBody, RequestError> {
+    let directory = state_dir.join("sessions").join(session_id.to_string());
+    if !directory.join("terminal.json").is_file() {
+        return Err(RequestError::TerminalNotFound(session_id));
+    }
+    let journal_bytes = std::fs::metadata(directory.join("output.raw"))
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    let timing = ultraplexr_runtime::read_timing(&directory.join(ultraplexr_runtime::TIMING_FILE));
+    let duration_ms = timing.last().map_or(0, |(_, ms)| u64::from(*ms));
+    let text = std::fs::read_to_string(directory.join("events.jsonl")).unwrap_or_default();
+    let mut chapters = text
+        .lines()
+        .filter_map(|line| serde_json::from_str::<SessionEventLine>(line).ok())
+        .enumerate()
+        .map(|(index, event)| ultraplexr_protocol::Chapter {
+            index: index as u32,
+            kind: event.kind,
+            label: event.label,
+            at_micros: event.at_micros,
+            journal_offset: event.journal_offset.min(journal_bytes),
+            fault_id: event.fault_id,
+        })
+        .collect::<Vec<_>>();
+    if chapters.is_empty() {
+        chapters.push(ultraplexr_protocol::Chapter {
+            index: 0,
+            kind: ultraplexr_protocol::ChapterKind::Started,
+            label: "start".to_owned(),
+            at_micros: 0,
+            journal_offset: 0,
+            fault_id: None,
+        });
+    }
+    Ok(ResponseBody::TerminalChapters {
+        session_id,
+        journal_bytes,
+        duration_ms,
+        chapters,
+    })
+}
+
+/// Play a recording back as frames, on its own thread because parsing is
+/// CPU work and pacing is sleeping, neither of which belongs on the
+/// executor. Ends when the journal ends or the receiver goes away.
+fn replay_journal(
+    directory: &std::path::Path,
+    session_id: SessionId,
+    from_offset: u64,
+    speed_percent: u32,
+    interval: Duration,
+    send: &mpsc::Sender<ServerEvent>,
+) -> Result<(), RequestError> {
+    let spec: TerminalSessionSpec =
+        serde_json::from_slice(&std::fs::read(directory.join("terminal.json"))?)?;
+    let journal = std::fs::read(directory.join("output.raw"))?;
+    let timing = ultraplexr_runtime::read_timing(&directory.join(ultraplexr_runtime::TIMING_FILE));
+    let mut model = TerminalModel::new(spec.grid)?;
+    let from = usize::try_from(from_offset.min(journal.len() as u64)).unwrap_or(0);
+    // Everything before the start point is fast-forwarded, within the
+    // history budget so a huge journal cannot hold the thread.
+    let started = Instant::now();
+    for chunk in journal[..from].chunks(64 * 1024) {
+        model.advance(TerminalAction::Output(chunk))?;
+        if started.elapsed() >= ReplayBudget::HISTORY.deadline {
+            break;
+        }
+    }
+    let mut previous: Arc<ultraplexr_terminal::FullFrame> = Arc::new(model.frame()?);
+    if send
+        .blocking_send(ServerEvent::TerminalFrame {
+            session_id,
+            frame: Box::new((*previous).clone()),
+        })
+        .is_err()
+    {
+        return Ok(());
+    }
+    let speed = f64::from(speed_percent.max(1)) / 100.0;
+    let mut position = from;
+    let mut clock_ms: Option<u32> = None;
+    let mut entries = timing
+        .into_iter()
+        .filter(|(offset, _)| usize::try_from(*offset).is_ok_and(|offset| offset > from))
+        .peekable();
+    let mut last_emit = Instant::now();
+    while position < journal.len() {
+        let (target, wait_ms) = match entries.next() {
+            Some((offset, ms)) => {
+                let wait = clock_ms.map_or(0, |clock| ms.saturating_sub(clock));
+                clock_ms = Some(ms);
+                (usize::try_from(offset).unwrap_or(journal.len()).min(journal.len()), wait)
+            }
+            // No timing for these bytes: a steady 200 KiB/s.
+            None => ((position + 16 * 1024).min(journal.len()), 80),
+        };
+        if wait_ms > 0 {
+            let wait = Duration::from_secs_f64(f64::from(wait_ms) / 1000.0 / speed);
+            std::thread::sleep(wait.min(Duration::from_secs(5)));
+        }
+        if target > position {
+            model.advance(TerminalAction::Output(&journal[position..target]))?;
+            position = target;
+        }
+        if last_emit.elapsed() >= interval || position >= journal.len() {
+            let frame = Arc::new(model.frame()?);
+            let event = frame_event(session_id, Some(&previous), &frame);
+            previous = frame;
+            if send.blocking_send(event).is_err() {
+                return Ok(());
+            }
+            last_emit = Instant::now();
+        }
+    }
+    Ok(())
+}
+
+async fn handle_replay(
+    request_id: uuid::Uuid,
+    session_id: SessionId,
+    from_offset: u64,
+    speed_percent: u32,
+    max_hz: Option<u16>,
+    state: Arc<AppState>,
+    writer: SubscriptionWriter,
+) -> Result<(), ServerError> {
+    let directory = state
+        .terminal_state_dir
+        .join("sessions")
+        .join(session_id.to_string());
+    if !directory.join("terminal.json").is_file() {
+        writer
+            .response(&ServerResponse::error(
+                request_id,
+                "request_failed",
+                RequestError::TerminalNotFound(session_id).to_string(),
+            ))
+            .await?;
+        return Ok(());
+    }
+    writer
+        .accept(
+            request_id,
+            ResponseBody::TerminalReplayAccepted {
+                session_id,
+                stream_id: writer.stream_id,
+            },
+        )
+        .await?;
+    let (send, mut receive) = mpsc::channel(8);
+    let interval = subscriber_interval(max_hz);
+    thread::Builder::new()
+        .name(format!("ultraplexr-replay-{session_id}"))
+        .spawn(move || {
+            if let Err(error) = replay_journal(
+                &directory,
+                session_id,
+                from_offset,
+                speed_percent,
+                interval,
+                &send,
+            ) {
+                let _ = send.blocking_send(ServerEvent::TerminalFailed {
+                    session_id,
+                    message: format!("replay stopped: {error}"),
+                });
+            }
+        })?;
+    while let Some(event) = receive.recv().await {
+        writer.terminal(&event).await?;
+    }
+    Ok(())
+}
+
+/// The identity a request acts as, with a label people can read: the
+/// Share's label for a viewer, "owner" for the owner's own screens.
+async fn participant_of(
+    state: &AppState,
+    client_id: uuid::Uuid,
+    surface_id: Option<uuid::Uuid>,
+    share_id: Option<uuid::Uuid>,
+) -> ultraplexr_protocol::Participant {
+    let label = match share_id {
+        Some(share_id) => state
+            .shares
+            .lock()
+            .await
+            .list()
+            .into_iter()
+            .find(|share| share.share_id == share_id)
+            .map_or_else(|| "share".to_owned(), |share| share.label),
+        None => "owner".to_owned(),
+    };
+    ultraplexr_protocol::Participant {
+        client_id,
+        surface_id,
+        share_id,
+        label,
+    }
 }
 
 fn require_controller(
@@ -4422,6 +5667,7 @@ fn release_client_controllers(state: &AppState, client_id: uuid::Uuid, share_id:
             projection.summary.controller_client_id = None;
             projection.summary.controller_surface_id = None;
             projection.summary.controller_share_id = None;
+            projection.summary.control_offer = None;
             projection.summary.control_epoch = next_control_epoch(projection.summary.control_epoch);
             publish_terminal(state, &projection.summary);
         }
@@ -4439,6 +5685,7 @@ fn release_share_controllers(state: &AppState, share_id: uuid::Uuid) {
             projection.summary.controller_client_id = None;
             projection.summary.controller_surface_id = None;
             projection.summary.controller_share_id = None;
+            projection.summary.control_offer = None;
             projection.summary.control_epoch = next_control_epoch(projection.summary.control_epoch);
             publish_terminal(state, &projection.summary);
         }
@@ -4521,14 +5768,14 @@ fn observe_terminal(
                             projection.summary.foreground_process = None;
                             clear_projection_control(&mut projection);
                             projection.final_event =
-                                Some(protocol_event(session_id, event.clone()));
+                                protocol_event(session_id, event.clone());
                         }
                         SessionEvent::Failed { .. } => {
                             projection.summary.status = TerminalSessionStatus::Failed;
                             projection.summary.foreground_process = None;
                             clear_projection_control(&mut projection);
                             projection.final_event =
-                                Some(protocol_event(session_id, event.clone()));
+                                protocol_event(session_id, event.clone());
                         }
                         SessionEvent::Bell { .. }
                         | SessionEvent::CommandFinished(_)
@@ -4536,6 +5783,15 @@ fn observe_terminal(
                         | SessionEvent::TerminationEscalationRequired => {}
                     }
                     if terminal {
+                        if let SessionEvent::Exited(exit) = &event {
+                            append_session_event(
+                                &state.terminal_state_dir,
+                                session_id,
+                                ultraplexr_protocol::ChapterKind::Exited,
+                                &format!("exited {}", exit.code),
+                                None,
+                            );
+                        }
                         publish_terminal(&state, &projection.summary);
                     } else if presentation_changed || matches!(event, SessionEvent::ForegroundProcessChanged { .. }) {
                         let _ = state.terminal_events.send(projection.summary.clone());
@@ -4621,6 +5877,11 @@ async fn record_terminal_fault(
     let Ok(spec) = serde_json::from_slice::<TerminalSessionSpec>(&bytes) else {
         return;
     };
+    // An interactive shell exits with whatever its last command returned.
+    // That is the shell being closed, not a failure of anything.
+    if is_interactive_shell(&spec.program, &spec.args) {
+        return;
+    }
     let command = std::iter::once(spec.program.display().to_string())
         .chain(spec.args.iter().cloned())
         .collect::<Vec<_>>()
@@ -4641,13 +5902,14 @@ async fn record_terminal_fault(
         mission_id: binding.map(|binding| binding.mission_id),
         run_id: binding.map(|binding| binding.run_id),
     };
-    if let Err(error) = state
+    match state
         .faults
         .lock()
         .await
         .report(fault, FaultSource::TerminalExit)
     {
-        eprintln!("could not record Fault for terminal {session_id}: {error}");
+        Ok(fault) => announce_fault(state, &fault),
+        Err(error) => eprintln!("could not record Fault for terminal {session_id}: {error}"),
     }
 }
 
@@ -4655,12 +5917,46 @@ async fn record_terminal_fault(
 ///
 /// Unlike a session-level Fault this always has an exact command line, so the
 /// record is replayable without consulting the launch spec.
+/// True for a shell started to be typed into, rather than to run something.
+///
+/// Its exit status is its last command's, so a session ending in `zsh
+/// exited 1` says only that the person closed a shell whose previous command
+/// had failed. A shell given a command (`-c`) or a script is different: that
+/// is a program, and its exit status means what it says.
+fn is_interactive_shell(program: &std::path::Path, args: &[String]) -> bool {
+    let shell = program
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            matches!(
+                name,
+                "sh" | "bash" | "zsh" | "fish" | "dash" | "ksh" | "tcsh" | "csh" | "nu" | "pwsh"
+            )
+        });
+    // Login and interactive flags are still an interactive shell; anything
+    // else (a command, a script) is a program.
+    shell
+        && args
+            .iter()
+            .all(|arg| matches!(arg.as_str(), "-l" | "-i" | "-il" | "-li" | "--login" | "--interactive"))
+}
+
+/// Exit statuses that mean the command was stopped rather than that it
+/// failed: 130 is SIGINT (Ctrl-C) and 143 is SIGTERM, as shells report them.
+const fn is_interruption(exit_code: Option<i32>) -> bool {
+    matches!(exit_code, Some(130 | 143))
+}
+
 async fn record_command_fault(
     state: &Arc<AppState>,
     session_id: SessionId,
     binding: Option<TerminalBinding>,
     block: ultraplexr_runtime::command_blocks::CommandBlock,
 ) {
+    // Someone stopping a command is not the command failing.
+    if is_interruption(block.exit_code) {
+        return;
+    }
     let cwd = terminal_working_directory(state, session_id);
     let Some(cwd) = cwd else {
         return;
@@ -4669,6 +5965,13 @@ async fn record_command_fault(
         Some(code) => format!("{} exited {code}", block.command),
         None => format!("{} failed", block.command),
     };
+    append_session_event(
+        &state.terminal_state_dir,
+        session_id,
+        ultraplexr_protocol::ChapterKind::Fault,
+        &summary,
+        None,
+    );
     let fault = ultraplexr_protocol::FaultInput {
         kind: ultraplexr_protocol::FaultKind::CommandFailed,
         command: block.command,
@@ -4681,13 +5984,14 @@ async fn record_command_fault(
         mission_id: binding.map(|binding| binding.mission_id),
         run_id: binding.map(|binding| binding.run_id),
     };
-    if let Err(error) = state
+    match state
         .faults
         .lock()
         .await
         .report(fault, FaultSource::TerminalExit)
     {
-        eprintln!("could not record Fault for terminal {session_id}: {error}");
+        Ok(fault) => announce_fault(state, &fault),
+        Err(error) => eprintln!("could not record Fault for terminal {session_id}: {error}"),
     }
 }
 
@@ -4711,6 +6015,211 @@ const MAX_REPRO_TIMEOUT_SECONDS: u16 = 900;
 /// Replay a Fault's exact command in its recorded directory and report what
 /// happened. A replay that cannot run at all is recorded as an error, never as
 /// a pass: only a command that actually ran and succeeded clears a Fault.
+/// Replays in one classification sample when the caller names no count.
+///
+/// Five is enough to tell "always" from "sometimes" for the common case of a
+/// failure that shows up a good fraction of the time; a rarer one needs more,
+/// and the caller can ask, up to a ceiling that keeps one request bounded.
+const DEFAULT_CLASSIFY_RUNS: u8 = 5;
+const MIN_CLASSIFY_RUNS: u8 = 2;
+const MAX_CLASSIFY_RUNS: u8 = 25;
+
+/// Replay a Fault repeatedly and summarise how often it failed.
+///
+/// Returns the sample and the receipt that becomes the Fault's current
+/// evidence: a failing one if any replay failed, otherwise the last. The
+/// store sets `reproduced` from the sample's failure count, so a lucky pass
+/// inside a mixed sample can never close the Fault.
+async fn classify_fault(
+    fault: &ultraplexr_protocol::FaultSummary,
+    runs: u32,
+    timeout_seconds: Option<u16>,
+    isolated: bool,
+    state_dir: &std::path::Path,
+) -> (
+    ultraplexr_protocol::FaultClassification,
+    ultraplexr_protocol::ReproReceipt,
+) {
+    let classified_at_unix_micros = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_micros() as u64)
+        .unwrap_or_default();
+    let timeout = Duration::from_secs(u64::from(
+        timeout_seconds
+            .unwrap_or(DEFAULT_REPRO_TIMEOUT_SECONDS)
+            .clamp(1, MAX_REPRO_TIMEOUT_SECONDS),
+    ));
+    let mut failures = 0;
+    let mut errors = 0;
+    let mut revision = None;
+    let mut failing = None;
+    let mut last = None;
+    for index in 0..runs {
+        let receipt = if isolated {
+            let fault = fault.clone();
+            let root = state_dir.join("fault-worktrees");
+            tokio::task::spawn_blocking(move || isolated_replay(&fault, timeout, &root, index))
+                .await
+                .unwrap_or_else(|error| replay_error(format!("replay task failed: {error}")))
+        } else {
+            reproduce_fault(fault, timeout_seconds).await
+        };
+        if receipt.error.is_some() {
+            errors += 1;
+        } else if receipt.reproduced {
+            failures += 1;
+            if failing.is_none() {
+                failing = Some(receipt.clone());
+            }
+        }
+        if revision.is_none() {
+            revision.clone_from(&receipt.revision);
+        }
+        last = Some(receipt);
+    }
+    let classification = ultraplexr_protocol::FaultClassification {
+        classified_at_unix_micros,
+        runs,
+        failures,
+        errors,
+        verdict: ultraplexr_protocol::FaultClassification::verdict_for(runs, failures, errors),
+        isolated,
+        revision,
+    };
+    let receipt = failing
+        .or(last)
+        .unwrap_or_else(|| replay_error("no replay ran".to_owned()));
+    (classification, receipt)
+}
+
+/// A receipt for a replay that never ran.
+fn replay_error(error: String) -> ultraplexr_protocol::ReproReceipt {
+    ultraplexr_protocol::ReproReceipt {
+        attempted_at_unix_micros: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_micros() as u64)
+            .unwrap_or_default(),
+        reproduced: false,
+        exit_code: None,
+        output: String::new(),
+        duration_ms: 0,
+        revision: None,
+        error: Some(error),
+    }
+}
+
+/// One replay in a fresh detached worktree of the Fault directory's
+/// repository, at its current HEAD, run from the same relative directory.
+///
+/// The worktree is removed afterwards whatever happened. A directory outside
+/// a repository cannot be isolated this way and yields an error receipt
+/// rather than a silent in-place run, so the sample says what it measured.
+fn isolated_replay(
+    fault: &ultraplexr_protocol::FaultSummary,
+    timeout: Duration,
+    worktree_root: &std::path::Path,
+    index: u32,
+) -> ultraplexr_protocol::ReproReceipt {
+    let attempted_at_unix_micros = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_micros() as u64)
+        .unwrap_or_default();
+    let repo_root = match git_output(&fault.cwd, &["rev-parse", "--show-toplevel"]) {
+        Some(root) => PathBuf::from(root),
+        None => {
+            return replay_error(format!(
+                "{} is not inside a git repository, so it cannot be isolated",
+                fault.cwd.display()
+            ));
+        }
+    };
+    let relative = fault
+        .cwd
+        .strip_prefix(&repo_root)
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_default();
+    let worktree = worktree_root
+        .join(fault.fault_id.to_string())
+        .join(index.to_string());
+    if let Err(error) = std::fs::create_dir_all(worktree_root) {
+        return replay_error(format!("worktree root is unavailable: {error}"));
+    }
+    let added = StdCommand::new("git")
+        .args(["worktree", "add", "--detach", "--force"])
+        .arg(&worktree)
+        .arg("HEAD")
+        .current_dir(&repo_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output();
+    match added {
+        Ok(output) if output.status.success() => {}
+        Ok(output) => {
+            return replay_error(format!(
+                "git worktree add failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Err(error) => return replay_error(format!("git is unavailable: {error}")),
+    }
+    let started = Instant::now();
+    let outcome = run_repro(&fault.command, &worktree.join(relative), timeout);
+    let duration_ms = started.elapsed().as_millis() as u64;
+    // Remove it even if the replay failed to start; a leftover worktree would
+    // pin the branch state and fill the disk.
+    let _ = StdCommand::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(&worktree)
+        .current_dir(&repo_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let _ = std::fs::remove_dir_all(&worktree);
+    match outcome {
+        Ok(ReproOutcome {
+            exit_code,
+            output,
+            revision,
+        }) => ultraplexr_protocol::ReproReceipt {
+            attempted_at_unix_micros,
+            reproduced: exit_code != Some(0),
+            exit_code,
+            output: truncate_output(&output),
+            duration_ms,
+            revision,
+            error: None,
+        },
+        Err(error) => ultraplexr_protocol::ReproReceipt {
+            attempted_at_unix_micros,
+            reproduced: false,
+            exit_code: None,
+            output: String::new(),
+            duration_ms,
+            revision: None,
+            error: Some(error),
+        },
+    }
+}
+
+fn git_output(directory: &std::path::Path, args: &[&str]) -> Option<String> {
+    let output = StdCommand::new("git")
+        .args(args)
+        .current_dir(directory)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
+}
+
 /// Resolved Faults re-checked in one guard pass when the caller names no limit.
 ///
 /// Each check runs a real command, so a pass is deliberately a bounded slice of
@@ -4929,6 +6438,7 @@ async fn finish_bound_run(
     outcome: FinishOutcome,
     summary: String,
 ) {
+    let summary_for_notice = summary.clone();
     let key = uuid::Uuid::new_v4();
     let result = state
         .store
@@ -4954,6 +6464,18 @@ async fn finish_bound_run(
         .await;
     match result {
         Ok((_, mission)) => {
+            announce(
+                state,
+                push::Notice {
+                    title: match outcome {
+                        FinishOutcome::Succeeded => "Run finished".to_owned(),
+                        _ => "Run failed".to_owned(),
+                    },
+                    body: summary_for_notice,
+                    url: format!("/#mission={}", binding.mission_id),
+                    tag: format!("run-{}", binding.run_id),
+                },
+            );
             publish_mission(state, mission).await;
         }
         Err(error) => eprintln!(
@@ -5037,6 +6559,8 @@ async fn reconcile_recovered_agent_runs(state: &Arc<AppState>) -> usize {
 }
 
 fn clear_projection_control(projection: &mut TerminalProjection) {
+    projection.summary.control_offer = None;
+    projection.summary.control_requests.clear();
     let had_controller = projection.summary.controller_client_id.is_some()
         || projection.summary.controller_surface_id.is_some();
     projection.summary.controller_client_id = None;
@@ -5501,17 +7025,19 @@ const fn is_terminal_event(event: &SessionEvent) -> bool {
     matches!(event, SessionEvent::Exited(_) | SessionEvent::Failed { .. })
 }
 
-fn protocol_event(session_id: SessionId, event: SessionEvent) -> ServerEvent {
-    match event {
+/// The wire event for a session event, or `None` for the kinds a terminal
+/// stream does not carry: foreground changes go out on the terminal index
+/// stream and finished command blocks become Faults. Total on purpose — a
+/// subscriber task that panicked here used to freeze its viewer without a
+/// word, after the first command a shell with OSC 133 finished.
+fn protocol_event(session_id: SessionId, event: SessionEvent) -> Option<ServerEvent> {
+    Some(match event {
         SessionEvent::Frame(frame) => ServerEvent::TerminalFrame {
             session_id,
             frame: Box::new((*frame).clone()),
         },
-        SessionEvent::ForegroundProcessChanged { .. } => {
-            unreachable!("foreground process changes use the terminal index stream")
-        }
-        SessionEvent::CommandFinished(_) => {
-            unreachable!("command blocks become Faults instead of terminal events")
+        SessionEvent::ForegroundProcessChanged { .. } | SessionEvent::CommandFinished(_) => {
+            return None;
         }
         SessionEvent::Bell { count } => ServerEvent::TerminalBell { session_id, count },
         SessionEvent::PasteConfirmation(confirmation) => ServerEvent::PasteConfirmation {
@@ -5531,11 +7057,52 @@ fn protocol_event(session_id: SessionId, event: SessionEvent) -> ServerEvent {
             session_id,
             message,
         },
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn events_other_streams_carry_do_not_end_a_terminal_subscription() {
+        let session_id = SessionId::new();
+        assert!(
+            protocol_event(
+                session_id,
+                SessionEvent::ForegroundProcessChanged { process_id: 1 }
+            )
+            .is_none()
+        );
+        assert!(matches!(
+            protocol_event(session_id, SessionEvent::Bell { count: 2 }),
+            Some(ServerEvent::TerminalBell { count: 2, .. })
+        ));
+    }
+
+    #[test]
+    fn empty_program_and_cwd_become_the_login_shell_at_home() {
+        let mut spec = TerminalSessionSpec {
+            session_id: SessionId::new(),
+            mission_id: None,
+            run_id: None,
+            program: PathBuf::new(),
+            args: Vec::new(),
+            cwd: PathBuf::new(),
+            environment_delta: Default::default(),
+            grid: ultraplexr_terminal::GridSize::new(80, 24).expect("grid"),
+        };
+        fill_in_shell_defaults(&mut spec);
+        assert!(!spec.program.as_os_str().is_empty());
+        assert!(spec.cwd.is_absolute());
+        let mut chosen = TerminalSessionSpec {
+            program: PathBuf::from("/bin/echo"),
+            cwd: PathBuf::from("/tmp"),
+            ..spec
+        };
+        fill_in_shell_defaults(&mut chosen);
+        assert_eq!(chosen.program, PathBuf::from("/bin/echo"));
+        assert_eq!(chosen.cwd, PathBuf::from("/tmp"));
+    }
+
     use super::*;
     use std::{collections::BTreeMap, time::Duration};
     use ultraplexr_core::{
@@ -5577,6 +7144,7 @@ mod tests {
         let mut frame = model.frame().expect("frame should render");
         frame.sequence = 7;
         let record = TerminalRecord {
+            viewers: Arc::default(),
             handle: None,
             projection: Arc::new(RwLock::new(TerminalProjection {
                 summary: TerminalSessionSummary {
@@ -5595,6 +7163,9 @@ mod tests {
                     controller_surface_id: None,
                     controller_share_id: None,
                     control_epoch: 0,
+                    control_offer: None,
+                    control_requests: Vec::new(),
+                    cwd: None,
                 },
                 frame: Some(Arc::new(frame)),
                 final_event: None,
@@ -5684,6 +7255,119 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// At 30 Hz, 117 frames a second become at most 30 sends, and the send
+    /// always carries the newest frame. The bug this guards: flushing the
+    /// held frame on the *next frame's* arrival, which sent every frame one
+    /// behind and coalesced nothing.
+    #[test]
+    fn the_rate_gate_sends_at_most_one_frame_per_interval_and_keeps_the_newest() {
+        let grid = GridSize::new(4, 1).expect("grid");
+        let frame = |sequence: u64| {
+            let mut model = ultraplexr_terminal::TerminalModel::new(grid).expect("model");
+            let mut f = model.frame().expect("frame");
+            f.sequence = sequence;
+            Arc::new(f)
+        };
+        let start = Instant::now();
+        let mut gate = RateGate::new(Duration::from_millis(33), start);
+        let mut sent = Vec::new();
+        for tick in 0..117_u64 {
+            let now = start + Duration::from_micros(tick * 8_547);
+            if let Some(frame) = gate.offer(frame(tick + 1), now) {
+                sent.push((frame.sequence, now));
+            }
+            // What the loop's timer does when a frame is held past the deadline.
+            if gate.holding()
+                && now >= gate.deadline()
+                && let Some(frame) = gate.flush(now)
+            {
+                sent.push((frame.sequence, now));
+            }
+        }
+        if let Some(frame) = gate.flush(start + Duration::from_secs(1)) {
+            sent.push((frame.sequence, start + Duration::from_secs(1)));
+        }
+        assert!(
+            sent.len() <= 32,
+            "117 offers over a second must become at most ~30 sends, got {}",
+            sent.len()
+        );
+        assert_eq!(sent.last().map(|(s, _)| *s), Some(117), "the newest frame is what goes out");
+        for pair in sent.windows(2) {
+            assert!(pair[1].1 - pair[0].1 >= Duration::from_millis(33), "no two sends inside one interval");
+        }
+    }
+
+    /// A version bump moves the state directory; the previous version's
+    /// state comes with it, sockets and logs excepted.
+    #[test]
+    fn a_new_state_directory_inherits_the_previous_version() {
+        let root = std::env::temp_dir().join(format!("ultraplexr-carry-{}", Uuid::new_v4()));
+        let old = root.join("v25");
+        std::fs::create_dir_all(old.join("sessions/abc")).expect("old state");
+        std::fs::write(old.join("sessions/abc/output.raw"), b"journal").expect("journal");
+        std::fs::write(old.join("workspaces.json"), b"{}").expect("workspaces");
+        std::fs::write(old.join("daemon.log"), b"noise").expect("log");
+        std::fs::write(old.join("control.sock"), b"not really a socket").expect("sock");
+
+        // The desktop has usually created the directory already, holding
+        // nothing but the socket it is about to listen on.
+        let new = root.join("v26");
+        std::fs::create_dir_all(&new).expect("pre-created dir");
+        std::fs::write(new.join("control.sock"), b"").expect("socket placeholder");
+        let carried = carry_forward_state(&new).expect("carry forward");
+        assert_eq!(carried.as_deref(), Some(old.as_path()));
+        assert_eq!(
+            std::fs::read(new.join("sessions/abc/output.raw")).expect("copied"),
+            b"journal"
+        );
+        assert!(new.join("workspaces.json").is_file());
+        assert!(!new.join("daemon.log").exists(), "logs are not state");
+        assert_eq!(
+            std::fs::read(new.join("control.sock")).expect("placeholder kept"),
+            b"",
+            "the old socket entry is never copied over the live one"
+        );
+        assert!(
+            old.join("sessions/abc/output.raw").is_file(),
+            "the old directory is left intact"
+        );
+
+        // Second start: nothing to do, nothing overwritten.
+        std::fs::write(new.join("workspaces.json"), b"{\"edited\":1}").expect("edit");
+        assert!(carry_forward_state(&new).expect("no-op").is_none());
+        assert_eq!(
+            std::fs::read(new.join("workspaces.json")).expect("kept"),
+            b"{\"edited\":1}"
+        );
+
+        // No predecessor: a fresh directory, no error.
+        assert!(carry_forward_state(&root.join("v1")).expect("fresh").is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Closing a shell is not a Fault, however its last command went.
+    #[test]
+    fn closing_an_interactive_shell_is_not_a_fault() {
+        let p = std::path::Path::new;
+        let none: [String; 0] = [];
+        assert!(is_interactive_shell(p("/bin/zsh"), &none));
+        assert!(is_interactive_shell(p("/opt/homebrew/bin/fish"), &["-l".to_owned()]));
+        assert!(!is_interactive_shell(p("/bin/zsh"), &["-c".to_owned(), "cargo test".to_owned()]));
+        assert!(!is_interactive_shell(p("/bin/sh"), &["build.sh".to_owned()]));
+        assert!(!is_interactive_shell(p("/usr/bin/python3"), &none));
+    }
+
+    /// Ctrl-C and SIGTERM stop a command; they do not make it a Fault.
+    #[test]
+    fn an_interrupted_command_is_not_a_fault() {
+        assert!(is_interruption(Some(130)));
+        assert!(is_interruption(Some(143)));
+        assert!(!is_interruption(Some(1)));
+        assert!(!is_interruption(Some(127)), "a missing command is a real failure");
+        assert!(!is_interruption(None));
+    }
+
     #[test]
     fn foreground_process_names_are_bounded_to_the_executable() {
         assert_eq!(
@@ -5755,6 +7439,259 @@ mod tests {
         assert!(frame_tail(&test_frame(vec![row("  ")])).is_empty());
     }
 
+    async fn report_for_classification(
+        state: &Arc<AppState>,
+        command: &str,
+        cwd: &std::path::Path,
+    ) -> ultraplexr_protocol::FaultSummary {
+        match handle_request(
+            Request::ReportFault {
+                fault: ultraplexr_protocol::FaultInput {
+                    kind: ultraplexr_protocol::FaultKind::TestFailed,
+                    command: command.to_owned(),
+                    cwd: cwd.to_path_buf(),
+                    exit_code: Some(1),
+                    revision: None,
+                    summary: "sometimes".to_owned(),
+                    output: "failing".to_owned(),
+                    session_id: None,
+                    mission_id: None,
+                    run_id: None,
+                },
+            },
+            Uuid::new_v4(),
+            state,
+        )
+        .await
+        .expect("owner should report a Fault")
+        {
+            ResponseBody::FaultRecorded { fault } => fault,
+            body => panic!("unexpected report response: {body:?}"),
+        }
+    }
+
+    async fn classify(
+        state: &Arc<AppState>,
+        fault_id: ultraplexr_core::FaultId,
+        runs: u8,
+        isolated: bool,
+    ) -> ultraplexr_protocol::FaultClassification {
+        match handle_request(
+            Request::ClassifyFault {
+                fault_id,
+                runs: Some(runs),
+                timeout_seconds: Some(30),
+                isolated,
+            },
+            Uuid::new_v4(),
+            state,
+        )
+        .await
+        .expect("owner should classify a Fault")
+        {
+            ResponseBody::FaultRecorded { fault } => fault
+                .classification
+                .expect("classification should be recorded"),
+            body => panic!("unexpected classify response: {body:?}"),
+        }
+    }
+
+    /// A failure that happens some of the time is told apart from one that
+    /// is always there, and neither a lucky pass nor a sample can close it.
+    #[tokio::test]
+    async fn classification_tells_flaky_from_real_and_flaky_stays_open() {
+        let root = std::env::temp_dir().join(format!("ultraplexr-fault-classify-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("test root should be creatable");
+        let state = Arc::new(AppState {
+            store: Mutex::new(
+                MissionStore::open(root.join("missions"))
+                    .await
+                    .expect("mission store should open"),
+            ),
+            scheduler_policies: Mutex::new(
+                SchedulerPolicyStore::open(root.join("scheduler-policies.json"))
+                    .expect("scheduler policy store should open"),
+            ),
+            shares: Mutex::new(
+                ShareStore::open(root.join("shares.json")).expect("share store should open"),
+            ),
+            run_checkouts: Mutex::new(
+                RunCheckoutStore::open(root.join("run-checkouts.json"), root.join("run-checkouts"))
+                    .expect("Run checkout store should open"),
+            ),
+            checkout_gate: Mutex::new(()),
+            agent_launch_gate: Mutex::new(()),
+            terminals: RwLock::new(HashMap::new()),
+            terminal_state_dir: root.clone(),
+            agent_socket_path: root.join("agent.sock"),
+            mission_events: broadcast::channel(256).0,
+            activity_events: broadcast::channel(512).0,
+            terminal_events: broadcast::channel(256).0,
+            session_group_events: broadcast::channel(256).0,
+            share_revocations: broadcast::channel(64).0,
+            started_at: Instant::now(),
+            open_connections: AtomicUsize::new(0),
+            agent_connections: AtomicUsize::new(0),
+            active_waits: AtomicUsize::new(0),
+            plugins: PluginPublisher::disabled(),
+            provider_status: Mutex::new(ProviderStatusStore::transient()),
+            run_evidence: Mutex::new(RunEvidenceStore::transient()),
+            faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
+            session_groups: Mutex::new(
+                SessionGroupStore::open(root.join("session-groups.json"))
+                    .expect("Session group store should open"),
+            ),
+        });
+
+        // A counter file makes the command fail on odd runs only.
+        let flaky = report_for_classification(
+            &state,
+            "c=$(cat n 2>/dev/null || echo 0); c=$((c+1)); echo $c > n; test $((c % 2)) -eq 0",
+            &root,
+        )
+        .await;
+        let sample = classify(&state, flaky.fault_id, 4, false).await;
+        assert_eq!(sample.verdict, ultraplexr_protocol::FaultVerdict::Flaky);
+        assert_eq!((sample.runs, sample.failures, sample.errors), (4, 2, 0));
+        assert!(!sample.isolated);
+        // The last replay passed, and that must not be enough.
+        assert!(matches!(
+            handle_request(
+                Request::ResolveFault {
+                    fault_id: flaky.fault_id,
+                    note: "passed once".to_owned(),
+                },
+                Uuid::new_v4(),
+                &state,
+            )
+            .await,
+            Err(RequestError::Fault(fault_store::FaultError::Unproven(_)))
+        ));
+
+        let real = report_for_classification(&state, "false", &root).await;
+        let sample = classify(&state, real.fault_id, 3, false).await;
+        assert_eq!(sample.verdict, ultraplexr_protocol::FaultVerdict::Real);
+        assert_eq!((sample.runs, sample.failures), (3, 3));
+
+        // Outside a repository an isolated run cannot happen, and says so
+        // rather than quietly running in place.
+        let sample = classify(&state, real.fault_id, 2, true).await;
+        assert_eq!(sample.verdict, ultraplexr_protocol::FaultVerdict::Inconclusive);
+        assert_eq!(sample.errors, 2);
+        assert!(sample.isolated);
+
+        std::fs::remove_dir_all(&root).expect("test root should be removable");
+    }
+
+    /// Isolated replays run in fresh worktrees of the repository and leave
+    /// none behind.
+    #[tokio::test]
+    async fn isolated_classification_uses_fresh_worktrees_and_cleans_up() {
+        let root = std::env::temp_dir().join(format!("ultraplexr-fault-isolated-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).expect("test root should be creatable");
+        let state = Arc::new(AppState {
+            store: Mutex::new(
+                MissionStore::open(root.join("missions"))
+                    .await
+                    .expect("mission store should open"),
+            ),
+            scheduler_policies: Mutex::new(
+                SchedulerPolicyStore::open(root.join("scheduler-policies.json"))
+                    .expect("scheduler policy store should open"),
+            ),
+            shares: Mutex::new(
+                ShareStore::open(root.join("shares.json")).expect("share store should open"),
+            ),
+            run_checkouts: Mutex::new(
+                RunCheckoutStore::open(root.join("run-checkouts.json"), root.join("run-checkouts"))
+                    .expect("Run checkout store should open"),
+            ),
+            checkout_gate: Mutex::new(()),
+            agent_launch_gate: Mutex::new(()),
+            terminals: RwLock::new(HashMap::new()),
+            terminal_state_dir: root.clone(),
+            agent_socket_path: root.join("agent.sock"),
+            mission_events: broadcast::channel(256).0,
+            activity_events: broadcast::channel(512).0,
+            terminal_events: broadcast::channel(256).0,
+            session_group_events: broadcast::channel(256).0,
+            share_revocations: broadcast::channel(64).0,
+            started_at: Instant::now(),
+            open_connections: AtomicUsize::new(0),
+            agent_connections: AtomicUsize::new(0),
+            active_waits: AtomicUsize::new(0),
+            plugins: PluginPublisher::disabled(),
+            provider_status: Mutex::new(ProviderStatusStore::transient()),
+            run_evidence: Mutex::new(RunEvidenceStore::transient()),
+            faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
+            session_groups: Mutex::new(
+                SessionGroupStore::open(root.join("session-groups.json"))
+                    .expect("Session group store should open"),
+            ),
+        });
+
+        let repo = root.join("repo");
+        std::fs::create_dir_all(&repo).expect("repo dir");
+        let git = |args: &[&str]| {
+            let status = StdCommand::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .expect("git should run");
+            assert!(status.success(), "git {args:?} should succeed");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(repo.join("probe.sh"), "exit 1\n").expect("probe");
+        git(&["add", "probe.sh"]);
+        git(&[
+            "-c", "user.email=t@example.invalid", "-c", "user.name=t",
+            "commit", "-q", "-m", "probe",
+        ]);
+        // An untracked file that only exists in place. The command needs it,
+        // so it passes in place and fails in a fresh worktree: the difference
+        // isolation makes, made observable.
+        std::fs::write(repo.join("only-here"), "x").expect("untracked");
+
+        let fault =
+            report_for_classification(&state, "test -f probe.sh && test -f only-here", &repo)
+                .await;
+        let sample = classify(&state, fault.fault_id, 3, true).await;
+        assert!(sample.isolated);
+        assert_eq!(sample.verdict, ultraplexr_protocol::FaultVerdict::Real);
+        assert_eq!((sample.runs, sample.failures, sample.errors), (3, 3, 0));
+        assert!(sample.revision.is_some(), "the worktree's revision is recorded");
+
+        let listed = StdCommand::new("git")
+            .args(["worktree", "list", "--porcelain"])
+            .current_dir(&repo)
+            .output()
+            .expect("git should run");
+        let worktrees = String::from_utf8_lossy(&listed.stdout)
+            .lines()
+            .filter(|line| line.starts_with("worktree "))
+            .count();
+        assert_eq!(worktrees, 1, "every replay worktree must be removed");
+        let leftovers = std::fs::read_dir(root.join("fault-worktrees").join(fault.fault_id.to_string()))
+            .map(|entries| entries.count())
+            .unwrap_or(0);
+        assert_eq!(leftovers, 0, "no replay directory may be left behind");
+
+        // In place, the untracked file is visible and the command passes.
+        let sample = classify(&state, fault.fault_id, 2, false).await;
+        assert_eq!(sample.verdict, ultraplexr_protocol::FaultVerdict::Passing);
+
+        std::fs::remove_dir_all(&root).expect("test root should be removable");
+    }
+
     /// A Fault that was proven fixed must not be able to come back unnoticed.
     ///
     /// This runs the whole loop against real processes: report, replay, resolve
@@ -5798,6 +7735,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -5971,6 +7911,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -6173,6 +8116,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -6284,6 +8230,7 @@ mod tests {
             .insert(
                 session_id,
                 TerminalRecord {
+                    viewers: Arc::default(),
                     handle: None,
                     projection: Arc::new(RwLock::new(TerminalProjection {
                         summary: TerminalSessionSummary {
@@ -6302,6 +8249,9 @@ mod tests {
                             controller_surface_id: None,
                             controller_share_id: None,
                             control_epoch: 4,
+                            control_offer: None,
+                            control_requests: Vec::new(),
+                            cwd: None,
                         },
                         frame: None,
                         final_event: None,
@@ -6428,6 +8378,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -6549,6 +8502,9 @@ mod tests {
             controller_surface_id: None,
             controller_share_id: None,
             control_epoch: 0,
+            control_offer: None,
+            control_requests: Vec::new(),
+            cwd: None,
         };
         let state = Arc::new(AppState {
             store: Mutex::new(store),
@@ -6568,6 +8524,7 @@ mod tests {
             terminals: RwLock::new(HashMap::from([(
                 session_id,
                 TerminalRecord {
+                    viewers: Arc::default(),
                     handle: None,
                     projection: Arc::new(RwLock::new(TerminalProjection {
                         summary,
@@ -6591,6 +8548,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -6724,6 +8684,7 @@ mod tests {
             terminals: RwLock::new(HashMap::from([(
                 session_id,
                 TerminalRecord {
+                    viewers: Arc::default(),
                     handle: None,
                     projection: Arc::new(RwLock::new(TerminalProjection {
                         summary: TerminalSessionSummary {
@@ -6742,6 +8703,9 @@ mod tests {
                             controller_surface_id: None,
                             controller_share_id: None,
                             control_epoch: 0,
+                            control_offer: None,
+                            control_requests: Vec::new(),
+                            cwd: None,
                         },
                         frame: None,
                         final_event: None,
@@ -6763,6 +8727,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -6873,6 +8840,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7086,6 +9056,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7290,6 +9263,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7404,6 +9380,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7560,6 +9539,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -7800,6 +9782,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -8104,6 +10089,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -8278,6 +10266,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -8648,6 +10639,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),
@@ -8822,6 +10816,9 @@ mod tests {
             provider_status: Mutex::new(ProviderStatusStore::transient()),
             run_evidence: Mutex::new(RunEvidenceStore::transient()),
             faults: Mutex::new(FaultStore::transient()),
+            devices: Mutex::new(DeviceStore::transient()),
+            gateway: None,
+            push: None,
             session_groups: Mutex::new(
                 SessionGroupStore::open(root.join("session-groups.json"))
                     .expect("Session group store should open"),

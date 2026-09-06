@@ -63,6 +63,7 @@ impl PeerFixture {
                     max_uncompressed_bytes: MAX_UNCOMPRESSED_BYTES as u32,
                 },
                 server_time_unix_micros: 1,
+                device_token: None,
             };
             wire.send_json(FrameKind::Welcome, 0, &welcome).unwrap();
             while let Ok(request) = wire.receive_json::<ClientRequest>(FrameKind::Request, 0) {

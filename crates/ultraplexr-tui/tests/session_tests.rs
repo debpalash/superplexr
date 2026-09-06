@@ -59,7 +59,7 @@ fn oversized_metadata_ends_tui_feed_without_retrying_or_stopping_pty() {
 fn isolated_daemon() {
     if let Some(root) = std::env::var_os("ULTRAPLEXR_TUI_TEST_ROOT") {
         let root = PathBuf::from(root);
-        ultraplexr_server::run_blocking(root.join("s"), root.join("state")).expect("runtime");
+        ultraplexr_server::run_blocking(root.join("s"), root.join("state"), None).expect("runtime");
     }
 }
 

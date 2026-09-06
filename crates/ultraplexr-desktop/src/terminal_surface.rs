@@ -58,7 +58,9 @@ pub(crate) struct TerminalSurface {
     requested_grid: GridSize,
     geometry: Option<TerminalGeometry>,
     selection_anchor: Option<SelectionPoint>,
-    selection: Option<SurfaceSelection>,
+    /// The viewer's selection over the visible grid. Never a request: it
+    /// works on terminals this surface cannot control, and on finished ones.
+    selection: Option<crate::selection::Selection>,
     focus_handle: FocusHandle,
     composition: String,
     caps_lock: bool,
@@ -118,95 +120,13 @@ struct TerminalGeometry {
     line_height: Pixels,
 }
 
-/// A selection owned by one desktop Surface.
-///
-/// Keeping this above the daemon boundary makes marking and copying available
-/// on live, historical, controller, and observer Surfaces alike. It also keeps
-/// one viewer's selection from changing another viewer's terminal frame.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SurfaceSelection {
-    anchor: SelectionPoint,
-    head: SelectionPoint,
-    rectangle: bool,
-}
-
-impl SurfaceSelection {
-    fn new(anchor: SelectionPoint, head: SelectionPoint, rectangle: bool) -> Self {
-        Self {
-            anchor,
-            head,
-            rectangle,
-        }
-    }
-
-    fn ordered(self) -> (SelectionPoint, SelectionPoint) {
-        if (self.anchor.row, self.anchor.column) <= (self.head.row, self.head.column) {
-            (self.anchor, self.head)
-        } else {
-            (self.head, self.anchor)
-        }
-    }
-
-    pub(crate) fn column_range(self, row: u16, columns: u16) -> Option<Range<u16>> {
-        if self.anchor == self.head || columns == 0 {
-            return None;
-        }
-        let (start, end) = self.ordered();
-        if row < start.row || row > end.row {
-            return None;
-        }
-
-        let last_column = columns.saturating_sub(1);
-        let (first, last) = if self.rectangle {
-            (
-                self.anchor.column.min(self.head.column),
-                self.anchor.column.max(self.head.column),
-            )
-        } else {
-            (
-                if row == start.row { start.column } else { 0 },
-                if row == end.row {
-                    end.column
-                } else {
-                    last_column
-                },
-            )
-        };
-        let first = first.min(last_column);
-        let last = last.min(last_column);
-        (first <= last).then_some(first..last.saturating_add(1))
-    }
-
-    fn text(self, frame: &FullFrame) -> Option<String> {
-        let mut lines = Vec::new();
-        for (row_index, row) in frame.rows.iter().enumerate() {
-            let row_index = u16::try_from(row_index).ok()?;
-            let Some(columns) = self.column_range(row_index, frame.grid.columns) else {
-                continue;
-            };
-            let start = usize::from(columns.start).min(row.cells.len());
-            let end = usize::from(columns.end).min(row.cells.len());
-            let mut line = row.cells[start..end]
-                .iter()
-                .filter(|cell| cell.width != 0)
-                .map(|cell| cell.grapheme.as_str())
-                .collect::<String>();
-            while line.ends_with(' ') {
-                line.pop();
-            }
-            lines.push(line);
-        }
-        (!lines.is_empty()).then(|| lines.join("\n"))
-    }
-}
-
 impl TerminalSurface {
     #[cfg(not(test))]
     pub(crate) fn synchronize_catalog_labels(
         &mut self,
         summary: &ultraplexr_protocol::TerminalSessionSummary,
     ) {
-        let labels = self.catalog_labels.get_or_insert_with(|| CatalogLabels {
+        let labels = self.catalog_labels.get_or_insert(CatalogLabels {
             sequence: summary.latest_sequence,
             title: None,
             directory: None,
@@ -706,6 +626,10 @@ impl TerminalSurface {
         if event.keystroke.is_ime_in_progress() {
             return;
         }
+        // Not stopped, so it propagates to the desktop's key bindings.
+        if is_desktop_shortcut(&event.keystroke) {
+            return;
+        }
 
         let input = key_input(
             &event.keystroke,
@@ -723,6 +647,9 @@ impl TerminalSurface {
     }
 
     fn key_up(&mut self, event: &KeyUpEvent, _window: &mut Window, cx: &mut Context<Self>) {
+        if is_desktop_shortcut(&event.keystroke) {
+            return;
+        }
         let input = key_input(&event.keystroke, KeyAction::Release, self.caps_lock);
         if self.apply(TerminalAction::EncodeKey(&input), cx) {
             cx.stop_propagation();
@@ -772,12 +699,16 @@ impl TerminalSurface {
             .join("\n")
             .trim_end()
             .to_owned();
-        let selected = self
-            .selection
-            .and_then(|selection| selection.text(&self.frame))
-            .filter(|selection| !selection.is_empty());
+        let selected = self.selected_text();
         let copied_selection = selected.is_some();
-        let text = selected.unwrap_or(visible);
+        let text = selected
+            .or_else(|| {
+                self.session
+                    .as_ref()
+                    .and_then(|session| session.selection_text().ok().flatten())
+                    .filter(|selection| !selection.is_empty())
+            })
+            .unwrap_or(visible);
         cx.write_to_clipboard(ClipboardItem::new_string(text));
         self.last_encoded = if copied_selection {
             "selection copied to clipboard".to_owned()
@@ -787,8 +718,11 @@ impl TerminalSurface {
         cx.notify();
     }
 
-    pub(crate) const fn selection(&self) -> Option<SurfaceSelection> {
-        self.selection
+    /// The viewer's selected text, when there is any.
+    pub(crate) fn selected_text(&self) -> Option<String> {
+        let selection = self.selection.filter(|selection| !selection.is_empty())?;
+        let text = selection.text(&self.frame.rows, self.frame.grid.columns);
+        (!text.is_empty()).then_some(text)
     }
 
     fn modifiers_changed(
@@ -888,6 +822,8 @@ impl TerminalSurface {
                     }),
                 };
                 if self.load_history_viewport(viewport, cx) {
+                    // The selection is in viewport rows; scrolling moves them.
+                    self.selection = None;
                     self.scroll_rows_before_bottom = match viewport {
                         HistoryViewport::RowsBeforeBottom(row)
                         | HistoryViewport::RowFromTop(row) => row,
@@ -918,6 +854,7 @@ impl TerminalSurface {
         }
         if delta != 0 && self.apply(TerminalAction::Scroll(ViewportScroll::Delta(delta)), cx) {
             let amount = delta.unsigned_abs();
+            self.selection = None;
             self.scroll_rows_before_bottom = if delta < 0 {
                 self.scroll_rows_before_bottom
                     .saturating_add(amount)
@@ -940,6 +877,9 @@ impl TerminalSurface {
         };
         match result {
             Ok(frame) => {
+                if frame.grid != self.frame.grid {
+                    self.selection = None;
+                }
                 self.frame = Arc::new(frame);
                 self.history_viewport = viewport;
                 self.last_error = None;
@@ -983,7 +923,11 @@ impl TerminalSurface {
             return;
         }
         self.selection_anchor = Some(point);
-        self.selection = Some(SurfaceSelection::new(point, point, event.modifiers.alt));
+        self.selection = Some(crate::selection::Selection {
+            anchor: point,
+            head: point,
+            rectangle: event.modifiers.alt,
+        });
         cx.notify();
         cx.stop_propagation();
     }
@@ -1020,7 +964,11 @@ impl TerminalSurface {
         let Some(head) = self.selection_point(event.position) else {
             return;
         };
-        self.selection = Some(SurfaceSelection::new(anchor, head, event.modifiers.alt));
+        self.selection = Some(crate::selection::Selection {
+            anchor,
+            head,
+            rectangle: event.modifiers.alt,
+        });
         cx.notify();
         cx.stop_propagation();
     }
@@ -1040,6 +988,11 @@ impl TerminalSurface {
             cx.stop_propagation();
         }
         self.selection_anchor = None;
+        // A click that never became a drag clears whatever was selected.
+        if self.selection.is_some_and(|selection| selection.is_empty()) {
+            self.selection = None;
+            cx.notify();
+        }
     }
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -1461,6 +1414,7 @@ impl gpui::Render for TerminalSurface {
                                 self.frame.clone(),
                                 cx.entity(),
                                 self.composition.clone(),
+                                self.selection,
                             )),
                     )
                     .children(self.scroll_indicator()),
@@ -1784,6 +1738,17 @@ fn terminal_mouse_button(button: MouseButton) -> Option<TerminalMouseButton> {
     }
 }
 
+/// Keys the desktop owns, which must reach its key bindings rather than the
+/// terminal.
+///
+/// No macOS terminal sends a ⌘ combination to the shell, and Ctrl+Tab
+/// switches workspaces here. Forwarding them anyway meant the bindings never
+/// fired, and in a terminal left in Kitty keyboard mode each press and
+/// release became a sequence a plain shell typed out as text.
+fn is_desktop_shortcut(keystroke: &gpui::Keystroke) -> bool {
+    keystroke.modifiers.platform || (keystroke.modifiers.control && keystroke.key == "tab")
+}
+
 fn escaped_bytes(bytes: &[u8]) -> String {
     bytes
         .iter()
@@ -1823,6 +1788,7 @@ fn bytes_range_to_utf16(text: &str, range: &Range<usize>) -> Range<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::selection::Selection;
     use crate::terminal_element::TerminalElement;
     use gpui::{AnyWindowHandle, Keystroke, TestAppContext};
 
@@ -1837,39 +1803,42 @@ mod tests {
             .expect("selection fixture output should parse");
         let frame = model.frame().expect("selection fixture should render");
 
-        let forward = SurfaceSelection::new(
-            SelectionPoint { column: 1, row: 0 },
-            SelectionPoint { column: 2, row: 1 },
-            false,
+        let forward = Selection {
+            anchor: SelectionPoint { column: 1, row: 0 },
+            head: SelectionPoint { column: 2, row: 1 },
+            rectangle: false,
+        };
+        let reverse = Selection {
+            anchor: forward.head,
+            head: forward.anchor,
+            rectangle: false,
+        };
+        assert_eq!(forward.text(&frame.rows, frame.grid.columns), "lpha\nbra");
+        assert_eq!(
+            reverse.text(&frame.rows, frame.grid.columns),
+            forward.text(&frame.rows, frame.grid.columns)
         );
-        let reverse = SurfaceSelection::new(forward.head, forward.anchor, false);
-        assert_eq!(forward.text(&frame).as_deref(), Some("lpha\nbra"));
-        assert_eq!(reverse.text(&frame), forward.text(&frame));
 
-        let rectangle = SurfaceSelection::new(
-            SelectionPoint { column: 1, row: 0 },
-            SelectionPoint { column: 3, row: 2 },
-            true,
+        let rectangle = Selection {
+            anchor: SelectionPoint { column: 1, row: 0 },
+            head: SelectionPoint { column: 3, row: 2 },
+            rectangle: true,
+        };
+        assert_eq!(
+            rectangle.text(&frame.rows, frame.grid.columns),
+            "lph\nrav\nhar"
         );
-        assert_eq!(rectangle.text(&frame).as_deref(), Some("lph\nrav\nhar"));
     }
 
     #[test]
     fn a_click_without_a_drag_does_not_create_copyable_text() {
-        let mut model = TerminalModel::new(
-            GridSize::new(8, 1).expect("selection fixture grid should be valid"),
-        )
-        .expect("selection fixture terminal should initialize");
-        model
-            .advance(TerminalAction::Output(b"alpha"))
-            .expect("selection fixture output should parse");
-        let frame = model.frame().expect("selection fixture should render");
         let point = SelectionPoint { column: 2, row: 0 };
-
-        assert_eq!(
-            SurfaceSelection::new(point, point, false).text(&frame),
-            None
-        );
+        let click = Selection {
+            anchor: point,
+            head: point,
+            rectangle: false,
+        };
+        assert!(click.is_empty());
     }
 
     #[test]
@@ -1942,6 +1911,195 @@ mod tests {
             window.draw(cx).clear(cx);
         });
         assert!(cx.debug_bounds("terminal-scrollbar").is_some());
+    }
+
+    /// A key the desktop owns must never be encoded for the terminal, so the
+    /// binding behind it can fire. Ctrl+Tab forwarded into a Kitty-mode shell
+    /// is exactly how `9;5:3u` ended up typed in front of a command.
+    #[gpui::test]
+    fn desktop_shortcuts_are_not_forwarded_to_the_terminal(cx: &mut TestAppContext) {
+        let window = cx.add_window(|window, cx| {
+            TerminalSurface::new(window, cx).expect("terminal fixture should initialize")
+        });
+        cx.run_until_parked();
+        window
+            .update(cx, |surface, window, cx| {
+                // Kitty keyboard mode, the state in which Ctrl+Tab and ⌘ keys
+                // would otherwise be encoded as `CSI … u` sequences.
+                surface.apply(TerminalAction::Output(b"\x1b[>3u"), cx);
+                let untouched = surface.last_encoded.clone();
+                for shortcut in [
+                    "ctrl-tab",
+                    "ctrl-shift-tab",
+                    "cmd-t",
+                    "cmd-1",
+                    "cmd-shift-f",
+                ] {
+                    surface.key_down(
+                        &KeyDownEvent {
+                            keystroke: Keystroke::parse(shortcut).expect("valid shortcut"),
+                            is_held: false,
+                            prefer_character_input: false,
+                        },
+                        window,
+                        cx,
+                    );
+                    surface.key_up(
+                        &gpui::KeyUpEvent {
+                            keystroke: Keystroke::parse(shortcut).expect("valid shortcut"),
+                        },
+                        window,
+                        cx,
+                    );
+                    assert_eq!(
+                        surface.last_encoded, untouched,
+                        "{shortcut} must not reach the terminal"
+                    );
+                }
+                // An ordinary key still does. A platform-dispatched key
+                // carries its character; a parsed one does not.
+                let mut plain = Keystroke::parse("a").expect("valid key");
+                plain.key_char = Some("a".to_owned());
+                surface.key_down(
+                    &KeyDownEvent {
+                        keystroke: plain,
+                        is_held: false,
+                        prefer_character_input: false,
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(surface.last_encoded, "a", "a plain key is still encoded");
+            })
+            .expect("test window should remain available");
+    }
+
+    /// Selecting and copying must work on a terminal this surface cannot
+    /// control: one an agent spawned, one being observed, or one that has
+    /// finished. It used to be a daemon request that needed the controller,
+    /// so on exactly those terminals a drag did nothing at all.
+    #[gpui::test]
+    fn selection_and_copy_work_without_controlling_the_terminal(cx: &mut TestAppContext) {
+        use gpui::{
+            Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, point, px,
+        };
+
+        let window = cx.add_window(|window, cx| {
+            TerminalSurface::new(window, cx).expect("terminal fixture should initialize")
+        });
+        let any_window = AnyWindowHandle::from(window);
+        cx.run_until_parked();
+        cx.update_window(any_window, |_, window, cx| {
+            window.draw(cx).clear(cx);
+        })
+        .expect("test window should draw so the grid geometry is known");
+
+        // Expected text comes from the frame itself, so this checks the
+        // pixel-to-cell mapping rather than assuming the fixture's content.
+        let expected = window
+            .update(cx, |surface, _, _| {
+                let first = surface.frame.rows[0]
+                    .text()
+                    .chars()
+                    .skip(6)
+                    .collect::<String>();
+                let second = surface.frame.rows[1]
+                    .text()
+                    .chars()
+                    .take(6)
+                    .collect::<String>();
+                format!("{}\n{second}", first.trim_end())
+            })
+            .expect("test window should remain available");
+        assert!(
+            expected.len() > 2,
+            "fixture rows should hold text: {expected:?}"
+        );
+
+        window
+            .update(cx, |surface, window, cx| {
+                // The case that was broken: not the controller.
+                surface.writable = false;
+                let geometry = surface.geometry.expect("drawn once, so geometry is known");
+                let at = |row: f32, column: f32| {
+                    point(
+                        geometry.bounds.left() + geometry.cell_width * column + px(1.0),
+                        geometry.bounds.top() + geometry.line_height * row + px(1.0),
+                    )
+                };
+                surface.mouse_down(
+                    &MouseDownEvent {
+                        button: MouseButton::Left,
+                        position: at(0.0, 6.0),
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                        first_mouse: false,
+                    },
+                    window,
+                    cx,
+                );
+                surface.mouse_move(
+                    &MouseMoveEvent {
+                        position: at(1.0, 5.0),
+                        pressed_button: Some(MouseButton::Left),
+                        modifiers: Modifiers::default(),
+                    },
+                    window,
+                    cx,
+                );
+                surface.mouse_up(
+                    &MouseUpEvent {
+                        button: MouseButton::Left,
+                        position: at(1.0, 5.0),
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                    },
+                    window,
+                    cx,
+                );
+                assert_eq!(surface.selected_text().as_deref(), Some(expected.as_str()));
+                assert!(
+                    surface.last_error.is_none(),
+                    "selecting must never trip the observer-mode refusal"
+                );
+                surface.copy_visible(cx);
+                assert_eq!(surface.last_encoded, "selection copied to clipboard");
+
+                // A plain click clears it.
+                surface.mouse_down(
+                    &MouseDownEvent {
+                        button: MouseButton::Left,
+                        position: at(0.0, 0.0),
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                        first_mouse: false,
+                    },
+                    window,
+                    cx,
+                );
+                surface.mouse_up(
+                    &MouseUpEvent {
+                        button: MouseButton::Left,
+                        position: at(0.0, 0.0),
+                        modifiers: Modifiers::default(),
+                        click_count: 1,
+                    },
+                    window,
+                    cx,
+                );
+                assert!(
+                    surface.selection.is_none(),
+                    "a click without a drag clears the selection"
+                );
+            })
+            .expect("test window should remain available");
+        let copied = cx.read_from_clipboard().and_then(|item| item.text());
+        assert_eq!(copied.as_deref(), Some(expected.as_str()));
+        // The highlight must survive a real layout pass.
+        cx.update_window(any_window, |_, window, cx| {
+            window.draw(cx).clear(cx);
+        })
+        .expect("test window should draw with a selection");
     }
 
     #[gpui::test]
@@ -2117,7 +2275,7 @@ mod tests {
         let frame = window
             .read_with(cx, |surface, _| surface.frame.clone())
             .expect("test window should expose its terminal frame");
-        let element = TerminalElement::new("a11y-grid", frame, surface, String::new());
+        let element = TerminalElement::new("a11y-grid", frame, surface, String::new(), None);
         let mut node = gpui::accesskit::Node::new(gpui::accesskit::Role::Terminal);
 
         assert_eq!(element.a11y_role(), Some(gpui::accesskit::Role::Terminal));

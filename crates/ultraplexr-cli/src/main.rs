@@ -1,6 +1,11 @@
+mod attach;
+mod device_credentials;
 mod shell_init;
 mod ssh_tunnel;
 use ultraplexr_verification as verification;
+
+use device_credentials::DeviceCredentials;
+use ultraplexr_client::{Endpoint, GatewayEndpoint};
 
 use std::{
     collections::BTreeMap,
@@ -52,6 +57,14 @@ struct Args {
     /// Read a Share token from an owner-only regular file.
     #[arg(long)]
     share_token_file: Option<PathBuf>,
+    /// Reach a runtime over its TLS gateway (`host:port`) as a paired device,
+    /// using the credentials `pair` stored.
+    #[arg(long, global = true)]
+    gateway: Option<String>,
+    /// The runtime's certificate fingerprint (`sha256:…`): required to pair,
+    /// accepted as an override afterwards.
+    #[arg(long, global = true, requires = "gateway")]
+    fingerprint: Option<String>,
     #[command(subcommand)]
     command: CliCommand,
 }
@@ -139,6 +152,44 @@ enum CliCommand {
         #[arg(long, value_enum, default_value_t = EventScopeArg::All)]
         scope: EventScopeArg,
     },
+    /// On the runtime's host: show a one-time pairing code and this runtime's
+    /// certificate fingerprint for a device to pair with over the gateway.
+    DevicePair {
+        /// What to call the device that pairs with this code.
+        #[arg(long, default_value = "device")]
+        label: String,
+    },
+    /// List devices paired with this runtime's gateway.
+    DeviceList,
+    /// Revoke a paired device. Its open connections end at their next request.
+    DeviceRevoke {
+        device_id: Uuid,
+    },
+    /// On the device: exchange a pairing code for a token over `--gateway`,
+    /// pinning `--fingerprint`. The token is stored under ~/.ultraplexr/devices.
+    Pair {
+        code: String,
+        #[arg(long, default_value = "device")]
+        label: String,
+    },
+    /// On the device: forget the stored pairing for `--gateway`. The runtime
+    /// keeps the device until `device-revoke`; this only clears the token here.
+    Forget,
+    /// Attach this terminal to a session: frames in, keystrokes out. Ctrl-]
+    /// detaches; the session keeps running. Works over plain SSH with
+    /// nothing installed on the far side but the daemon.
+    Attach {
+        session_id: SessionId,
+        /// Most frames per second to ask for; useful on a slow link.
+        #[arg(long)]
+        max_hz: Option<u16>,
+        /// Watch without taking control, even if control is free.
+        #[arg(long)]
+        observe: bool,
+        /// Take control even if another client holds it. They are told.
+        #[arg(long, conflicts_with = "observe")]
+        take: bool,
+    },
     /// Mint a scoped Share token. The secret is printed once.
     ShareCreate {
         label: String,
@@ -156,6 +207,18 @@ enum CliCommand {
     /// Revoke a Share immediately, including live subscriptions.
     ShareRevoke {
         share_id: Uuid,
+    },
+    /// Mint a viewer link for one session: a Share scoped to it, composed
+    /// with the runtime's gateway address. Observers watch; `--controller`
+    /// lets the viewer claim control when nobody holds it.
+    Stream {
+        session_id: SessionId,
+        #[arg(long)]
+        controller: bool,
+        #[arg(long, default_value = "stream")]
+        label: String,
+        #[arg(long, default_value_t = 3_600)]
+        expires_in_seconds: u64,
     },
     /// Keep an encrypted owner attachment to a remote ultraplexr runtime.
     RemoteForward {
@@ -356,6 +419,61 @@ enum CliCommand {
         session_id: SessionId,
         #[arg(long, default_value_t = 300_000)]
         timeout_millis: u64,
+    },
+    /// Who is subscribed to a session right now: the owner's own screens
+    /// and viewers admitted by a Share, with their roles.
+    TerminalViewers {
+        session_id: SessionId,
+    },
+    /// The runtime's push key and the browsers subscribed to notifications.
+    PushList,
+    /// Send a notification to every subscribed browser now.
+    PushTest {
+        #[arg(long, default_value = "ultraplexr")]
+        title: String,
+        #[arg(long, default_value = "notifications reach this device")]
+        body: String,
+    },
+    /// The chapters of a session's recording: start, control changes,
+    /// Faults, exit, each at a journal offset `replay` can start from.
+    Chapters {
+        session_id: SessionId,
+    },
+    /// Play a session's recording into this terminal. `--speed 4` is four
+    /// times its own pace; gaps over five seconds are shortened. `q` stops.
+    Replay {
+        session_id: SessionId,
+        #[arg(long, default_value_t = 1.0)]
+        speed: f64,
+        /// Start at this chapter (see `chapters`).
+        #[arg(long)]
+        from_chapter: Option<u32>,
+        /// Start at this journal offset instead.
+        #[arg(long)]
+        from_offset: Option<u64>,
+    },
+    /// Raise a hand: ask whoever holds control of a session for it.
+    TerminalControlRequest {
+        session_id: SessionId,
+    },
+    /// As the holder of control, offer it to one participant (by the ids
+    /// `terminal-viewers` shows) or, with no target, to anyone who asked.
+    TerminalControlOffer {
+        session_id: SessionId,
+        #[arg(long)]
+        to_client: Option<Uuid>,
+        #[arg(long)]
+        to_surface: Option<Uuid>,
+        #[arg(long)]
+        to_share: Option<Uuid>,
+    },
+    /// Take control that was offered to this client.
+    TerminalControlAccept {
+        session_id: SessionId,
+    },
+    /// Withdraw an open offer, or lower a raised hand.
+    TerminalControlWithdraw {
+        session_id: SessionId,
     },
     /// Terminate a runtime-owned process.
     TerminalKill {
@@ -685,6 +803,25 @@ enum CliCommand {
         fault_id: FaultId,
         #[arg(long)]
         timeout_seconds: Option<u16>,
+    },
+    /// Replay a Fault several times and record how often it fails.
+    ///
+    /// One replay gives one verdict; a failure that happens one time in five
+    /// looks fixed four times out of five. The sample says whether it is
+    /// always there, sometimes there, or gone, and a Fault that is sometimes
+    /// there cannot be resolved on a lucky pass.
+    FaultClassify {
+        fault_id: FaultId,
+        /// Replays to attempt (2-25, default 5).
+        #[arg(long)]
+        runs: Option<u8>,
+        #[arg(long)]
+        timeout_seconds: Option<u16>,
+        /// Run each replay in a fresh worktree of the directory's revision.
+        /// Removes state carried between runs, but also untracked files and
+        /// build caches.
+        #[arg(long)]
+        isolated: bool,
     },
     /// Re-run the replay of resolved Faults and reopen any that fail again.
     ///
@@ -1301,6 +1438,8 @@ async fn main() -> Result<(), CliError> {
         idempotency_key,
         force_control,
         share_token_file,
+        gateway,
+        fingerprint,
         command,
     } = Args::parse();
     let share_token = share_token_file
@@ -1582,6 +1721,23 @@ async fn main() -> Result<(), CliError> {
         CliCommand::Events { scope } => {
             return stream_events(&socket, share_token, scope).await;
         }
+        CliCommand::Attach {
+            session_id,
+            max_hz,
+            observe,
+            take,
+        } => {
+            // Interactive and blocking by nature; it owns the terminal until
+            // the person detaches.
+            let endpoint = endpoint_for(&socket, gateway.as_deref(), fingerprint.as_deref())?;
+            return tokio::task::block_in_place(|| {
+                attach::run(endpoint, session_id, max_hz, observe, take)
+            })
+            .map_err(|message| CliError::Remote {
+                code: "attach".to_owned(),
+                message,
+            });
+        }
         CliCommand::RemoteForward {
             destination,
             local_socket,
@@ -1636,6 +1792,70 @@ async fn main() -> Result<(), CliError> {
         CliCommand::ShellInit { shell, install } => {
             return run_shell_init(shell.as_deref(), install);
         }
+        CliCommand::Pair { code, label } => {
+            return run_pair(gateway.as_deref(), fingerprint.as_deref(), &code, &label);
+        }
+        CliCommand::Replay {
+            session_id,
+            speed,
+            from_chapter,
+            from_offset,
+        } => {
+            let endpoint = endpoint_for(&socket, gateway.as_deref(), fingerprint.as_deref())?;
+            let speed_percent = (speed.clamp(0.1, 64.0) * 100.0).round() as u32;
+            let start = match (from_offset, from_chapter) {
+                (Some(offset), _) => offset,
+                (None, Some(chapter)) => {
+                    let client = match &endpoint {
+                        Endpoint::Unix(path) => ControlClient::connect(path)?,
+                        Endpoint::Gateway(gateway) => {
+                            ControlClient::connect_gateway(gateway.clone())?.0
+                        }
+                    };
+                    match client.request(Request::TerminalChapters { session_id })? {
+                        ResponseBody::TerminalChapters { chapters, .. } => chapters
+                            .iter()
+                            .find(|c| c.index == chapter)
+                            .map(|c| c.journal_offset)
+                            .ok_or_else(|| {
+                                CliError::Usage(format!("no chapter {chapter}; see `chapters`"))
+                            })?,
+                        _ => 0,
+                    }
+                }
+                (None, None) => 0,
+            };
+            return tokio::task::block_in_place(|| {
+                attach::replay(endpoint, session_id, start, speed_percent)
+            })
+            .map_err(|message| CliError::Remote {
+                code: "replay_failed".to_owned(),
+                message,
+            });
+        }
+        CliCommand::Stream {
+            session_id,
+            controller,
+            label,
+            expires_in_seconds,
+        } => {
+            return run_stream(&socket, session_id, controller, &label, expires_in_seconds);
+        }
+        CliCommand::Forget => {
+            let address = gateway.as_deref().ok_or_else(|| {
+                CliError::Usage("--gateway host:port names the pairing to forget".to_owned())
+            })?;
+            let forgotten = device_credentials::forget(address).map_err(CliError::Usage)?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "type": "forgotten",
+                    "gateway": address,
+                    "had_credentials": forgotten,
+                }))?
+            );
+            return Ok(());
+        }
         CliCommand::FaultFix {
             fault_id,
             mission_id,
@@ -1664,6 +1884,19 @@ async fn main() -> Result<(), CliError> {
         command => command,
     };
     let action = into_request(command)?;
+    if let Some(address) = gateway.as_deref() {
+        // Over the gateway the request rides the same client the desktop
+        // uses, so authorization and the device token are one code path.
+        let endpoint = gateway_endpoint(address, fingerprint.as_deref())?;
+        let (client, _) = ControlClient::connect_gateway(endpoint)?;
+        let body = client.request(action)?;
+        if render_handoff && let ResponseBody::FaultRecorded { fault } = &body {
+            println!("{}", fault_brief(fault));
+            return Ok(());
+        }
+        println!("{}", serde_json::to_string_pretty(&body)?);
+        return Ok(());
+    }
     let client_id = Uuid::new_v4();
     let surface_id = Uuid::new_v4();
     let terminal_mutation = terminal_mutation_session(&action);
@@ -1748,6 +1981,26 @@ fn fault_brief(fault: &ultraplexr_protocol::FaultSummary) -> String {
         "replay:  {replay} ({} attempts)",
         fault.repro_attempts
     );
+    if let Some(sample) = &fault.classification {
+        let verdict = match sample.verdict {
+            ultraplexr_protocol::FaultVerdict::Real => "real",
+            ultraplexr_protocol::FaultVerdict::Flaky => "flaky",
+            ultraplexr_protocol::FaultVerdict::Passing => "passing",
+            ultraplexr_protocol::FaultVerdict::Inconclusive => "inconclusive",
+        };
+        let _ = writeln!(
+            brief,
+            "sample:  {verdict} · {}/{} failed{}{}",
+            sample.failures,
+            sample.runs,
+            if sample.errors > 0 {
+                format!(" · {} could not run", sample.errors)
+            } else {
+                String::new()
+            },
+            if sample.isolated { " · isolated" } else { "" }
+        );
+    }
     let _ = writeln!(brief, "\n--- failing output ---");
     brief.push_str(fault.output.trim_end());
     brief.push('\n');
@@ -1757,6 +2010,150 @@ fn fault_brief(fault: &ultraplexr_protocol::FaultSummary) -> String {
         fault.fault_id
     );
     brief
+}
+
+/// The gateway endpoint for an address: stored credentials when this device
+/// has paired, else an unpaired probe that the runtime will refuse — which is
+/// the honest answer, and the error says how to pair.
+fn gateway_endpoint(address: &str, fingerprint: Option<&str>) -> Result<GatewayEndpoint, CliError> {
+    match device_credentials::load(address).map_err(CliError::Usage)? {
+        Some(stored) => {
+            let mut endpoint = stored.endpoint();
+            if let Some(fingerprint) = fingerprint {
+                endpoint.fingerprint = fingerprint.to_owned();
+            }
+            Ok(endpoint)
+        }
+        None => {
+            let fingerprint = fingerprint.ok_or_else(|| {
+            CliError::Usage(format!(
+                "no stored credentials for {address}; pair first: ultraplexr pair --gateway {address} --fingerprint sha256:… <code>"
+            ))
+        })?;
+            Ok(GatewayEndpoint {
+                address: address.to_owned(),
+                fingerprint: fingerprint.to_owned(),
+                device_id: Uuid::new_v4(),
+                device_token: None,
+                pairing_code: None,
+            })
+        }
+    }
+}
+
+fn endpoint_for(
+    socket: &Path,
+    gateway: Option<&str>,
+    fingerprint: Option<&str>,
+) -> Result<Endpoint, CliError> {
+    match gateway {
+        Some(address) => Ok(Endpoint::Gateway(gateway_endpoint(address, fingerprint)?)),
+        None => Ok(Endpoint::Unix(socket.to_path_buf())),
+    }
+}
+
+/// Exchange a pairing code for a device token and keep it.
+fn run_pair(
+    gateway: Option<&str>,
+    fingerprint: Option<&str>,
+    code: &str,
+    label: &str,
+) -> Result<(), CliError> {
+    let address =
+        gateway.ok_or_else(|| CliError::Usage("pair needs --gateway host:port".to_owned()))?;
+    let fingerprint = fingerprint.ok_or_else(|| {
+        CliError::Usage("pair needs --fingerprint sha256:…, shown beside the code".to_owned())
+    })?;
+    let device_id = Uuid::new_v4();
+    let endpoint = GatewayEndpoint {
+        address: address.to_owned(),
+        fingerprint: fingerprint.to_owned(),
+        device_id,
+        device_token: None,
+        pairing_code: Some(code.to_owned()),
+    };
+    let (_client, minted) = ControlClient::connect_gateway(endpoint)?;
+    let token = minted.ok_or_else(|| CliError::Remote {
+        code: "pairing_failed".to_owned(),
+        message: "the runtime admitted the connection but minted no token".to_owned(),
+    })?;
+    let path = device_credentials::store(&DeviceCredentials {
+        address: address.to_owned(),
+        fingerprint: fingerprint.to_owned(),
+        device_id,
+        token,
+        label: label.to_owned(),
+    })
+    .map_err(CliError::Usage)?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "type": "paired",
+            "device_id": device_id,
+            "gateway": address,
+            "credentials": path,
+        }))?
+    );
+    Ok(())
+}
+
+/// A Share for one session plus the gateway address: a link a viewer can
+/// open in a browser. The token is printed once, inside the link.
+fn run_stream(
+    socket: &Path,
+    session_id: SessionId,
+    controller: bool,
+    label: &str,
+    expires_in_seconds: u64,
+) -> Result<(), CliError> {
+    use ultraplexr_protocol::ShareRole;
+    let client = ControlClient::connect(socket)?;
+    let role = if controller {
+        ShareRole::Controller
+    } else {
+        ShareRole::Observer
+    };
+    let created = client.request(Request::CreateShare {
+        label: label.to_owned(),
+        role,
+        mission_ids: Vec::new(),
+        session_ids: vec![session_id],
+        expires_in_seconds,
+    })?;
+    let ResponseBody::ShareCreated { share, token } = created else {
+        return Err(CliError::Usage(
+            "runtime answered the share request with something else".to_owned(),
+        ));
+    };
+    let (advertised, fingerprint) = match client.request(Request::GatewayInfo)? {
+        ResponseBody::GatewayInfo {
+            advertised,
+            fingerprint,
+        } => (advertised, fingerprint),
+        _ => (None, None),
+    };
+    let url = advertised
+        .as_deref()
+        .map(|address| format!("https://{address}/#share={token}"));
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "type": "stream",
+            "session_id": session_id,
+            "share_id": share.share_id,
+            "role": role,
+            "expires_at_micros": share.expires_at_micros,
+            "url": url,
+            "fingerprint": fingerprint,
+            "token": token,
+            "hint": if url.is_some() {
+                "viewers accept the runtime's certificate once; its fingerprint is above"
+            } else {
+                "no gateway is listening; start the runtime with --gateway host:port to serve viewers"
+            },
+        }))?
+    );
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2955,6 +3352,17 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
             fault_id,
             timeout_seconds,
         },
+        CliCommand::FaultClassify {
+            fault_id,
+            runs,
+            timeout_seconds,
+            isolated,
+        } => Request::ClassifyFault {
+            fault_id,
+            runs,
+            timeout_seconds,
+            isolated,
+        },
         CliCommand::FaultGuard {
             limit,
             timeout_seconds,
@@ -3365,6 +3773,11 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
         | CliCommand::VerificationRustCheck { .. } => {
             unreachable!("verification commands run before one-shot protocol conversion")
         }
+        CliCommand::Attach { .. } => {
+            unreachable!(
+                "attach owns the terminal until detach; it never builds a one-shot request"
+            )
+        }
         CliCommand::List => Request::ListMissions,
         CliCommand::Status => Request::RuntimeDiagnostics,
         CliCommand::PluginList => Request::ListPlugins,
@@ -3376,6 +3789,44 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
         }
         CliCommand::PluginInstallAgentStatus { .. } => {
             unreachable!("plugin installation is handled before connecting to the runtime")
+        }
+        CliCommand::TerminalViewers { session_id } => Request::TerminalViewers { session_id },
+        CliCommand::Chapters { session_id } => Request::TerminalChapters { session_id },
+        CliCommand::PushList => Request::PushInfo,
+        CliCommand::PushTest { title, body } => Request::TestPush { title, body },
+        CliCommand::TerminalControlRequest { session_id } => {
+            Request::RequestTerminalControl { session_id }
+        }
+        CliCommand::TerminalControlOffer {
+            session_id,
+            to_client,
+            to_surface,
+            to_share,
+        } => Request::OfferTerminalControl {
+            session_id,
+            to: to_client.map(|client_id| ultraplexr_protocol::Participant {
+                client_id,
+                surface_id: to_surface,
+                share_id: to_share,
+                label: String::new(),
+            }),
+        },
+        CliCommand::TerminalControlAccept { session_id } => {
+            Request::AcceptTerminalControl { session_id }
+        }
+        CliCommand::TerminalControlWithdraw { session_id } => {
+            Request::WithdrawTerminalControl { session_id }
+        }
+        CliCommand::DevicePair { label } => Request::CreateDevicePairing { label },
+        CliCommand::DeviceList => Request::ListDevices,
+        CliCommand::DeviceRevoke { device_id } => Request::RevokeDevice { device_id },
+        CliCommand::Pair { .. }
+        | CliCommand::Forget
+        | CliCommand::Stream { .. }
+        | CliCommand::Replay { .. } => {
+            unreachable!(
+                "pairing, forgetting and stream links never reach the runtime as one request"
+            )
         }
         CliCommand::Ping => Request::Ping,
     };
@@ -3501,6 +3952,7 @@ mod tests {
             fix_run_id: None,
             proof: None,
             regressions: 0,
+            classification: None,
         };
 
         let never = fault_brief(&base);

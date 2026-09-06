@@ -26,12 +26,12 @@ use ultraplexr_core::{
     Actor, Command, Event, FaultId, Mission, MissionId, RunId, SchedulerPlan, SessionId,
 };
 use ultraplexr_terminal::{
-    CellStyle, Cursor, FullFrame, GridSize, HistoryViewport, KeyInput, MouseInput,
+    Cell, CellStyle, Cursor, FullFrame, GridSize, HistoryViewport, KeyInput, MouseInput,
     PasteConfirmation, Rgb, Row, SearchMatch, SelectionPoint, ViewportScroll,
 };
 use uuid::Uuid;
 
-pub const PROTOCOL_VERSION: u16 = 25;
+pub const PROTOCOL_VERSION: u16 = 26;
 
 /// Stable identity for an owner-arranged collection of terminal Sessions.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
@@ -296,6 +296,21 @@ pub enum Request {
         fault_id: FaultId,
         note: String,
     },
+    /// Replay a Fault several times and record how often it fails, so a
+    /// failure that is always there can be told from one that only sometimes
+    /// is. This executes the recorded command repeatedly.
+    ClassifyFault {
+        fault_id: FaultId,
+        /// Replays to attempt. Bounded by the daemon.
+        #[serde(default)]
+        runs: Option<u8>,
+        /// Abort each replay after this many seconds.
+        #[serde(default)]
+        timeout_seconds: Option<u16>,
+        /// Run each replay in a fresh worktree of the directory's revision.
+        #[serde(default)]
+        isolated: bool,
+    },
     /// Re-run the replay of Faults that were resolved, and reopen any that
     /// fail again. This executes their recorded commands.
     ///
@@ -315,6 +330,18 @@ pub enum Request {
         mission_id: MissionId,
         run_id: RunId,
     },
+    /// Begin pairing a device with the network gateway. Returns a one-time
+    /// code to type on the device and the runtime's certificate fingerprint
+    /// for the device to pin.
+    CreateDevicePairing {
+        label: String,
+    },
+    ListDevices,
+    /// Revoke a paired device. Its open connections close at their next
+    /// request.
+    RevokeDevice {
+        device_id: Uuid,
+    },
     /// Mint a time-bounded, scoped capability. The plaintext secret is returned
     /// once and only its digest is persisted.
     CreateShare {
@@ -328,6 +355,66 @@ pub enum Request {
     ShareIdentity,
     RevokeShare {
         share_id: Uuid,
+    },
+    /// Where the runtime's network gateway is, if it has one, so a link can
+    /// be composed on the host.
+    GatewayInfo,
+    /// Who is watching a terminal right now.
+    TerminalViewers {
+        session_id: SessionId,
+    },
+    /// The runtime's Web Push application server key, for a browser to
+    /// subscribe with, and how many subscriptions it holds.
+    PushInfo,
+    /// Keep a browser's push subscription; the runtime notifies it when a
+    /// Fault opens, an approval waits, or a Run finishes.
+    RegisterPushSubscription {
+        subscription: PushSubscription,
+    },
+    ForgetPushSubscription {
+        endpoint: String,
+    },
+    /// Send a notice to every subscription now, to prove the path.
+    TestPush {
+        title: String,
+        body: String,
+    },
+    /// The chapters of a session's recording: start, control changes,
+    /// Faults, exit — each at a journal offset a replay can start from.
+    TerminalChapters {
+        session_id: SessionId,
+    },
+    /// Play a session's recording from a journal offset at a speed, as the
+    /// same frame stream a live subscription sends, then a close.
+    SubscribeTerminalReplay {
+        session_id: SessionId,
+        #[serde(default)]
+        from_offset: u64,
+        /// 100 is the session's own pace; 400 is four times faster. Gaps
+        /// longer than five seconds are shortened to five.
+        #[serde(default = "default_speed_percent")]
+        speed_percent: u32,
+        #[serde(default)]
+        max_hz: Option<u16>,
+    },
+    /// Raise a hand: ask the holder of control for it. Idempotent.
+    RequestTerminalControl {
+        session_id: SessionId,
+    },
+    /// The holder offers control to one participant, or to anyone who asked
+    /// when `to` is empty. Only the holder may offer.
+    OfferTerminalControl {
+        session_id: SessionId,
+        #[serde(default)]
+        to: Option<Participant>,
+    },
+    /// Take control that was offered to this participant. Never seizes.
+    AcceptTerminalControl {
+        session_id: SessionId,
+    },
+    /// The holder withdraws an open offer; anyone else lowers their hand.
+    WithdrawTerminalControl {
+        session_id: SessionId,
     },
     /// Atomically bind a ready planned Run to a durable PTY launch.
     LaunchAgentRun {
@@ -497,6 +584,11 @@ pub enum Request {
     },
     SubscribeTerminal {
         session_id: SessionId,
+        /// Most frames per second this subscriber wants. The runtime holds
+        /// the newest frame and sends one delta per interval, so a remote
+        /// viewer on a slow link asks for less without losing correctness.
+        #[serde(default)]
+        max_hz: Option<u16>,
     },
 }
 
@@ -560,6 +652,21 @@ pub struct TerminalSessionSummary {
     pub controller_share_id: Option<Uuid>,
     #[serde(default)]
     pub control_epoch: u64,
+    /// Control the holder has offered, if any. Cleared by any control change.
+    #[serde(default)]
+    pub control_offer: Option<Box<ControlOffer>>,
+    /// Hands raised: participants who asked for control and have not got it.
+    #[serde(default)]
+    pub control_requests: Vec<Participant>,
+    /// Directory the process was started in.
+    ///
+    /// The runtime always knows this and persists it, so a client can name a
+    /// terminal by where it runs even when the shell never reports its
+    /// directory itself (only integrated shells emit OSC 7). A live `cd` is
+    /// reported through the frame's `current_directory`, which is fresher when
+    /// present.
+    #[serde(default)]
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -881,6 +988,88 @@ pub struct ReproReceipt {
     pub error: Option<String>,
 }
 
+/// What repeated replays of a Fault showed.
+///
+/// One replay gives one verdict, and a failure that happens one time in five
+/// looks fixed four times out of five. Recording the distribution is what
+/// separates a failure that is always there from one that only sometimes is.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct FaultClassification {
+    pub classified_at_unix_micros: u64,
+    /// Replays attempted.
+    pub runs: u32,
+    /// Replays that failed the way the Fault does.
+    pub failures: u32,
+    /// Replays that could not run at all; they count as neither.
+    #[serde(default)]
+    pub errors: u32,
+    pub verdict: FaultVerdict,
+    /// True when each replay ran in its own fresh worktree of the revision
+    /// rather than in the recorded directory. Isolation removes state carried
+    /// between runs, but also untracked files and build caches, so it changes
+    /// what is being measured; the record says which it was.
+    pub isolated: bool,
+    /// Revision the replays ran at, when one is known.
+    #[serde(default)]
+    pub revision: Option<String>,
+}
+
+/// The shape of a Fault's failures across a sample of replays.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FaultVerdict {
+    /// Failed every time it ran.
+    Real,
+    /// Failed some of the time: nondeterministic, or dependent on state.
+    Flaky,
+    /// Never failed in the sample.
+    Passing,
+    /// Too few replays ran to say.
+    Inconclusive,
+}
+
+impl FaultClassification {
+    /// Classify a sample. Errors are excluded from the ratio: a replay that
+    /// never ran says nothing about the failure.
+    #[must_use]
+    pub fn verdict_for(runs: u32, failures: u32, errors: u32) -> FaultVerdict {
+        let ran = runs.saturating_sub(errors);
+        if ran == 0 {
+            FaultVerdict::Inconclusive
+        } else if failures == 0 {
+            FaultVerdict::Passing
+        } else if failures >= ran {
+            FaultVerdict::Real
+        } else {
+            FaultVerdict::Flaky
+        }
+    }
+}
+
+/// What a paired device may do.
+///
+/// Only the owner's own devices pair today; scoped access over the network
+/// uses share tokens, so authorization stays one code path.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceRole {
+    Owner,
+}
+
+/// A device paired with the runtime's network gateway. The token it holds
+/// is never in here; the runtime keeps only its digest.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct DeviceSummary {
+    pub device_id: Uuid,
+    pub label: String,
+    pub role: DeviceRole,
+    pub paired_at_micros: u64,
+    #[serde(default)]
+    pub last_seen_at_micros: Option<u64>,
+    #[serde(default)]
+    pub revoked_at_micros: Option<u64>,
+}
+
 /// Lifecycle of a Fault. A Fault leaves `Open` only through evidence
 /// (`Resolved`, which requires a passing repro) or an explicit owner
 /// `Dismissed` note.
@@ -933,6 +1122,9 @@ pub struct FaultSummary {
     /// happened once, and only a count distinguishes them.
     #[serde(default)]
     pub regressions: u32,
+    /// The most recent repeated-replay sample, when one has run.
+    #[serde(default)]
+    pub classification: Option<FaultClassification>,
 }
 
 impl FaultSummary {
@@ -988,6 +1180,105 @@ pub enum ShareRole {
     Controller,
 }
 
+/// One live subscription to a terminal, as others see it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ViewerSummary {
+    pub viewer_id: Uuid,
+    pub kind: ViewerKind,
+    /// The owner's own client kind, or the Share's label.
+    pub label: String,
+    pub role: ViewerRole,
+    pub since_micros: u64,
+    /// The identity an offer of control can name.
+    pub participant: Participant,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerKind {
+    Owner,
+    Share,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewerRole {
+    Owner,
+    Observer,
+    Controller,
+}
+
+/// What a browser hands back from `PushManager.subscribe`, plus a label.
+/// The secret is never shown again once stored.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PushSubscription {
+    pub endpoint: String,
+    /// The browser's P-256 public key, base64url, 65 bytes uncompressed.
+    pub p256dh: String,
+    /// The browser's 16-byte auth secret, base64url.
+    pub auth: String,
+    #[serde(default)]
+    pub label: String,
+}
+
+fn default_speed_percent() -> u32 {
+    100
+}
+
+/// A point in a session's recording worth starting from.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Chapter {
+    pub index: u32,
+    pub kind: ChapterKind,
+    pub label: String,
+    pub at_micros: u64,
+    pub journal_offset: u64,
+    #[serde(default)]
+    pub fault_id: Option<FaultId>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChapterKind {
+    Started,
+    Control,
+    Fault,
+    Exited,
+}
+
+/// Who someone is in a room, as far as control is concerned: an owner
+/// screen (client and surface) or a Share. Labels are for people; identity
+/// is the ids.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Participant {
+    pub client_id: Uuid,
+    #[serde(default)]
+    pub surface_id: Option<Uuid>,
+    #[serde(default)]
+    pub share_id: Option<Uuid>,
+    #[serde(default)]
+    pub label: String,
+}
+
+impl Participant {
+    #[must_use]
+    pub fn same_identity(&self, other: &Self) -> bool {
+        self.client_id == other.client_id
+            && self.surface_id == other.surface_id
+            && self.share_id == other.share_id
+    }
+}
+
+/// Control on offer: the holder has said who may take it (or anyone who
+/// asked, when `to` is empty). Bound to the control epoch it was made in,
+/// so an offer never outlives the control it was about.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ControlOffer {
+    pub from: Participant,
+    pub to: Option<Participant>,
+    pub control_epoch: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ShareSummary {
     pub share_id: Uuid,
@@ -1040,6 +1331,9 @@ pub enum ResponseResult {
     Error { code: String, message: String },
 }
 
+// A response is built once and serialized; its size in memory is not on any
+// hot path, and boxing the mission would ripple through every consumer.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseBody {
@@ -1122,6 +1416,18 @@ pub enum ResponseBody {
         /// Those that failed again and are open once more.
         reopened: Vec<FaultSummary>,
     },
+    DevicePairing {
+        code: String,
+        fingerprint: String,
+        gateway: String,
+        expires_in_seconds: u64,
+    },
+    Devices {
+        devices: Vec<DeviceSummary>,
+    },
+    DeviceRevoked {
+        device: DeviceSummary,
+    },
     ShareCreated {
         share: ShareSummary,
         token: String,
@@ -1134,6 +1440,37 @@ pub enum ResponseBody {
     },
     ShareIdentity {
         share: ShareSummary,
+    },
+    GatewayInfo {
+        /// `host:port` as advertised, or `None` when no gateway is listening.
+        advertised: Option<String>,
+        fingerprint: Option<String>,
+    },
+    TerminalViewers {
+        session_id: SessionId,
+        viewers: Vec<ViewerSummary>,
+    },
+    TerminalChapters {
+        session_id: SessionId,
+        journal_bytes: u64,
+        duration_ms: u64,
+        chapters: Vec<Chapter>,
+    },
+    TerminalReplayAccepted {
+        session_id: SessionId,
+        stream_id: u32,
+    },
+    PushInfo {
+        /// Absent when the runtime could not set up push (no state dir).
+        public_key: Option<String>,
+        subscriptions: Vec<PushSubscription>,
+    },
+    PushSent {
+        /// Endpoint and the push service's HTTP status; 0 means unreachable.
+        outcomes: Vec<(String, u16)>,
+    },
+    PushSubscriptionsChanged {
+        subscriptions: usize,
     },
     AgentRunLaunched {
         events: Vec<Event>,
@@ -1394,7 +1731,13 @@ pub enum ServerEvent {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ChangedRow {
     pub index: u16,
-    pub row: Row,
+    /// First column the replacement covers. Only the cells that actually
+    /// changed travel: on a repaint that rewrites one number per line, that
+    /// is a handful of cells rather than the whole row.
+    #[serde(default)]
+    pub start: u16,
+    pub cells: Vec<Cell>,
+    pub wrapped: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1423,15 +1766,63 @@ impl FrameDelta {
         {
             return None;
         }
+        // Cells name their style by index, and the table those indices point
+        // into can be rebuilt between frames. A row is unchanged only when its
+        // cells are the same *and* every style they name still means the same
+        // thing; comparing bytes alone kept stale paint on the far side.
+        let style_changed = next
+            .styles
+            .iter()
+            .enumerate()
+            .map(|(index, style)| base.styles.get(index) != Some(style))
+            .collect::<Vec<_>>();
+        let restyled = |row: &Row| {
+            row.cells.iter().any(|cell| {
+                style_changed
+                    .get(cell.style_index as usize)
+                    .copied()
+                    .unwrap_or(true)
+            })
+        };
+        let same_cell = |old: &Cell, new: &Cell| {
+            old == new
+                && !style_changed
+                    .get(new.style_index as usize)
+                    .copied()
+                    .unwrap_or(true)
+        };
         let changed_rows = base
             .rows
             .iter()
             .zip(&next.rows)
             .enumerate()
-            .filter(|(_, (old, new))| !Arc::ptr_eq(old, new) && old != new)
-            .map(|(index, (_, new))| ChangedRow {
-                index: u16::try_from(index).expect("terminal row limits fit in u16"),
-                row: (**new).clone(),
+            .filter(|(_, (old, new))| (!Arc::ptr_eq(old, new) && old != new) || restyled(new))
+            .map(|(index, (old, new))| {
+                // Trim the cells that are the same at both ends; a row whose
+                // length changed is sent whole.
+                let (start, end) = if old.cells.len() == new.cells.len() {
+                    let prefix = old
+                        .cells
+                        .iter()
+                        .zip(&new.cells)
+                        .take_while(|(a, b)| same_cell(a, b))
+                        .count();
+                    let suffix = old.cells[prefix..]
+                        .iter()
+                        .rev()
+                        .zip(new.cells[prefix..].iter().rev())
+                        .take_while(|(a, b)| same_cell(a, b))
+                        .count();
+                    (prefix, new.cells.len() - suffix)
+                } else {
+                    (0, new.cells.len())
+                };
+                ChangedRow {
+                    index: u16::try_from(index).expect("terminal row limits fit in u16"),
+                    start: u16::try_from(start).expect("terminal column limits fit in u16"),
+                    cells: new.cells[start..end].to_vec(),
+                    wrapped: new.wrapped,
+                }
             })
             .collect();
         Some(Self {
@@ -1464,7 +1855,15 @@ impl FrameDelta {
                 .rows
                 .get_mut(usize::from(changed.index))
                 .ok_or(ProtocolError::InvalidDeltaRow(changed.index))?;
-            *row = Arc::new(changed.row.clone());
+            let start = usize::from(changed.start);
+            let end = start + changed.cells.len();
+            if end > row.cells.len() {
+                return Err(ProtocolError::InvalidDeltaRow(changed.index));
+            }
+            let mut updated = (**row).clone();
+            updated.cells[start..end].clone_from_slice(&changed.cells);
+            updated.wrapped = changed.wrapped;
+            *row = Arc::new(updated);
         }
         frame.sequence = self.sequence;
         frame.styles.clone_from(&self.styles);
@@ -1657,6 +2056,206 @@ mod tests {
             reader.receive_json::<ClientRequest>(wire_v3::FrameKind::Request, 0),
             Err(wire_v3::WireError::Json(_))
         ));
+    }
+
+    /// Only the cells that changed travel, and applying them reproduces the
+    /// next frame exactly.
+    #[test]
+    fn a_delta_carries_only_the_changed_span_of_a_row() {
+        use ultraplexr_terminal::{Cell, CellStyle, Rgb, Row, UnderlineStyle};
+        let style = CellStyle {
+            foreground: Rgb {
+                red: 200,
+                green: 200,
+                blue: 200,
+            },
+            background: Rgb {
+                red: 0,
+                green: 0,
+                blue: 0,
+            },
+            bold: false,
+            italic: false,
+            faint: false,
+            blink: false,
+            inverse: false,
+            invisible: false,
+            strikethrough: false,
+            overline: false,
+            underline: UnderlineStyle::None,
+        };
+        let cell = |c: char| Cell {
+            grapheme: c.to_string(),
+            width: 1,
+            style_index: 0,
+            hyperlink: None,
+        };
+        let row = |text: &str| {
+            Arc::new(Row {
+                wrapped: false,
+                cells: text.chars().map(cell).collect(),
+            })
+        };
+        let frame = |sequence: u64, text: &str| FullFrame {
+            sequence,
+            grid: GridSize::new(12, 1).expect("grid"),
+            rows: vec![row(text)],
+            styles: vec![style],
+            cursor: None,
+            default_foreground: Rgb {
+                red: 200,
+                green: 200,
+                blue: 200,
+            },
+            default_background: Rgb {
+                red: 0,
+                green: 0,
+                blue: 0,
+            },
+            mouse_tracking: false,
+            title: None,
+            current_directory: None,
+        };
+        let mut base = frame(1, "frame 0041  ");
+        let next = frame(2, "frame 0042  ");
+        let delta = FrameDelta::between(&base, &next).expect("same grid should delta");
+        assert_eq!(delta.changed_rows.len(), 1);
+        let changed = &delta.changed_rows[0];
+        assert_eq!(
+            (changed.start, changed.cells.len()),
+            (9, 1),
+            "only the digit that changed travels"
+        );
+        assert_eq!(changed.cells[0].grapheme, "2");
+        delta.apply_to(&mut base).expect("delta should apply");
+        assert_eq!(
+            base, next,
+            "applying the span reproduces the next frame exactly"
+        );
+
+        // A span that would run past the row is refused, not applied.
+        let mut short = frame(2, "frame 0042  ");
+        let bad = FrameDelta {
+            base_sequence: 2,
+            sequence: 3,
+            grid: short.grid,
+            changed_rows: vec![ChangedRow {
+                index: 0,
+                start: 11,
+                cells: vec![cell('x'); 3],
+                wrapped: false,
+            }],
+            styles: short.styles.clone(),
+            cursor: None,
+            default_foreground: short.default_foreground,
+            default_background: short.default_background,
+            mouse_tracking: false,
+            title: None,
+            current_directory: None,
+        };
+        assert!(matches!(
+            bad.apply_to(&mut short),
+            Err(ProtocolError::InvalidDeltaRow(0))
+        ));
+    }
+
+    /// A row whose cells are byte-identical is still changed when the style
+    /// table underneath it changed.
+    ///
+    /// The model rebuilds its style table from scratch on a reset, so the same
+    /// index can mean a different style before and after. Comparing cells by
+    /// index alone left a blank row painted with the previous style: a white
+    /// block where an exited program's cursor had been, that the daemon's own
+    /// frame no longer contained.
+    #[test]
+    fn a_row_is_changed_when_its_styles_change_under_the_same_indices() {
+        use ultraplexr_terminal::{Cell, CellStyle, Rgb, Row, UnderlineStyle};
+        let style = |background: Rgb| CellStyle {
+            foreground: Rgb {
+                red: 200,
+                green: 200,
+                blue: 200,
+            },
+            background,
+            bold: false,
+            italic: false,
+            faint: false,
+            blink: false,
+            inverse: false,
+            invisible: false,
+            strikethrough: false,
+            overline: false,
+            underline: UnderlineStyle::None,
+        };
+        let blank_row = || {
+            Arc::new(Row {
+                wrapped: false,
+                cells: vec![
+                    Cell {
+                        grapheme: " ".to_owned(),
+                        width: 1,
+                        style_index: 0,
+                        hyperlink: None
+                    };
+                    4
+                ],
+            })
+        };
+        let frame = |sequence: u64, background: Rgb| FullFrame {
+            sequence,
+            grid: GridSize::new(4, 1).expect("grid"),
+            rows: vec![blank_row()],
+            styles: vec![style(background)],
+            cursor: None,
+            default_foreground: Rgb {
+                red: 200,
+                green: 200,
+                blue: 200,
+            },
+            default_background: Rgb {
+                red: 0,
+                green: 0,
+                blue: 0,
+            },
+            mouse_tracking: false,
+            title: None,
+            current_directory: None,
+        };
+        // Before: index 0 is a white background (a program's block cursor).
+        let mut base = frame(
+            1,
+            Rgb {
+                red: 255,
+                green: 255,
+                blue: 255,
+            },
+        );
+        // After a table reset: same bytes, but index 0 is now the plain ground.
+        let next = frame(
+            2,
+            Rgb {
+                red: 0,
+                green: 0,
+                blue: 0,
+            },
+        );
+
+        let delta = FrameDelta::between(&base, &next).expect("same grid should delta");
+        assert_eq!(
+            delta.changed_rows.len(),
+            1,
+            "the row must be resent: its cells resolve to different styles now"
+        );
+        assert_eq!(
+            delta.changed_rows[0].cells.len(),
+            4,
+            "every cell restyled, so all travel"
+        );
+        delta.apply_to(&mut base).expect("delta should apply");
+        assert_eq!(
+            base, next,
+            "applying a delta must reproduce the next frame exactly"
+        );
     }
 
     #[test]

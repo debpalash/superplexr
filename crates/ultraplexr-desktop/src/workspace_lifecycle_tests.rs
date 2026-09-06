@@ -684,7 +684,8 @@ fn isolated_daemon() {
         return;
     };
     let root = PathBuf::from(root);
-    ultraplexr_server::run_blocking(root.join("s"), root.join("state")).expect("isolated daemon");
+    ultraplexr_server::run_blocking(root.join("s"), root.join("state"), None)
+        .expect("isolated daemon");
 }
 
 struct RuntimeFixture {

@@ -10,8 +10,8 @@ fn pair() -> (SubscriptionWriter, tokio::net::UnixStream) {
         .into_split();
     (
         SubscriptionWriter {
-            wire: Arc::new(Mutex::new(AsyncWireWriter::new(writer))),
-            shutdown,
+            wire: Arc::new(Mutex::new(AsyncWireWriter::new(Box::new(writer) as Box<dyn tokio::io::AsyncWrite + Unpin + Send>))),
+            shutdown: Some(shutdown),
             stream_id: 1,
         },
         peer,

@@ -69,7 +69,7 @@ one controller with multiple observers, per-Surface control epochs, revocable
 digest-backed Observer and scoped Controller Shares, optimistic Mission versions,
 durable idempotency keys, durable exact-base Run checkouts, structured terminal
 capture and bounded event-driven waits, and redacted runtime diagnostics. The
-current request schema is version 25. The desktop, native client, and CLI event
+current request schema is version 26. The desktop, native client, and CLI event
 stream carry independently cancellable subscription classes beside control
 requests on one physical connection.
 The release wire contract is defined in
@@ -105,10 +105,11 @@ changes. Invalid colors, fonts, fields, versions, file types, sizes, or contrast
 leave the previous theme active. Theme parsing and file I/O never occur in
 terminal paint paths.
 
-Fresh installs keep debug state under `.ultraplexr-dev/v25` so a debug desktop
+Fresh installs keep debug state under `.ultraplexr-dev/v26` so a debug desktop
 can run beside an older packaged runtime without taking over its socket or
-state; upgraded workspaces keep using `.termi9ne-dev/v25` until the branded
-directory exists (see below). Release builds use `.ultraplexr`.
+state. Release builds use `.ultraplexr`. State directories are versioned by
+the wire protocol: a v26 desktop does not reuse v25 state, it starts a new
+branded directory and leaves the old one untouched (see below).
 An explicit incompatible `--socket` fails before GPUI starts, reports both wire
 versions, and never replaces a daemon that may own live PTYs.
 
@@ -118,11 +119,13 @@ The product, crates, and commands are now **Ultraplexr** (`ultraplexr`,
 `ultraplexr-desktop`, `ultraplexr-server`, `ultraplexr-tui`, and
 `ultraplexr-observer`). Source directories use `crates/ultraplexr-*`.
 
-Existing `.termi9ne` and `.termi9ne-dev/v25` state is reused when the matching
-branded directory does not exist. Nothing is moved, copied, or deleted, and a
+Existing `.termi9ne` state (and any matching versioned `.termi9ne-dev/vN`
+directory) is reused when the branded directory does not exist. Nothing is
+moved, copied, or deleted, and a
 running daemon can stay alive while clients are upgraded. If both directories
 exist, the branded directory wins; use `--socket` and `--state-dir` explicitly
-to select an older installation. User-authored workspace/session names and
+to select an older installation. A wire-version bump starts a new versioned
+directory rather than migrating live PTYs. User-authored workspace/session names and
 terminal history are not rewritten. Previously built binaries and installed
 app bundles are not removed automatically.
 
@@ -140,16 +143,17 @@ plugin before starting the runtime. If it is already running, restart the
 durable runtime; closing only the desktop does not stop it:
 
 ```sh
+```sh
 cargo build -p ultraplexr-plugin --bin ultraplexr-agent-status-plugin
 cargo run -p ultraplexr-cli -- plugin-install-agent-status \
   target/debug/ultraplexr-agent-status-plugin \
-  --plugin-dir .termi9ne-dev/v25/plugins
+  --plugin-dir .ultraplexr-dev/v26/plugins
 cargo run -p ultraplexr-cli -- \
-  --socket .termi9ne-dev/v25/control.sock plugin-list
+  --socket .ultraplexr-dev/v26/control.sock plugin-list
 ```
 
-The shown paths target `cargo run -p ultraplexr-desktop` in an upgraded
-workspace; fresh installs use `.ultraplexr-dev/v25` instead. Packaged builds
+The shown paths target `cargo run -p ultraplexr-desktop` on a fresh install;
+substitute your runtime state directory when it differs. Packaged builds
 use `.ultraplexr/plugins`. The installer refuses to replace an existing plugin.
 Manifests and executable paths must be owner-controlled, non-symlink files under
 the selected plugin directory. Runtime health is visible under
@@ -169,7 +173,7 @@ scoped, inspect terminal state) through a stdio bridge that attaches to the
 same durable runtime as the desktop and CLI:
 
 ```sh
-cargo run -p ultraplexr-mcp -- --socket .termi9ne-dev/v25/control.sock
+cargo run -p ultraplexr-mcp -- --socket .ultraplexr-dev/v26/control.sock
 ```
 
 The bridge mints no authority of its own: it enforces the same Run-scoped,
@@ -180,6 +184,28 @@ For delivery checks, the CLI plans, executes, and collects bounded verification
 without accepting work (`verification-plan-rust`, `verification-execute`,
 `verification-collect`), backed by the `ultraplexr-verification` crate's
 time/output-limited runner and resumable evidence collection described below.
+
+## Network gateway, hosted daemon, and replay
+
+The runtime can listen for paired devices and viewer links on TLS
+(`--gateway host:port`), pinning its self-signed certificate by fingerprint.
+Pair once from the device, then connect with the stored token:
+
+```sh
+cargo run -p ultraplexr-server -- --gateway 0.0.0.0:7373
+cargo run -p ultraplexr-cli -- pair --gateway host:7373 --fingerprint sha256:… <code>
+cargo run -p ultraplexr-cli -- --gateway host:7373 attach SESSION_ID
+cargo run -p ultraplexr-cli -- stream SESSION_ID --controller
+cargo run -p ultraplexr-cli -- replay SESSION_ID --speed 4
+```
+
+`device-pair`, `device-list`, and `device-revoke` manage pairings from the
+host; `attach` carries terminal frames over plain SSH with nothing installed
+beside the daemon; `stream` mints a scoped viewer link served to browsers by
+the same gateway port. Finished sessions keep chaptered journals that `replay`
+plays back at speed. The standalone `ultraplexr-daemon` hosts the same runtime
+with no desktop attached (`/tmp/ultraplexr/control.sock`,
+`/var/lib/ultraplexr` by default).
 
 Workspace tabs use browser navigation: Cmd/Ctrl-T creates, Cmd/Ctrl-W closes,
 Cmd/Ctrl-Shift-T restores, Cmd/Ctrl-Tab cycles, and Cmd/Ctrl-1 through 9 jumps
@@ -519,6 +545,7 @@ certification. It also documents the real-history regression and byte-cap fix.
 - `ultraplexr-tui`: terminal workspace client with take/return Control.
 - `ultraplexr-terminal`: product-owned libghostty adapter and semantic frames.
 - `ultraplexr-desktop`: GPUI application shell and custom terminal painter.
+- `ultraplexr-daemon`: hostable runtime with no desktop attached; same daemon the desktop self-hosts.
 - `gpui-*-compat` / `ztracing-compat`: small permissively licensed seams that
   keep unapproved Zed auxiliary crates out of the product graph.
 - `CONTEXT.md`: canonical product language.

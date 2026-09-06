@@ -10,10 +10,11 @@ async fn concurrent_wait_cancelled_partial_reply_closes_before_reusing_writer() 
     let (server, mut peer) = tokio::net::UnixStream::pair().unwrap();
     let server = server.into_std().unwrap();
     let socket = Arc::new(server.try_clone().unwrap());
+    let shutdown_socket = Some(socket.clone());
     let (_, writer) = tokio::net::UnixStream::from_std(server)
         .unwrap()
         .into_split();
-    let wire = Arc::new(Mutex::new(AsyncWireWriter::new(writer)));
+    let wire = Arc::new(Mutex::new(AsyncWireWriter::new(Box::new(writer) as Box<dyn tokio::io::AsyncWrite + Unpin + Send>)));
     let response = ServerResponse::success(
         Uuid::new_v4(),
         ResponseBody::TerminalSelectionText {
@@ -21,7 +22,7 @@ async fn concurrent_wait_cancelled_partial_reply_closes_before_reusing_writer() 
             text: Some("x".repeat(8 * 1024 * 1024)),
         },
     );
-    let mut sending = Box::pin(access.run(write_response(&access, &wire, &socket, &response)));
+    let mut sending = Box::pin(access.run(write_response(&access, &wire, &shutdown_socket, &response)));
     tokio::time::timeout(Duration::from_secs(2), async {
         tokio::select! {
             result = &mut sending => panic!("expected socket backpressure: {result:?}"),
@@ -45,7 +46,7 @@ async fn concurrent_wait_cancelled_partial_reply_closes_before_reusing_writer() 
         write_response(
             &access,
             &wire,
-            &socket,
+            &Some(socket.clone()),
             &ServerResponse::success(Uuid::new_v4(), ResponseBody::Pong)
         )
         .await
@@ -61,13 +62,14 @@ async fn concurrent_wait_reply_rechecks_revocation_after_writer_admission() {
     let (server, peer) = tokio::net::UnixStream::pair().unwrap();
     let server = server.into_std().unwrap();
     let socket = Arc::new(server.try_clone().unwrap());
+    let shutdown_socket = Some(socket.clone());
     let (_, writer) = tokio::net::UnixStream::from_std(server)
         .unwrap()
         .into_split();
-    let wire = Arc::new(Mutex::new(AsyncWireWriter::new(writer)));
+    let wire = Arc::new(Mutex::new(AsyncWireWriter::new(Box::new(writer) as Box<dyn tokio::io::AsyncWrite + Unpin + Send>)));
     let held = wire.lock().await;
     let response = ServerResponse::success(Uuid::new_v4(), ResponseBody::Pong);
-    let mut sending = Box::pin(access.run(write_response(&access, &wire, &socket, &response)));
+    let mut sending = Box::pin(access.run(write_response(&access, &wire, &shutdown_socket, &response)));
     assert!(
         std::future::poll_fn(|cx| std::task::Poll::Ready(sending.as_mut().poll(cx)))
             .await

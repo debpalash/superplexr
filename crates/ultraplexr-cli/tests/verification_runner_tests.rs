@@ -29,7 +29,8 @@ mod search_pages_tests;
 #[ignore = "child process entry point; parent test supplies an isolated root"]
 fn isolated_verification_daemon() {
     let root = PathBuf::from(std::env::var_os("ULTRAPLEXR_VERIFY_TEST_ROOT").expect("test root"));
-    ultraplexr_server::run_blocking(root.join("s"), root.join("state")).expect("isolated daemon");
+    ultraplexr_server::run_blocking(root.join("s"), root.join("state"), None)
+        .expect("isolated daemon");
 }
 
 struct Fixture {

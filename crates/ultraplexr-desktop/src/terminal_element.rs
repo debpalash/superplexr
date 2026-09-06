@@ -12,7 +12,6 @@ use ultraplexr_terminal::{
 };
 
 use crate::terminal_surface::TerminalSurface;
-use crate::theme::{RELAY, rgb as theme_rgb};
 
 /// Imperatively paints one backend-neutral terminal frame.
 ///
@@ -23,6 +22,8 @@ pub(crate) struct TerminalElement {
     frame: Arc<FullFrame>,
     surface: Entity<TerminalSurface>,
     composition: String,
+    /// The viewer's own selection, painted here and never sent anywhere.
+    selection: Option<crate::selection::Selection>,
 }
 
 pub(crate) struct PrepaintState {
@@ -62,10 +63,12 @@ impl TerminalElement {
         frame: Arc<FullFrame>,
         surface: Entity<TerminalSurface>,
         composition: String,
+        selection: Option<crate::selection::Selection>,
     ) -> Self {
         Self {
             id: id.into(),
             frame,
+            selection,
             surface,
             composition,
         }
@@ -225,24 +228,27 @@ impl Element for TerminalElement {
                 ((row_backgrounds, row_glyphs), cache)
             });
         backgrounds.extend(cached_backgrounds);
-        if let Some(selection) = self.surface.read(cx).selection() {
-            let selection_color = theme_rgb(RELAY).alpha(0.42);
-            for row in 0..self.frame.grid.rows {
-                let Some(columns) = selection.column_range(row, self.frame.grid.columns) else {
+        // The selection sits over the cell backgrounds and under the glyphs:
+        // the text stays readable, and the highlight is visibly ours rather
+        // than the program's inverse video.
+        if let Some(selection) = self.selection.filter(|selection| !selection.is_empty()) {
+            let highlight: gpui::Hsla = gpui::Rgba {
+                a: 0.35,
+                ..crate::theme::rgb(crate::theme::RELAY)
+            }
+            .into();
+            for span in selection.spans(self.frame.grid.columns) {
+                if usize::from(span.row) >= self.frame.rows.len() {
                     continue;
-                };
+                }
+                let origin = point(
+                    bounds.left() + cell_width * f32::from(span.start),
+                    bounds.top() + line_height * f32::from(span.row),
+                );
+                let width = cell_width * f32::from(span.end - span.start + 1);
                 backgrounds.push(fill(
-                    Bounds::new(
-                        point(
-                            bounds.left() + cell_width * f32::from(columns.start),
-                            bounds.top() + line_height * f32::from(row),
-                        ),
-                        size(
-                            cell_width * f32::from(columns.end - columns.start),
-                            line_height,
-                        ),
-                    ),
-                    selection_color,
+                    Bounds::new(origin, size(width, line_height)),
+                    highlight,
                 ));
             }
         }

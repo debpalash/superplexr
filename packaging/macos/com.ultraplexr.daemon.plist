@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd agent for a headless ultraplexr runtime on a Mac that stays on.
+     cp com.ultraplexr.daemon.plist ~/Library/LaunchAgents/
+     launchctl load -w ~/Library/LaunchAgents/com.ultraplexr.daemon.plist -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.ultraplexr.daemon</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/ultraplexr-daemon</string>
+    <string>--socket</string><string>/tmp/ultraplexr/control.sock</string>
+    <string>--state-dir</string><string>/Users/USERNAME/Library/Application Support/ultraplexr</string>
+    <string>--gateway</string><string>0.0.0.0:7373</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/ultraplexr/daemon.log</string>
+  <key>StandardErrorPath</key><string>/tmp/ultraplexr/daemon.log</string>
+</dict>
+</plist>

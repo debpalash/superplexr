@@ -907,10 +907,9 @@ pub fn run(
                         | Action::NextPane
                         | Action::ClosePane
                 ) && history_page.take().is_some()
+                    && let Some(worker) = &search_worker
                 {
-                    if let Some(worker) = &search_worker {
-                        worker.cancel();
-                    }
+                    worker.cancel();
                 }
                 if let Some(change) = ViewChange::from_action(&action) {
                     let pending = PendingViewChange {

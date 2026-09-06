@@ -1,4 +1,4 @@
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, path::PathBuf, time::Duration};
 
 #[cfg(not(test))]
 use crate::theme::SIGNAL;
@@ -50,6 +50,25 @@ fn history_hit_index(
     sessions.iter().position(|session| {
         session.group_id == hit.group_id && session.terminals.contains(&hit.surface_index)
     })
+}
+
+/// Names the runtime assigns when it knows nothing better.
+pub(crate) fn is_generated_session_name(name: &str) -> bool {
+    name == "shell" || name.starts_with("shell-")
+}
+
+/// Drop a leading mark such as `✳ ` from a title: the row already draws the
+/// agent's mark, so the text should not repeat it.
+pub(crate) fn strip_leading_mark(title: &str) -> &str {
+    let mut chars = title.char_indices();
+    match (chars.next(), chars.next()) {
+        (Some((_, first)), Some((rest, second)))
+            if !first.is_alphanumeric() && second.is_whitespace() =>
+        {
+            title[rest..].trim_start()
+        }
+        _ => title,
+    }
 }
 
 pub(crate) fn sidebar_width(viewport_width: f32, expanded: bool, custom: Option<f32>) -> f32 {
@@ -1242,14 +1261,80 @@ impl UltraplexrDesktop {
         agent: Option<crate::provider_usage::ProviderKind>,
         cx: &App,
     ) -> String {
-        if let Some(agent) = agent {
-            return agent.label().to_owned();
+        // What the program calls itself beats what we detected it to be: an
+        // agent's own title names the task, its label only names the agent.
+        match (self.surface_own_title(surface_index, cx), agent) {
+            (Some(title), _) => title,
+            (None, Some(agent)) => agent.label().to_owned(),
+            (None, None) => format!("Terminal {}", surface_index + 1),
         }
+    }
+
+    /// The OSC title a surface's program set, without a leading mark.
+    fn surface_own_title(&self, surface_index: usize, cx: &App) -> Option<String> {
         self.surfaces
             .get(surface_index)
             .and_then(|surface| surface.read(cx).terminal_title().map(str::to_owned))
-            .filter(|title| !title.trim().is_empty())
-            .unwrap_or_else(|| format!("Terminal {}", surface_index + 1))
+            .map(|title| strip_leading_mark(title.trim()).to_owned())
+            .filter(|title| !title.is_empty())
+    }
+
+    /// Where a surface's process is running: a live OSC 7 report when the
+    /// shell sends one, otherwise the directory the runtime started it in.
+    fn surface_directory(&self, surface_index: usize, cx: &App) -> Option<PathBuf> {
+        #[cfg(not(test))]
+        if let Some(live) = self.surfaces.get(surface_index).and_then(|surface| {
+            surface
+                .read(cx)
+                .current_directory()
+                .and_then(crate::worktree::path_from_osc7)
+        }) {
+            return Some(live);
+        }
+        #[cfg(test)]
+        let _ = cx;
+        self.surface_cwds.get(surface_index).cloned().flatten()
+    }
+
+    /// The repository and branch a Session runs in, from its first terminal
+    /// with a known directory.
+    pub(crate) fn session_worktree(
+        &self,
+        session: &SessionView,
+        cx: &App,
+    ) -> Option<crate::worktree::Worktree> {
+        session
+            .terminals
+            .iter()
+            .find_map(|surface_index| self.surface_directory(*surface_index, cx))
+            .map(|directory| self.worktree_cache.describe(&directory))
+    }
+
+    /// The title an agent in this Session has set for itself, if any.
+    fn session_agent_title(&self, session: &SessionView, cx: &App) -> Option<String> {
+        session.terminals.iter().find_map(|surface_index| {
+            self.terminal_agent(*surface_index)?;
+            self.surface_own_title(*surface_index, cx)
+        })
+    }
+
+    /// What to call a Session in the sidebar.
+    ///
+    /// A name a person chose always wins. Otherwise the agent's own title
+    /// names the task, and failing that the worktree names the place; the
+    /// runtime's generated name is only the last resort. This is derived at
+    /// render time rather than written into the name, so it keeps following
+    /// the terminal instead of freezing at the first thing it saw.
+    pub(crate) fn session_display_title(&self, session: &SessionView, cx: &App) -> String {
+        if !is_generated_session_name(&session.name) {
+            return session.name.clone();
+        }
+        self.session_agent_title(session, cx)
+            .or_else(|| {
+                self.session_worktree(session, cx)
+                    .map(|worktree| worktree.label())
+            })
+            .unwrap_or_else(|| session.name.clone())
     }
 
     fn session_primary_agent(
@@ -1484,7 +1569,8 @@ impl UltraplexrDesktop {
         let session = &self.workspace().sessions[index];
         let selected = self.workspace().selected_session == index;
         let status_color = session.status.color();
-        let name = session.name.clone();
+        let name = self.session_display_title(session, cx);
+        let worktree = self.session_worktree(session, cx);
         let terminal_count = session.terminals.len();
         let primary_agent = self.session_primary_agent(session);
         let identity = primary_agent.map_or_else(
@@ -1497,11 +1583,16 @@ impl UltraplexrDesktop {
             },
             |agent| agent.label().to_owned(),
         );
-        let status_detail = format!(
-            "{identity} · {} · {terminal_count} terminal{}",
-            status_word(session.status),
-            if terminal_count == 1 { "" } else { "s" }
-        );
+        // Identity, place, state; the count only when there is more than one.
+        let mut detail = vec![identity];
+        if let Some(worktree) = &worktree {
+            detail.push(format!("⎇ {}", worktree.label()));
+        }
+        detail.push(status_word(session.status).to_owned());
+        if terminal_count > 1 {
+            detail.push(format!("{terminal_count} terminals"));
+        }
+        let status_detail = detail.join(" · ");
         let expanded = session_expansion_key(session)
             .is_some_and(|key| self.session_sidebar.expanded_sessions.contains(&key));
         // The child rows already list every terminal once expanded; keep the
@@ -1521,7 +1612,7 @@ impl UltraplexrDesktop {
         };
         let accessibility_label = format!(
             "{}, {}, {} terminal{}",
-            session.name,
+            name,
             session.status.label(&session.actor),
             terminal_count,
             if terminal_count == 1 { "" } else { "s" }
@@ -2168,9 +2259,10 @@ impl UltraplexrDesktop {
         let status_color = session.status.color();
         let terminal_count = session.terminals.len();
         let primary_agent = self.session_primary_agent(session);
+        let name = self.session_display_title(session, cx);
         let accessibility_label = format!(
             "{}, {}, {} terminal{}",
-            session.name,
+            name,
             session.status.label(&session.actor),
             terminal_count,
             if terminal_count == 1 { "" } else { "s" }
@@ -2488,6 +2580,16 @@ impl UltraplexrDesktop {
             )
             .when(self.sidebar_open, |sidebar| {
                 sidebar
+                    .children({
+                        #[cfg(not(test))]
+                        {
+                            self.fault_sidebar(cx)
+                        }
+                        #[cfg(test)]
+                        {
+                            None::<AnyElement>
+                        }
+                    })
                     .children({
                         #[cfg(not(test))]
                         {
@@ -2843,6 +2945,79 @@ mod tests {
                 let _ = window;
             });
         });
+    }
+
+    #[test]
+    fn generated_names_are_recognised_and_marks_are_stripped() {
+        assert!(is_generated_session_name("shell"));
+        assert!(is_generated_session_name("shell-1cf389a9"));
+        assert!(!is_generated_session_name("build-shell"));
+        assert!(!is_generated_session_name("ultraplexr@main"));
+
+        assert_eq!(strip_leading_mark("✳ Claude"), "Claude");
+        assert_eq!(strip_leading_mark("⚡ fix the freeze"), "fix the freeze");
+        assert_eq!(strip_leading_mark("Claude"), "Claude");
+        assert_eq!(
+            strip_leading_mark("→x"),
+            "→x",
+            "no space after the mark: not a mark"
+        );
+        assert_eq!(strip_leading_mark(""), "");
+    }
+
+    /// A Session is named by where it runs unless a person named it, and the
+    /// runtime's generated name is only the last resort.
+    #[gpui::test]
+    fn sessions_are_titled_by_worktree_unless_a_person_named_them(cx: &mut gpui::TestAppContext) {
+        let root = std::env::temp_dir().join(format!("ultraplexr-title-{}", uuid::Uuid::new_v4()));
+        let repo = root.join("ultraplexr");
+        std::fs::create_dir_all(repo.join(".git")).expect("git dir");
+        std::fs::write(repo.join(".git/HEAD"), "ref: refs/heads/main\n").expect("HEAD");
+
+        let (desktop, cx) = cx.add_window_view(|window, cx| {
+            let surfaces = crate::create_surfaces(window, cx);
+            UltraplexrDesktop::new(surfaces, cx.focus_handle())
+        });
+        cx.update(|_, cx| {
+            desktop.update(cx, |desktop, cx| {
+                let surface_index = desktop.workspace().sessions[0].terminals[0];
+                desktop.workspace_mut().sessions[0].name = "shell-1cf389a9".to_owned();
+
+                // Nothing known about where it runs: the generated name stands.
+                let session = desktop.workspace().sessions[0].clone();
+                assert_eq!(
+                    desktop.session_display_title(&session, cx),
+                    "shell-1cf389a9"
+                );
+                assert!(desktop.session_worktree(&session, cx).is_none());
+
+                // The runtime reports where it started: repo and branch.
+                desktop.surface_cwds[surface_index] = Some(repo.clone());
+                let session = desktop.workspace().sessions[0].clone();
+                assert_eq!(
+                    desktop.session_display_title(&session, cx),
+                    "ultraplexr@main"
+                );
+                assert_eq!(
+                    desktop
+                        .session_worktree(&session, cx)
+                        .map(|worktree| worktree.label()),
+                    Some("ultraplexr@main".to_owned())
+                );
+
+                // A name a person chose is never overridden.
+                desktop.workspace_mut().sessions[0].name = "release prep".to_owned();
+                let session = desktop.workspace().sessions[0].clone();
+                assert_eq!(desktop.session_display_title(&session, cx), "release prep");
+                assert!(
+                    desktop.session_worktree(&session, cx).is_some(),
+                    "the place is still shown in the detail line"
+                );
+            });
+        });
+        // The derived title must survive a real layout pass.
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[gpui::test]

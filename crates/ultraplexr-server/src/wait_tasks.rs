@@ -27,10 +27,10 @@ pub(super) struct Spec {
 
 pub(super) struct Jobs {
     tasks: JoinSet<()>,
-    socket: Arc<UnixStream>,
+    socket: Option<Arc<UnixStream>>,
 }
 impl Jobs {
-    pub(super) fn new(socket: Arc<UnixStream>) -> Self {
+    pub(super) fn new(socket: Option<Arc<UnixStream>>) -> Self {
         Self {
             tasks: JoinSet::new(),
             socket,
@@ -58,7 +58,7 @@ impl Jobs {
             + Duration::from_millis(spec.timeout_millis)
             + Duration::from_secs(2);
         self.tasks.spawn(async move {
-            let mut failure = CloseOnDrop(Some(socket.clone()));
+            let mut failure = CloseOnDrop(socket.clone());
             let access =
                 share_request::Access::new(&authority, &state.shares, &state.share_revocations);
             let operation = access.run(async {
@@ -107,7 +107,9 @@ impl Drop for Jobs {
     fn drop(&mut self) {
         // Close before aborting children: no writer owner can keep a detached
         // peer alive or append bytes after interrupted response framing.
-        let _ = self.socket.shutdown(Shutdown::Both);
+        if let Some(socket) = &self.socket {
+            let _ = socket.shutdown(Shutdown::Both);
+        }
         self.tasks.abort_all();
     }
 }
@@ -124,14 +126,14 @@ impl Drop for CloseOnDrop {
 async fn write_response(
     access: &share_request::Access<'_>,
     wire: &SharedServerWireWriter,
-    socket: &Arc<UnixStream>,
+    socket: &Option<Arc<UnixStream>>,
     response: &ServerResponse,
 ) -> Result<(), ServerError> {
     let mut writer = wire.lock().await;
     access.revalidate().await?;
     // Declared after the writer guard: cancellation shuts down the socket
     // BEFORE releasing its mutex to a competing response/subscription writer.
-    let mut partial = CloseOnDrop(Some(socket.clone()));
+    let mut partial = CloseOnDrop(socket.clone());
     writer
         .send_json(FrameKind::Response, 0, response)
         .await

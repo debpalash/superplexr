@@ -1,0 +1,30 @@
+# systemd unit for a hosted ultraplexr runtime.
+#   install -m 0644 ultraplexr-daemon.service /etc/systemd/system/
+#   useradd --system --home /var/lib/ultraplexr --shell /bin/bash ultraplexr
+#   systemctl enable --now ultraplexr-daemon
+# Then, as the ultraplexr user on the host:
+#   ultraplexr --socket /run/ultraplexr/control.sock device-pair --label laptop
+[Unit]
+Description=ultraplexr runtime (headless)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ultraplexr
+Group=ultraplexr
+RuntimeDirectory=ultraplexr
+RuntimeDirectoryMode=0700
+StateDirectory=ultraplexr
+StateDirectoryMode=0700
+ExecStart=/usr/local/bin/ultraplexr-daemon --socket /run/ultraplexr/control.sock --state-dir /var/lib/ultraplexr --gateway 0.0.0.0:7373
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/ultraplexr /run/ultraplexr /tmp
+PrivateTmp=false
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

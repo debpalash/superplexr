@@ -27,9 +27,11 @@ breaks. A Fault closes only when a replay actually passes.
 Remaining:
 
 - [ ] **Bisect a Fault across Candidates** — find which Run introduced it.
-      Needs Candidate patch history, not the Fault store.
-- [ ] **Flaky vs real** — re-run N× in isolated worktrees, classify, record
-      the distribution rather than one verdict. **Next.**
+      Needs Candidate patch history, not the Fault store. **Next.**
+- [x] **Flaky vs real** — `fault classify` replays N× (optionally each in a
+      fresh worktree) and records runs/failures/errors with a verdict of
+      real, flaky, passing or inconclusive; a flaky Fault cannot be resolved
+      on a lucky pass; verified end to end including worktree cleanup
 - [x] **Fault → Run** — `fault fix` plans a Run with the Fault as its
       objective, links the two, and launches the configured engine driver;
       verified that a Run claiming success still cannot close the Fault
@@ -79,6 +81,132 @@ not independently verified here.
 
 ---
 
+## 3b. Wire cost of a terminal subscription (measured 2026-09-03/04)
+
+`crates/ultraplexr-client/examples/delta_bandwidth` against a live daemon, on
+the protobuf data plane the desktop actually uses. Before: a repainting agent
+screen was **2.27 MB/s** at ~117 deltas/s (~20 KB each), scrolling build
+output **0.97 MB/s**, one full 120×36 frame **21 KB** (~5 B/cell).
+
+- [x] Within a changed row, send only the changed cell span (protocol 26):
+      repaint **162 KB/s**, scroll **121 KB/s**, average delta 1.4 KB — a
+      14× and 8× reduction with no change in what the viewer sees
+- [x] Coalesce publishes per subscriber (`SubscribeTerminal.max_hz`, default
+      60, actor publishes at up to 125), as a tested `RateGate`: the first
+      version flushed the held frame on the next frame's arrival and
+      coalesced nothing
+- [x] Re-measured 2026-09-04: repaint **86 KB/s @60 Hz, 47 KB/s @30 Hz**;
+      scroll **75 KB/s @60, 43 KB/s @30**. Target met at the remote rate
+      (≤ 50 KB/s): 48× below where this started
+- [ ] Run-length styles within a row — not needed for the target; keep for
+      mobile (≤ 20 KB/s) if measurement there demands it
+- [x] Protocol version policy written (`docs/protocol-versioning.md`);
+      a bump carries the previous version's state forward
+
+## 3c. Network gateway (platform plan, phase 3 — built 2026-09-04)
+
+Rules in `docs/gateway.md`. Off unless `--gateway host:port`; nothing
+unpaired gets past the handshake; tokens and pairing codes are stored only
+as digests; identity is a pinned certificate fingerprint; revocation ends
+open connections at their next request; devices carry owner authority and
+scoped access uses share tokens over the same listener.
+
+- [x] TLS listener (rustls/ring) with a self-signed identity created once
+- [x] Device store: pairing codes (5 min, single use, not persisted), device
+      tokens (digest only), list, revoke; `is_active` checked per request
+- [x] Handshake admission: pairing code → token minted once in `Welcome`;
+      token → authenticated; neither → `gateway_unauthorized` and close
+- [x] Client: `Endpoint::{Unix, Gateway}`, pinned-fingerprint verifier, a
+      blocking TLS stream shared by reader and writer, `connect_gateway`
+- [x] CLI: `device-pair`, `device-list`, `device-revoke` on the host;
+      `pair --gateway --fingerprint <code>` on the device; global
+      `--gateway` routes any one-shot command; `attach --gateway` over TLS
+- [x] End-to-end (`ci/gateway-smoke.sh`): unpaired refused, pair, request
+      over TLS, wrong fingerprint refused, attach under a pty over TLS,
+      revoke → refused; the first TLS pump starved its writer under a
+      tight relock loop and was rewritten to block outside the lock
+- [ ] Per-connection request rate limits
+- [ ] Outside security review of pairing and token scope before any public
+      exposure (the phase gate)
+
+## 3d. Web shell (platform plan, phase 4 — built 2026-09-04)
+
+- [x] One port: the gateway listener sniffs wire magic vs HTTP and serves
+      the page, its scripts and `wss://…/ws` beside the native wire
+- [x] WebSocket hand-rolled in `crates/ultraplexr-server/src/web.rs` (RFC
+      6455 framing, masking, origin check; unit tests against the RFC's own
+      vectors) — no web framework, no new crates beyond `ring` for SHA-1
+- [x] Browser client in `web/` as plain ES modules: wire_v3 header and JSON
+      control plane, a hand-written protobuf reader for the terminal data
+      plane, a canvas renderer, pairing with the same code, keys, resize,
+      paste, selection and copy, reconnect with backoff
+- [x] `start_terminal` with an empty program/cwd means the login shell at
+      home, so screens that do not know the machine can say "new shell"
+- [x] End-to-end (`ci/web-smoke.sh`) green: page + CSP, unpaired refused, pair,
+      shell started from the browser, frames decoded and applied, echo seen,
+      off-host origin refused
+- [x] Found by the smoke test: the subscriber task hit an `unreachable!` on
+      a finished command block (OSC 133), freezing that viewer's frames —
+      the desktop's too — after the first command; `protocol_event` is
+      total now, with a test
+- [ ] Mouse reporting to the session when the program asks for it
+- [ ] Scrollback in the browser (history pages over the wire)
+- [ ] IME / composition input
+
+## 3e. Rooms and streams (platform plan, phase 5 — streams built 2026-09-04)
+
+- [x] Streams: `ultraplexr stream <session>` mints a Share link; the gateway
+      admits a Share token at the handshake and binds the connection to it
+      (every request must carry the same token → `share_token_required`)
+- [x] Presence: subscriptions register on their terminal record for their
+      lifetime; `terminal-viewers`, `Request::TerminalViewers`, `👁` in the page
+- [x] `Request::GatewayInfo` so links can be composed on the host
+- [x] `ci/stream-smoke.sh`: link, viewer admitted and limited (no keys, no
+      token-less request, no owner request), presence, 50-viewer fan-out,
+      revocation → refused
+- [x] Fan-out cost measured 2026-09-04: 50 viewers on one session scrolling
+      20 lines/s, each subscribed at 30 Hz → 16.1 KB/s per viewer (max
+      16.1), 15.3 frames/s each, presence exact at 51 — under the plan's
+      20 KB/s gate without compression (the browser has no zstd)
+- [x] Rooms: control handed, never seized — raise hand / offer / accept /
+      withdraw on top of claim/release, offers bound to the control epoch,
+      participants named in presence, room state on the index stream, the
+      browser's control panel; `ci/rooms-smoke.sh` (two hand-offs, no
+      keystroke lost)
+- [ ] Rooms in the desktop: show hands and offers, offer from the pane
+- [ ] Per-participant cursor and selection shown to the others
+
+## 3f. The phone (platform plan, phase 6 — built 2026-09-04, see docs/mobile.md)
+
+- [x] Installable web shell: manifest, icon, service worker (offline shell,
+      notifications with no tab open, a tap lands on the thing)
+- [x] Web Push from the runtime on ring (RFC 8291 + 8292), curl delivery,
+      `push/` under the state dir; Faults, approvals (once), finished Runs
+- [x] `🔔 notify` in the page; `push-list`, `push-test` in the CLI
+- [x] Touch: hidden input for the soft keyboard, key bar (esc/tab/ctrl/alt/
+      arrows/^C/^D), refit on keyboard open
+- [x] `ci/push-smoke.sh`: node as push service + browser verifies VAPID and
+      decrypts; 410 forgets
+- [ ] Native wrapper, App Store, APNs: needs an Apple developer account —
+      the owner's call
+
+## 3g. A daemon that never sleeps (platform plan, phase 7 — built 2026-09-04, see docs/cloud.md)
+
+- [x] `ultraplexr-daemon`: the runtime alone (`--socket`, `--state-dir`,
+      `--gateway`), no desktop linked in
+- [x] Packaging: systemd unit (own user, locked-down filesystem), launchd
+      agent, `ci/daemon.Dockerfile` (unprivileged, state on a volume)
+- [x] `ci/daemon-smoke.sh`: headless daemon + gateway, laptop paired, session
+      on the host, TUI attached under a pty, browser smoke, viewer link
+- [ ] Real certificate for a public name (slots in at `gateway/identity.crt`)
+- [ ] Rendezvous / relay for hosts behind NAT; the multi-machine fleet (P2)
+- [ ] The outside security review before any public exposure (from phase 3)
+- [x] Replay: `timing.bin` beside the journal, `events.jsonl` chapters
+      (start, control changes, Faults, exit), `subscribe_terminal_replay`
+      paced by the recording ÷ speed with long gaps shortened, `chapters`
+      and `replay` in the CLI (TUI player), ▶ replay in the browser;
+      `ci/replay-smoke.sh` — see docs/replay.md
+
 ## 4. Terminal and desktop certification (Gate E)
 
 - [ ] Unicode / IME / Kitty keyboard / Neovim compatibility matrix
@@ -88,6 +216,16 @@ not independently verified here.
 - [ ] 200% zoom visual and accessibility pass
 - [ ] Linux keyboard-shortcut smoke test
 - [~] Resizable sidebar and terminal splitters (built; needs platform pass)
+- [x] Sessions titled by the agent's own title, else `repo@branch` from the
+      terminal's directory (runtime cwd, or OSC 7 from `shell-init`); a name a
+      person chose always wins; derived at render so it never freezes
+- [x] Viewer-side selection: highlight and copy from the frame the desktop
+      holds, no daemon request, so it works on agent-owned, observed and
+      finished terminals; Shift bypasses an app's mouse reporting, ⌥ drags a
+      rectangle, a plain click clears
+- [x] TUI shell: `ultraplexr attach <session>` paints frames into any
+      terminal and forwards keys (Ctrl-] detaches, `--observe`, `--take`,
+      `--max-hz`); no VT parsing client-side; verified under a real pty
 - [ ] OSC 133 command blocks in the UI: jump, search, copy, rerun
 
 ---
@@ -125,10 +263,17 @@ finishes in 0.2s. See "parser build mode" below.
 
 ## Known environment issues
 
-- macOS TCC intermittently denies `getcwd` and file reads under
-  `~/Desktop`, which makes `cargo` fail with
-  `Could not locate working directory`. Grant Full Disk Access to the
-  hosting terminal app, or move the repo outside `~/Desktop`.
+- macOS TCC denies the terminal app (Ghostty here) access to `~/Desktop`,
+  so every process it spawns gets `Operation not permitted` on the repo and
+  `cargo` dies before the app starts:
+  `Could not locate working directory: Operation not permitted (os error 1)`.
+  This is what "the app doesn't run" was on 2026-09-03, after two rounds of
+  real fixes to the app itself. The grant is per folder and a dismissed
+  prompt means denied, so it flips mid-session. Do not keep the repo under
+  `~/Desktop`, `~/Documents` or `~/Downloads`; `~/src/ultraplexr` never hits
+  this. If the Desktop copy must be used: System Settings → Privacy &
+  Security → Files and Folders → Ghostty → Desktop Folder, then restart
+  Ghostty.
 - Concurrent agent sessions sharing `target/` can corrupt incremental
   artifacts (`Undefined symbols` at link time). Fix:
   `rm -rf target/debug/incremental/<crate>-*`. Or give each session its own

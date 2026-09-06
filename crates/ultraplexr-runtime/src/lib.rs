@@ -504,6 +504,71 @@ struct Startup {
 /// The kept tail can begin mid-escape-sequence. That is already true of every
 /// recovery, which seeks into the middle of the file, and a terminal resynchronises
 /// on the next complete sequence.
+/// Beside `output.raw`: `(journal_offset_after: u64, since_start_ms: u32)`
+/// per PTY read, little-endian, appended. Twelve bytes per read is cheap
+/// enough to keep for every session; a replay reads it back to keep the
+/// session's own pace, and falls back to a steady rate where it is missing.
+pub const TIMING_FILE: &str = "timing.bin";
+pub const TIMING_ENTRY_BYTES: usize = 12;
+
+struct Timing {
+    file: fs::File,
+    path: PathBuf,
+    started: Instant,
+}
+
+impl Timing {
+    fn open(path: &Path) -> Result<Self, RuntimeError> {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .mode(0o600)
+            .open(path)?;
+        Ok(Self {
+            file,
+            path: path.to_path_buf(),
+            started: Instant::now(),
+        })
+    }
+
+    /// Unbuffered on purpose: a replay of a live session reads this file.
+    fn record(&mut self, journal_offset: u64) -> Result<(), RuntimeError> {
+        let since_ms = u32::try_from(self.started.elapsed().as_millis()).unwrap_or(u32::MAX);
+        let mut entry = [0_u8; TIMING_ENTRY_BYTES];
+        entry[..8].copy_from_slice(&journal_offset.to_le_bytes());
+        entry[8..].copy_from_slice(&since_ms.to_le_bytes());
+        self.file.write_all(&entry)?;
+        Ok(())
+    }
+
+    /// After compaction the journal's offsets are new; start over.
+    fn restart(&mut self) -> Result<(), RuntimeError> {
+        self.file = OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&self.path)?;
+        Ok(())
+    }
+}
+
+/// Read a timing file back: `(journal_offset, since_start_ms)` in order.
+#[must_use]
+pub fn read_timing(path: &Path) -> Vec<(u64, u32)> {
+    let Ok(bytes) = fs::read(path) else {
+        return Vec::new();
+    };
+    bytes
+        .chunks_exact(TIMING_ENTRY_BYTES)
+        .map(|entry| {
+            (
+                u64::from_le_bytes(entry[..8].try_into().expect("eight bytes")),
+                u32::from_le_bytes(entry[8..].try_into().expect("four bytes")),
+            )
+        })
+        .collect()
+}
+
 fn compact_journal(
     journal: &mut BufWriter<fs::File>,
     path: &Path,
@@ -559,6 +624,9 @@ fn run_session_actor(
     journal.set_permissions(fs::Permissions::from_mode(0o600))?;
     let mut journal_bytes = journal.metadata()?.len();
     let mut journal = BufWriter::new(journal);
+    // When each byte arrived, so a replay can keep the session's own pace:
+    // one fixed-size entry per PTY read, beside the journal.
+    let mut timing = Timing::open(&session_dir.join(TIMING_FILE))?;
     let mut model = TerminalModel::new(spec.grid)?;
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -704,10 +772,13 @@ fn run_session_actor(
                 journal.write_all(&bytes)?;
                 journal_bytes = journal_bytes.saturating_add(bytes.len() as u64);
                 journal_dirty = true;
+                timing.record(journal_bytes)?;
                 if journal_bytes >= limits.high_water {
                     journal_bytes =
                         compact_journal(&mut journal, &journal_file_path, limits.low_water)?;
                     journal_dirty = false;
+                    // The offsets moved; what was recorded no longer names bytes.
+                    timing.restart()?;
                 }
                 for block in command_blocks.consume(&bytes) {
                     broadcast(&mut subscribers, SessionEvent::CommandFinished(block));
@@ -1142,6 +1213,36 @@ fn pty_size(grid: GridSize, cell_width_px: u32, cell_height_px: u32) -> PtySize 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn timing_round_trips_and_restarts_after_compaction() {
+        let dir = std::env::temp_dir().join(format!(
+            "ultraplexr-timing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or_default()
+        ));
+        fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join(TIMING_FILE);
+        let mut timing = Timing::open(&path).expect("open");
+        timing.record(10).expect("record");
+        timing.record(25).expect("record");
+        let entries = read_timing(&path);
+        assert_eq!(entries.len(), 2);
+        assert_eq!((entries[0].0, entries[1].0), (10, 25));
+        assert!(entries[0].1 <= entries[1].1, "time only moves forward");
+        timing.restart().expect("restart");
+        assert!(
+            read_timing(&path).is_empty(),
+            "offsets moved; nothing recorded names them"
+        );
+        timing.record(3).expect("record");
+        assert_eq!(read_timing(&path)[0].0, 3);
+        assert!(read_timing(&dir.join("missing.bin")).is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     fn test_root(name: &str) -> PathBuf {

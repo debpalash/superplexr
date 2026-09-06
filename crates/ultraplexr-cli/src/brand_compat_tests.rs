@@ -16,6 +16,5 @@ fn legacy_shell_block_is_upgraded_in_place_and_remains_idempotent() {
             install_into(&updated, shell),
             (updated, InstallOutcome::Unchanged)
         );
-        assert!(snippet(shell).contains("TERMI9NE_SESSION"));
     }
 }

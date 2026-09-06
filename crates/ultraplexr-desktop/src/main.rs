@@ -11,6 +11,7 @@ mod pane_layout;
 mod performance_monitor;
 mod provider_usage;
 mod provider_usage_panel;
+mod selection;
 mod session_sidebar;
 mod status_bar;
 mod terminal_element;
@@ -26,6 +27,7 @@ mod workspace_lifecycle_tests;
 mod workspace_reconcile;
 mod workspace_store;
 mod workspace_tabs;
+mod worktree;
 
 use crate::workspace_store::ViewDismissals;
 use std::time::{Duration, Instant};
@@ -117,7 +119,8 @@ fn macos_titlebar_leading_inset(is_fullscreen: bool) -> f32 {
 
 /// Name a new workspace after the directory it opens in, falling back to a
 /// numbered name when the directory is unknown.
-fn workspace_display_name(sequence: u64) -> String {
+/// The directory the desktop was started in, which names its workspaces.
+fn workspace_base_name() -> Option<String> {
     std::env::current_dir()
         .ok()
         .and_then(|directory| {
@@ -126,6 +129,29 @@ fn workspace_display_name(sequence: u64) -> String {
                 .map(|name| name.to_string_lossy().into_owned())
         })
         .filter(|name| !name.trim().is_empty())
+}
+
+/// The number the next workspace with this base name gets, counting only the
+/// tabs that are open.
+fn next_workspace_sequence<'a>(
+    open_titles: impl IntoIterator<Item = &'a str>,
+    base: Option<&str>,
+) -> u64 {
+    let Some(base) = base else { return 1 };
+    let same_base = open_titles
+        .into_iter()
+        .filter(|title| {
+            *title == base
+                || title
+                    .strip_prefix(base)
+                    .is_some_and(|rest| rest.starts_with(' '))
+        })
+        .count();
+    same_base as u64 + 1
+}
+
+fn workspace_display_name(sequence: u64) -> String {
+    workspace_base_name()
         .map(|name| {
             if sequence <= 1 {
                 name
@@ -219,6 +245,10 @@ struct DesktopArgs {
     /// Measure a settled, quiet desktop, print JSON, and exit.
     #[arg(long, hide = true, conflicts_with = "render_benchmark")]
     idle_benchmark: bool,
+    /// Also listen for paired devices over TLS at this address (passed to
+    /// the runtime). Off unless given.
+    #[arg(long)]
+    gateway: Option<String>,
 }
 
 #[cfg(not(test))]
@@ -446,6 +476,10 @@ impl Render for DraggedWorkspaceTab {
 struct UltraplexrDesktop {
     surfaces: Vec<Entity<TerminalSurface>>,
     surface_foreground_processes: Vec<Option<TerminalForegroundProcess>>,
+    /// Where each surface's process was started, from the runtime. A live
+    /// `cd` arrives through the frame instead and takes precedence.
+    surface_cwds: Vec<Option<std::path::PathBuf>>,
+    worktree_cache: worktree::WorktreeCache,
     workspaces: WorkspaceTabs<WorkspaceView>,
     dismissals: ViewDismissals,
     #[cfg(not(test))]
@@ -585,6 +619,7 @@ struct LiveSurface {
     run_id: Option<RunId>,
     status: TerminalSessionStatus,
     foreground_process: Option<TerminalForegroundProcess>,
+    cwd: Option<std::path::PathBuf>,
     surface: Entity<TerminalSurface>,
 }
 
@@ -1059,10 +1094,13 @@ impl UltraplexrDesktop {
         let command_focus = search_focus.clone();
         let workspace_rename_focus = search_focus.clone();
         let surface_foreground_processes = vec![None; surfaces.len()];
+        let surface_cwds = vec![None; surfaces.len()];
 
         Self {
             surfaces,
             surface_foreground_processes,
+            surface_cwds,
+            worktree_cache: worktree::WorktreeCache::default(),
             workspaces,
             dismissals: ViewDismissals::default(),
             session_sidebar: SessionSidebarState::new(search_focus),
@@ -1177,6 +1215,10 @@ impl UltraplexrDesktop {
         let surface_foreground_processes = live_surfaces
             .iter()
             .map(|live| live.foreground_process.clone())
+            .collect::<Vec<_>>();
+        let surface_cwds = live_surfaces
+            .iter()
+            .map(|live| live.cwd.clone())
             .collect::<Vec<_>>();
         let surface_sessions = live_surfaces
             .iter()
@@ -1493,6 +1535,8 @@ impl UltraplexrDesktop {
         let mut desktop = Self {
             surfaces,
             surface_foreground_processes,
+            surface_cwds,
+            worktree_cache: worktree::WorktreeCache::default(),
             workspaces,
             dismissals,
             archived_sessions: HashSet::new(),
@@ -1893,6 +1937,7 @@ impl UltraplexrDesktop {
                         {
                             desktop.surface_foreground_processes[index] =
                                 terminal.foreground_process.clone();
+                            desktop.surface_cwds[index] = terminal.cwd.clone();
                             if let Some(status) = desktop.surface_statuses.get_mut(index) {
                                 *status = terminal.status;
                             }
@@ -2117,6 +2162,7 @@ impl UltraplexrDesktop {
                         surface.synchronize_catalog_labels(&terminal)
                     });
                 }
+                self.surface_cwds[index] = terminal.cwd.clone();
                 if let Some(status) = self.surface_statuses.get_mut(index) {
                     *status = terminal.status;
                 }
@@ -2168,6 +2214,7 @@ impl UltraplexrDesktop {
             self.surfaces.push(surface);
             self.surface_foreground_processes
                 .push(terminal.foreground_process.clone());
+            self.surface_cwds.push(terminal.cwd.clone());
             self.surface_sessions.push(session_id);
             self.surface_missions.push(terminal.mission_id);
             self.surface_runs.push(terminal.run_id);
@@ -2181,6 +2228,7 @@ impl UltraplexrDesktop {
                 self.pending_terminal_updates.push(terminal);
                 self.surfaces.pop();
                 self.surface_foreground_processes.pop();
+                self.surface_cwds.pop();
                 self.surface_sessions.pop();
                 self.surface_missions.pop();
                 self.surface_runs.pop();
@@ -2512,9 +2560,6 @@ impl UltraplexrDesktop {
                     *status = TerminalSessionStatus::Running;
                 }
                 self.refresh_session_statuses();
-                if self.refresh_shell_session_identity(surface_index, cx) {
-                    self.persist_workspaces();
-                }
 
                 cx.spawn(async move |this, cx| {
                     let mut observed_generation = generation;
@@ -4965,6 +5010,7 @@ impl UltraplexrDesktop {
         ));
         self.surfaces.push(surface);
         self.surface_foreground_processes.push(None);
+        self.surface_cwds.push(None);
         #[cfg(not(test))]
         self.surface_sessions.push(session_id);
         #[cfg(not(test))]
@@ -5109,7 +5155,13 @@ impl UltraplexrDesktop {
             return;
         }
         self.session_sidebar.dismiss_session_overlays();
-        let sequence = self.next_fixture;
+        // Numbered among the tabs that are open, not by a counter that only
+        // ever grows: the second "ultraplexr" tab is "ultraplexr 2", even if it
+        // is the thirty-second workspace this checkout has ever opened.
+        let sequence = next_workspace_sequence(
+            self.workspaces.tabs().iter().map(|tab| tab.title()),
+            workspace_base_name().as_deref(),
+        );
         let terminal = self.make_surface("workspace", window, cx);
         self.workspaces.add(
             workspace_display_name(sequence),
@@ -7683,13 +7735,14 @@ fn create_surfaces(window: &mut Window, cx: &mut App, control: &ControlClient) -
                 terminal.mission_id,
                 terminal.run_id,
                 terminal.foreground_process,
+                terminal.cwd,
                 control.terminal(terminal.session_id),
             )
         })
         .collect::<Vec<_>>();
-    sessions.sort_by_key(|(session_id, _, _, _, _, _)| session_id.to_string());
+    sessions.sort_by_key(|(session_id, _, _, _, _, _, _)| session_id.to_string());
     sessions.truncate(64);
-    if sessions.is_empty() && !control.is_shared() {
+    if needs_fresh_shell(sessions.iter().map(|(_, status, ..)| *status)) && !control.is_shared() {
         let session = spawn_shell(control);
         sessions.push((
             session.id(),
@@ -7697,6 +7750,7 @@ fn create_surfaces(window: &mut Window, cx: &mut App, control: &ControlClient) -
             None,
             None,
             None,
+            std::env::current_dir().ok(),
             session,
         ));
     }
@@ -7705,7 +7759,10 @@ fn create_surfaces(window: &mut Window, cx: &mut App, control: &ControlClient) -
         .into_iter()
         .enumerate()
         .map(
-            |(index, (session_id, status, mission_id, run_id, foreground_process, session))| {
+            |(
+                index,
+                (session_id, status, mission_id, run_id, foreground_process, cwd, session),
+            )| {
                 let id = format!("terminal-{}", index + 1);
                 let surface = cx.new(|surface_cx| {
                     TerminalSurface::live(
@@ -7723,11 +7780,26 @@ fn create_surfaces(window: &mut Window, cx: &mut App, control: &ControlClient) -
                     run_id,
                     status,
                     foreground_process,
+                    cwd,
                     surface,
                 }
             },
         )
         .collect()
+}
+
+/// Whether launching should open a shell.
+///
+/// Opening only when there were no sessions at all meant a daemon restart,
+/// which ends every process, landed the person on a sidebar of finished rows
+/// with nothing to type into. A launch with nothing running gets a prompt,
+/// the way any terminal does; finished sessions stay listed beside it.
+fn needs_fresh_shell(
+    statuses: impl IntoIterator<Item = ultraplexr_protocol::TerminalSessionStatus>,
+) -> bool {
+    !statuses
+        .into_iter()
+        .any(|status| status == ultraplexr_protocol::TerminalSessionStatus::Running)
 }
 
 #[cfg(not(test))]
@@ -7766,8 +7838,15 @@ fn desktop_window_options(bounds: Bounds<Pixels>) -> WindowOptions {
 fn main() {
     let startup_started_at = Instant::now();
     let arguments = DesktopArgs::parse();
+    let mut daemon_arguments = vec![OsString::from("--internal-daemon")];
+    if let Some(gateway) = &arguments.gateway {
+        daemon_arguments.push(OsString::from("--gateway"));
+        daemon_arguments.push(OsString::from(gateway));
+    }
     if arguments.internal_daemon {
-        if let Err(error) = ultraplexr_server::run_blocking(arguments.socket, arguments.state_dir) {
+        if let Err(error) =
+            ultraplexr_server::run_blocking(arguments.socket, arguments.state_dir, None)
+        {
             eprintln!("ultraplexr daemon failed: {error}");
             std::process::exit(1);
         }
@@ -7808,7 +7887,7 @@ fn main() {
                 &arguments.socket,
                 &arguments.state_dir,
                 executable,
-                &[OsString::from("--internal-daemon")],
+                &daemon_arguments,
             ),
             Err(error) => Err(ClientError::Io(error)),
         }
@@ -8015,6 +8094,36 @@ fn read_share_token(path: &Path) -> Result<String, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// New tabs are numbered among the tabs that are open.
+    #[test]
+    fn workspaces_are_numbered_among_open_tabs_not_by_a_global_counter() {
+        assert_eq!(next_workspace_sequence([], Some("ultraplexr")), 1);
+        assert_eq!(
+            next_workspace_sequence(["ultraplexr"], Some("ultraplexr")),
+            2
+        );
+        assert_eq!(
+            next_workspace_sequence(["ultraplexr", "ultraplexr 2", "notes"], Some("ultraplexr")),
+            3
+        );
+        assert_eq!(
+            next_workspace_sequence(["ultraplexr-docs"], Some("ultraplexr")),
+            1,
+            "a different base name does not count"
+        );
+        assert_eq!(next_workspace_sequence(["a", "b"], None), 1);
+    }
+
+    /// A launch with nothing running must open a shell, even when finished
+    /// sessions are listed: after a daemon restart every row is finished.
+    #[test]
+    fn a_launch_with_nothing_running_opens_a_shell() {
+        use ultraplexr_protocol::TerminalSessionStatus::{Exited, Failed, Running};
+        assert!(needs_fresh_shell([]));
+        assert!(needs_fresh_shell([Exited, Exited, Failed]));
+        assert!(!needs_fresh_shell([Exited, Running]));
+    }
     use gpui::{AnyWindowHandle, TestAppContext};
 
     #[test]
@@ -8298,6 +8407,7 @@ mod tests {
             fix_run_id: None,
             proof: None,
             regressions: 0,
+            classification: None,
         };
         let closed = FaultSummary {
             fault_id: ultraplexr_core::FaultId::new(),

@@ -4,7 +4,7 @@
 //! replay, `●` still failing, `○` passes now.
 
 use gpui::{
-    AnyElement, Context, FontWeight, IntoElement, Window, accesskit::Role, div, prelude::*,
+    AnyElement, Context, FontWeight, IntoElement, Window, accesskit::Role, div, prelude::*, px,
 };
 use ultraplexr_core::FaultId;
 use ultraplexr_protocol::{FaultState, FaultSummary};
@@ -23,6 +23,8 @@ const GLYPH_REPLAY: &str = "↻";
 const GLYPH_STILL_FAILS: &str = "●";
 const GLYPH_PASSES: &str = "○";
 const GLYPH_HANDOFF: &str = "→";
+
+const SIDEBAR_FAULT_LIMIT: usize = 4;
 
 /// How a Fault's latest replay reads at a glance.
 fn replay_glyph(fault: &FaultSummary) -> (&'static str, ColorToken, String) {
@@ -45,6 +47,112 @@ fn replay_glyph(fault: &FaultSummary) -> (&'static str, ColorToken, String) {
 }
 
 impl UltraplexrDesktop {
+    /// Sidebar card listing what is currently broken. Absent when nothing is.
+    /// The sidebar only asks for it outside tests.
+    #[cfg_attr(test, allow(dead_code))]
+    pub(crate) fn fault_sidebar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let open = self
+            .faults
+            .iter()
+            .filter(|fault| fault.is_open())
+            .collect::<Vec<_>>();
+        if open.is_empty() {
+            return None;
+        }
+        let total = open.len();
+
+        Some(
+            div()
+                .id("fault-sidebar")
+                .debug_selector(|| "fault-sidebar".to_owned())
+                .role(Role::Group)
+                .aria_label(format!("{total} open faults"))
+                .mx_2()
+                .mb_2()
+                .rounded(px(5.0))
+                .border_1()
+                .border_color(rgb(FAULT).alpha(0.5))
+                .bg(rgb(PANEL))
+                .overflow_hidden()
+                .child(
+                    div()
+                        .h(px(27.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .font_family(UI_FONT)
+                        .text_size(px(10.0))
+                        .text_color(rgb(FAULT))
+                        .child(GLYPH_FAULT)
+                        .child("Broken")
+                        .child(div().ml_auto().child(total.to_string())),
+                )
+                .children(open.into_iter().take(SIDEBAR_FAULT_LIMIT).map(|fault| {
+                    let fault_id = fault.fault_id;
+                    let (glyph, token, _) = replay_glyph(fault);
+                    div()
+                        .id(("fault-row", fault_id.as_uuid().as_u128() as usize))
+                        .h(px(34.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .cursor_pointer()
+                        .hover(|row| row.bg(rgb(ACTIVE)))
+                        .on_click(cx.listener(move |desktop, _, _, cx| {
+                            desktop.open_fault_panel(Some(fault_id), cx);
+                        }))
+                        .child(div().text_size(px(9.0)).text_color(rgb(token)).child(glyph))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .font_family(PRODUCT_FONT)
+                                        .text_size(px(11.0))
+                                        .text_color(rgb(CHALK))
+                                        .child(fault.command.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .overflow_hidden()
+                                        .whitespace_nowrap()
+                                        .font_family(UI_FONT)
+                                        .text_size(px(8.0))
+                                        .text_color(rgb(TRACE))
+                                        .child(fault.summary.clone()),
+                                ),
+                        )
+                }))
+                .when(total > SIDEBAR_FAULT_LIMIT, |card| {
+                    card.child(
+                        div()
+                            .id("fault-sidebar-more")
+                            .h(px(22.0))
+                            .px_2()
+                            .flex()
+                            .items_center()
+                            .cursor_pointer()
+                            .font_family(UI_FONT)
+                            .text_size(px(9.0))
+                            .text_color(rgb(TRACE))
+                            .hover(|row| row.bg(rgb(ACTIVE)).text_color(rgb(CHALK)))
+                            .on_click(cx.listener(|desktop, _, _, cx| {
+                                desktop.open_fault_panel(None, cx);
+                            }))
+                            .child(format!("+{} more", total - SIDEBAR_FAULT_LIMIT)),
+                    )
+                })
+                .into_any_element(),
+        )
+    }
     pub(crate) fn open_fault_panel(&mut self, fault_id: Option<FaultId>, cx: &mut Context<Self>) {
         if let Some(fault_id) = fault_id {
             self.selected_fault = Some(fault_id);
