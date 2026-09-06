@@ -1,0 +1,24 @@
+[package]
+name = "ultraplexr-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+clap.workspace = true
+crossterm = "0.29"
+signal-hook = "0.3"
+thiserror.workspace = true
+unicode-width = "0.2"
+base64 = "0.22"
+ultraplexr-client = { path = "../ultraplexr-client" }
+ultraplexr-core = { path = "../ultraplexr-core" }
+ultraplexr-protocol = { path = "../ultraplexr-protocol" }
+ultraplexr-terminal = { path = "../ultraplexr-terminal" }
+
+[dev-dependencies]
+ultraplexr-server = { path = "../ultraplexr-server" }
+portable-pty.workspace = true
+uuid.workspace = true
+

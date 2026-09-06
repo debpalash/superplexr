@@ -1,4 +1,4 @@
-# termi9ne source dependency lock
+# ultraplexr source dependency lock
 # This file records non-registry sources whose identity is not fully described
 # by Cargo.lock. Update hashes and audit notes in the same change as a pin.
 
@@ -13,7 +13,7 @@ archive_sha256 = "7b10b8b2935f846a64150c0d0fc7bb0bc81e38a76f10bda25c767ce7d7ab5f
 license = "MIT OR Apache-2.0"
 enabled_features = []
 audit = "accepted-m1-behind-owned-seam"
-notes = "Safe terminal and render-state wrappers adopted only behind termi9ne-terminal. All terminal objects are !Send and !Sync; the product adapter contains no unsafe code and copies callback/render data into owned Rust values."
+notes = "Safe terminal and render-state wrappers adopted only behind ultraplexr-terminal. All terminal objects are !Send and !Sync; the product adapter contains no unsafe code and copies callback/render data into owned Rust values."
 
 [[dependency]]
 name = "ghostty"
@@ -23,7 +23,25 @@ archive_sha256 = "5fdb21d3744ce76dfaefb0e25fd113540906939752627a4193b88520e126c3
 license = "MIT"
 enabled_features = ["libghostty-vt", "static"]
 audit = "transitively-pinned-by-libghostty-rs"
-notes = "Public libghostty-vt only; no private application surface."
+notes = "Public libghostty-vt only; no private application surface. Native source receives the pinned macOS owned-backing overlay recorded below; upstream archive hash remains the pre-patch input."
+
+[[local_patch]]
+name = "libghostty-vt-sys"
+path = "vendor/libghostty-vt-sys"
+replaces = "https://github.com/Uzaaft/libghostty-rs@f4c72b931588cb3e53db0ea8470eaa1b2e5427d9/crates/libghostty-vt-sys"
+license = "MIT"
+rationale = "Vendor the upstream build boundary to apply the reviewed native memory overlay reproducibly. Rust bindings unchanged; installed-library bypass disabled."
+verification = "Pinned diff/preimage/postimage tests; override-copy boundary tests; normal/build inverse-tree source assertion; terminal history integration tests."
+
+[[local_patch]]
+name = "ghostty-macos-owned-backing"
+path = "patches/ghostty/mem.zig"
+replaces = "https://github.com/ghostty-org/ghostty@22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018/src/terminal/mem.zig"
+license = "MIT"
+preimage_sha256 = "633c582cb9a2ec1b279e84c0c21e848e637098ee2bedbb7dfcefeabd8288bc9f"
+postimage_sha256 = "12ae340635185b0aa0987d8c6376f8bc6101f7183fbcc092cb6dcc17ccfa905b"
+rationale = "Immediately discard resident backing for compressed terminal pages on macOS while retaining the exact owned virtual address range. Other targets unchanged."
+verification = "Actual native terminal integration tests and separately recorded shared-client resource measurements; not blanket platform certification."
 
 [[dependency]]
 name = "gpui"
@@ -33,7 +51,7 @@ archive_sha256 = "271e235389919045ef5bd4e12c7beed42fc30621054d918b3130d5907b8fa7
 license = "Apache-2.0; unapproved auxiliary crates replaced by local MIT OR Apache-2.0 compatibility seams"
 enabled_features = ["font-kit", "runtime_shaders", "wayland", "x11"]
 audit = "accepted-m1-behind-desktop-seam"
-notes = "Pre-1.0; GPUI types remain isolated in termi9ne-desktop. Upstream ztracing is GPL-3.0-or-later, while gpui_util and gpui_shared_string have no package license at this revision. Cargo patches all three names to independently implemented local compatibility crates. The CI license gate rejects remote resolution, undeclared licenses, and copyleft-only normal/build dependencies. macOS compiles Metal shaders at app startup so Command Line Tools-only development hosts can build."
+notes = "Pre-1.0; GPUI types remain isolated in ultraplexr-desktop. Upstream ztracing is GPL-3.0-or-later, while gpui_util and gpui_shared_string have no package license at this revision. Cargo patches all three names to independently implemented local compatibility crates. The CI license gate rejects remote resolution, undeclared licenses, and copyleft-only normal/build dependencies. macOS compiles Metal shaders at app startup so Command Line Tools-only development hosts can build."
 
 [[local_patch]]
 name = "gpui_shared_string"
@@ -77,7 +95,7 @@ archive_sha256 = "48f60b164435404d1389a090f7a2d06e43acc87c1abba3799109d20f171e7e
 license = "MIT"
 enabled_features = []
 audit = "gpui-transitive-pin"
-notes = "Target-conditional GPUI source present in Cargo.lock; screen capture is not enabled by termi9ne."
+notes = "Target-conditional GPUI source present in Cargo.lock; screen capture is not enabled by ultraplexr."
 
 [[dependency]]
 name = "wasm_thread"

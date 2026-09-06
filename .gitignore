@@ -1,5 +1,8 @@
 /target/
 /dist/
+/.ultraplexr/
+/.ultraplexr-dev/
+# Existing installations remain in place during the rename.
 /.termi9ne/
 /.termi9ne-dev/
 /.DS_Store

@@ -1,0 +1,32 @@
+[package]
+name = "ultraplexr-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "ultraplexr-server"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+clap.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+ultraplexr-core = { path = "../ultraplexr-core" }
+ultraplexr-plugin = { path = "../ultraplexr-plugin" }
+ultraplexr-protocol = { path = "../ultraplexr-protocol" }
+ultraplexr-runtime = { path = "../ultraplexr-runtime" }
+ultraplexr-terminal = { path = "../ultraplexr-terminal" }
+uuid.workspace = true
+
+[dev-dependencies]
+ultraplexr-client = { path = "../ultraplexr-client" }

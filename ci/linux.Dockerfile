@@ -1,4 +1,11 @@
+# Pin a JavaScript baseline with the required node:test mock-timer API.
+# Both stages use Bookworm; only the test executable is copied, not npm or a
+# second package-manager configuration. Docker selects the target architecture.
+FROM node:24.12.0-bookworm-slim AS node-toolchain
+
 FROM rust:1.97.1-bookworm
+
+COPY --from=node-toolchain /usr/local/bin/node /usr/local/bin/node
 
 ARG TARGETARCH
 
@@ -134,7 +141,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     rustc --version \
     && cargo --version \
     && zig version \
+    && node --version \
     && cargo fmt --all --check \
+    && node --test crates/ultraplexr-observer/web/*_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs \
+    && python3 -m unittest discover -s ci -p '*_tests.py' \
     && ./ci/audit-normal-licenses.sh . \
     && cargo test --workspace --locked \
     && cargo clippy --workspace --all-targets --locked -- -D warnings \
@@ -147,12 +157,12 @@ RUN --network=none \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/workspace/target \
     cargo build --workspace --release --locked --offline \
-    && TERMI9NE_USE_PREGENERATED_METADATA=1 \
-        TERMI9NE_APPIMAGETOOL=/opt/appimagetool/squashfs-root/AppRun \
-        TERMI9NE_APPIMAGE_RUNTIME=/opt/appimage-runtime \
-        TERMI9NE_LINUXDEPLOY=/opt/linuxdeploy/squashfs-root/AppRun \
+    && ULTRAPLEXR_USE_PREGENERATED_METADATA=1 \
+        ULTRAPLEXR_APPIMAGETOOL=/opt/appimagetool/squashfs-root/AppRun \
+        ULTRAPLEXR_APPIMAGE_RUNTIME=/opt/appimage-runtime \
+        ULTRAPLEXR_LINUXDEPLOY=/opt/linuxdeploy/squashfs-root/AppRun \
         ./ci/package-smoke.sh . \
-    && TERMI9NE_SOAK_SECONDS=5 TERMI9NE_SOAK_SESSIONS=12 ./ci/runtime-soak.sh . \
-    && ./ci/linux-window-smoke.sh target/release/termi9ne-desktop \
+    && ULTRAPLEXR_SOAK_SECONDS=5 ULTRAPLEXR_SOAK_SESSIONS=12 ./ci/runtime-soak.sh . \
+    && ./ci/linux-window-smoke.sh target/release/ultraplexr-desktop \
     && APPIMAGE_EXTRACT_AND_RUN=1 \
-        ./ci/linux-window-smoke.sh "dist/termi9ne-linux-$(uname -m).AppImage"
+        ./ci/linux-window-smoke.sh "dist/ultraplexr-linux-$(uname -m).AppImage"

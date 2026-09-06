@@ -1,10 +1,10 @@
-Package: termi9ne
+Package: ultraplexr
 Version: 0.1.0
 Section: utils
 Priority: optional
 Architecture: ARCHITECTURE
-Maintainer: termi9ne contributors
+Maintainer: ultraplexr contributors
 Depends: bubblewrap, libfontconfig1, libwayland-client0, libx11-xcb1, libxkbcommon-x11-0, libvulkan1, openssh-client
 Description: Agent-native terminal multiplexer
- termi9ne combines durable PTY sessions, Mission workspaces, structured agent
+ ultraplexr combines durable PTY sessions, Mission workspaces, structured agent
  attention, and auditable human control in one native desktop application.

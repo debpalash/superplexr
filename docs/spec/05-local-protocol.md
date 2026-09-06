@@ -100,7 +100,7 @@ marks them optional. Otherwise the connection closes with `unsupported_frame`.
 Terminal payloads use Protocol Buffers v3 with a checked-in schema and generated
 Rust code. Proto field numbers are never reused. A wire schema change requires a
 golden cross-version fixture. The normative v1 terminal schema is
-[`proto/termi9ne/terminal/v1.proto`](../../proto/termi9ne/terminal/v1.proto).
+[`proto/ultraplexr/terminal/v1.proto`](../../proto/ultraplexr/terminal/v1.proto).
 
 JSON integers that may exceed JavaScript's safe range—sequences and byte
 offsets—are decimal strings. UUIDs use lowercase hyphenated form. Timestamps use
@@ -280,6 +280,31 @@ canonical Session event stream rather than polling, has a mandatory timeout from
 fresh structured capture. Text queries are bounded to 1024 bytes; quiet windows
 are 50 milliseconds through 1 minute. An already-closed Session can satisfy only
 an exit wait or a text condition already present in its retained final frame.
+
+On the multiplexed control connection, terminal waits execute independently of
+later input and Control requests. Responses can complete out of request order;
+clients MUST correlate them by `request_id`, not arrival position. Input and
+Control mutations retain wire admission order. A wait observes terminal state,
+not a cross-request transactional snapshot barrier.
+
+This control-connection wait lane admits at most eight tasks per connection and
+32 permits per runtime process, returning `wait_capacity` without queuing when
+either bound is reached. Permits cover observation, response delivery and any
+still-retiring native event forwarder. A completed reply therefore need not
+immediately free its permit. The 128-active-condition bound above still covers
+runtime entry points, including the separate serial agent channel. Diagnostics
+count active conditions, not outstanding delivery/forwarder permits.
+
+Disconnect cancels connection-owned waits without stopping their Sessions or
+replaying them after reconnect. Share authorization covers the task and is
+rechecked after response-writer acquisition. Interrupted framing MUST retire
+the connection before releasing its writer for reuse. Response delivery has a
+two-second async deadline; overall task admission-to-delivery is limited to the
+requested timeout plus two seconds. An ordinary unsatisfied-condition timeout
+returns an error without itself closing a healthy connection. Per-request wait
+cancellation and concurrent dispatch of other ordinary long reads remain
+unimplemented; see [the wait-dispatch evidence](../engineering/concurrent-terminal-waits.md).
+
 The CLI's `events` command opens the Mission, Run-Activity, and terminal-index
 subscriptions independently and emits one compact JSON object per line. It keeps
 both write halves open for the lifetime of these server-to-client streams,
@@ -318,6 +343,31 @@ the first terminal frame sequence that reflects it. Stale control epoch returns
 
 ## 10. Backpressure — W-PRESSURE-001
 
+Current native-client implementation (distinct from the target daemon outbound
+policy below): subscription ACK dispatch registers one FIFO, capped at 128
+frames/8 MiB retained payload capacity. A connection permits 256 mailboxes and
+32 MiB queued payload capacity; the native client process permits 1,024
+mailboxes, 8,192 queued frames and 64 MiB payload capacity. Overflow closes the
+physical connection and discards queued deltas. Existing read subscriptions may
+reconnect with a fresh snapshot after transient aggregate saturation. A single
+record above the entire 8 MiB mailbox limit instead returns `ReceiveLimit` and
+stops automatic retry on that connection's read subscriptions. Terminal clients
+report a resource-limit ending, not an authorization rejection; explicit fresh
+attachment does not revive old receivers. Control release never repairs a closed
+connection. See the [oversized-record evidence and limits](../engineering/oversized-record-recovery.md).
+Input never replays or automatically reacquires Control. Unsubscribe ACK follows
+producer termination; interruption during a
+partial subscription frame closes the connection before writer reuse.
+These bounds exclude decoded consumer state and search queues. The subsequent
+[pull-driven metadata handoff](../engineering/pull-driven-metadata.md) removes
+the native metadata relay FIFOs and gives desktop feeds one queued delivery each
+(four shared queued slots for CLI metadata). Deliveries retain their connection
+and logical-stream identity through the final handoff. This does not yet add
+complete collection snapshot/replacement markers to the wire.
+See [receive implementation and evidence](../engineering/bounded-native-receive.md).
+This does not yet implement the reserved outbound capacity and explicit
+`ResyncRequired` flow specified below.
+
 Default per-connection outbound budget is 16 MiB and per-Session stream budget is
 8 MiB. Control responses and lifecycle events have reserved capacity and cannot
 be displaced by terminal output.
@@ -338,11 +388,11 @@ budget repeatedly, the runtime closes it with `client_too_slow`.
 Each Run receives:
 
 ```text
-TERMI9NE_MISSION_ID
-TERMI9NE_RUN_ID
-TERMI9NE_SESSION_ID              optional
-TERMI9NE_AGENT_SOCKET
-TERMI9NE_AGENT_AUTH=process-group-peer-credentials-v1
+ULTRAPLEXR_MISSION_ID
+ULTRAPLEXR_RUN_ID
+ULTRAPLEXR_SESSION_ID              optional
+ULTRAPLEXR_AGENT_SOCKET
+ULTRAPLEXR_AGENT_AUTH=process-group-peer-credentials-v1
 ```
 
 The agent socket is separate from the general control socket and has owner-only

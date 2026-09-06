@@ -4,12 +4,12 @@
 
 **Reviewed:** 2026-09-01
 
-**Purpose:** identify features worth adapting for termi9ne without turning it
+**Purpose:** identify features worth adapting for ultraplexr without turning it
 into a tmux clone, generic IDE, or unstructured agent dashboard.
 
 The consolidated implementation status and priority plan derived from this
 survey now lives in
-[termi9ne-unified-roadmap.md](termi9ne-unified-roadmap.md).
+[ultraplexr-unified-roadmap.md](ultraplexr-unified-roadmap.md).
 
 ## 1. Scope and method
 
@@ -40,11 +40,11 @@ hardware, or academic graph models.
 This is feature research, not permission to copy code. Every implementation must
 receive a separate dependency and license review. In particular, several
 projects in this survey use GPL, AGPL, or source-available licenses that are not
-automatically compatible with termi9ne's MIT distribution.
+automatically compatible with ultraplexr's MIT distribution.
 
-## 2. termi9ne baseline
+## 2. ultraplexr baseline
 
-The useful comparison is against capabilities termi9ne already owns, not against
+The useful comparison is against capabilities ultraplexr already owns, not against
 a blank terminal application. The current repository already has or specifies:
 
 - durable daemon-owned PTYs with detach, reattach, retained history, archive,
@@ -72,10 +72,10 @@ secure remote supervision.
 
 ### 3.1 Agent-native workspaces and orchestrators
 
-| Project | Notable features | Useful direction for termi9ne |
+| Project | Notable features | Useful direction for ultraplexr |
 |---|---|---|
-| [Herdr](https://github.com/herdrdev/herdr) | Background server; durable sessions; working/blocked/idle pane status; CLI and socket API; agent-spawned panes; remote attachment; plugins; terminal-native UI. | Strong validation of zero-hunt attention and agent-addressable Surfaces. Add provider adapters and explainable status without replacing termi9ne's richer Mission graph. |
-| [cmux](https://github.com/manaflow-ai/cmux) | Native macOS/libghostty terminal; notification rings and inbox; terminal/browser panes; agent-drivable browser; CLI/socket API; project commands; agent hooks and resume; subagents as visible panes; mobile companion. | Strong reference for an isolated browser Surface, notification locality, provider resume adapters, and composable workspace primitives. Its macOS-only embedding approach cannot be adopted as termi9ne's cross-platform architecture. |
+| [Herdr](https://github.com/herdrdev/herdr) | Background server; durable sessions; working/blocked/idle pane status; CLI and socket API; agent-spawned panes; remote attachment; plugins; terminal-native UI. | Strong validation of zero-hunt attention and agent-addressable Surfaces. Add provider adapters and explainable status without replacing ultraplexr's richer Mission graph. |
+| [cmux](https://github.com/manaflow-ai/cmux) | Native macOS/libghostty terminal; notification rings and inbox; terminal/browser panes; agent-drivable browser; CLI/socket API; project commands; agent hooks and resume; subagents as visible panes; mobile companion. | Strong reference for an isolated browser Surface, notification locality, provider resume adapters, and composable workspace primitives. Its macOS-only embedding approach cannot be adopted as ultraplexr's cross-platform architecture. |
 | [T3 Code](https://github.com/pingdotgg/t3code) | Web, desktop, iOS, and Android control surfaces; multiple provider CLIs; rich composer and prompt stash; voice input; GitHub/GitLab/Bitbucket/Azure DevOps reviews; QR pairing; SSH-launched remote environments; resource telemetry. | Reference for a future authenticated multi-device gateway, SCM provider abstraction, prompt drafts, and resource-aware scheduling. |
 | [bb](https://github.com/get-bb/bb) | Desktop/web/CLI/HTTP parity; durable threads; managed worktrees; setup/teardown scripts; multi-machine host daemons; public provider plugin API; plugin marketplace; self-customizing workflows. | Reference for worktree lifecycle contracts, capability-neutral provider plugins, and making every core operation scriptable. Avoid importing its full IDE/plugin scope early. |
 | [Agent Orchestrator](https://github.com/Untrivial-ai/agent-orchestrator) | One branch/worktree per worker; persistent project orchestrator; live Kanban derived from session/PR/CI/review facts; 25+ agent adapters; terminal/chat handoff; isolated browser profiles; SCM observer; review feedback routing. | Best reference for attaching PR and CI facts to Runs. Preserve its key rule: durable facts are stored, display status is derived. Use the Mission graph as source of truth rather than adopting Kanban as the domain model. |
@@ -98,14 +98,14 @@ secure remote supervision.
 
 ### 3.2 Terminal engines, layout, and automation
 
-| Project | Notable features | Useful direction for termi9ne |
+| Project | Notable features | Useful direction for ultraplexr |
 |---|---|---|
 | [Zellij](https://github.com/zellij-org/zellij) | Declarative layouts; floating and stacked panes; collaboration; WASM plugins; web client; strong out-of-box discoverability. | Use layouts as inspiration for Mission templates and consider a capability-limited extension model after the core contracts stabilize. |
-| [WezTerm](https://github.com/wezterm/wezterm) | Cross-platform GPU terminal and multiplexer; rich configuration and automation surface. | Reference for cross-platform terminal ergonomics and configuration, not for replacing termi9ne's daemon/model seams. |
+| [WezTerm](https://github.com/wezterm/wezterm) | Cross-platform GPU terminal and multiplexer; rich configuration and automation surface. | Reference for cross-platform terminal ergonomics and configuration, not for replacing ultraplexr's daemon/model seams. |
 | [TUIOS](https://github.com/Gaurav-Gosain/tuios) | BSP, master-stack, and scrolling layouts; smart auto-split; command palette; copy mode; OSC 133 command blocks; graphics passthrough; JSON control protocol; session resurrection. | Borrow directional navigation, aspect-aware placement, and command-aware retained history. |
-| [RMUX](https://github.com/Helvesec/rmux) | Typed Rust/Python/TypeScript SDKs; 90+ tmux commands; local daemon; snapshots/waits; Ratatui widget; encrypted web sharing. | Strong reference for a typed automation API, but tmux compatibility itself is not a termi9ne priority. |
+| [RMUX](https://github.com/Helvesec/rmux) | Typed Rust/Python/TypeScript SDKs; 90+ tmux commands; local daemon; snapshots/waits; Ratatui widget; encrypted web sharing. | Strong reference for a typed automation API, but tmux compatibility itself is not a ultraplexr priority. |
 | [amux](https://github.com/weill-labs/amux) | Parsed VT state as truth; structured JSON capture; blocking waits; push event stream; server-owned history; per-client copy mode; mailbox; SSH federation; MCP bridge. | Closest model for semantic automation and Run mail. Add capture/wait/events over existing canonical frames and domain events. |
-| [boo](https://github.com/coder/boo) | Minimal libghostty-vt daemon; exact rendered `peek`; `wait --text` and `wait --idle`; binary-safe `send`; stable JSON and exit codes. | A small, high-value CLI contract termi9ne can implement before a broad SDK. |
+| [boo](https://github.com/coder/boo) | Minimal libghostty-vt daemon; exact rendered `peek`; `wait --text` and `wait --idle`; binary-safe `send`; stable JSON and exit codes. | A small, high-value CLI contract ultraplexr can implement before a broad SDK. |
 | [smart-splits.nvim](https://github.com/mrjones2014/smart-splits.nvim) | Seamless directional navigation and resize between editor splits and multiplexer panes. | Add geometric Surface focus movement and resize commands with predictable edge behavior. |
 | [tab-rs](https://github.com/austinjones/tab-rs) | Persistent named tabs; fuzzy finder; dynamic shell completion; hierarchical names; configuration-defined workspace entry points. | Borrow discoverability, hierarchical naming, and shell completion for Missions/Sessions. |
 | [3mux](https://github.com/aaronjanse/3mux) | i3-inspired terminal tiling. | Useful only as layout/navigation reference. |
@@ -118,12 +118,12 @@ secure remote supervision.
 
 ### 3.3 Security, review, and integration specialists
 
-| Project | Notable features | Useful direction for termi9ne |
+| Project | Notable features | Useful direction for ultraplexr |
 |---|---|---|
-| [nono](https://github.com/nolabs-ai/nono) | Composable least-privilege profiles; per-tool nested policies; filesystem/network/credential rules; credential proxy; L7 API filtering; registry; audit and rollback. | Extend termi9ne's process-spec sandbox seam toward tool- and credential-scoped policy. Do not claim equivalent enforcement until independently proven. |
+| [nono](https://github.com/nolabs-ai/nono) | Composable least-privilege profiles; per-tool nested policies; filesystem/network/credential rules; credential proxy; L7 API filtering; registry; audit and rollback. | Extend ultraplexr's process-spec sandbox seam toward tool- and credential-scoped policy. Do not claim equivalent enforcement until independently proven. |
 | [CodeGate](https://github.com/stacklok/codegate) | Security and multiplexing gateway for agent frameworks. | Reference for policy inspection and redaction; the reviewed search result was archived, so it should not become a foundational dependency. |
 | [herdr-annotate](https://github.com/plannotator/herdr-annotate) | Annotate selected terminal text; review Markdown and agent replies; send collected feedback as the agent's next message. | Direct inspiration for selecting terminal ranges or Artifacts, collecting review comments, and returning one structured response to a Run. |
-| [tmux-mcp](https://github.com/nickgnd/tmux-mcp) | MCP bridge for tmux. | Validates demand for agent-facing multiplexer tools. termi9ne should bridge its own typed protocol rather than wrap tmux. |
+| [tmux-mcp](https://github.com/nickgnd/tmux-mcp) | MCP bridge for tmux. | Validates demand for agent-facing multiplexer tools. ultraplexr should bridge its own typed protocol rather than wrap tmux. |
 | [Navigator.nvim](https://github.com/numToStr/Navigator.nvim) | Editor-to-multiplexer directional navigation. | Additional reference for seamless focus movement. |
 
 ## 4. Consolidated feature catalog
@@ -145,7 +145,7 @@ secure remote supervision.
 ### 4.2 Agent identity, status, and attention
 
 - Bundled adapters for common agent CLIs.
-- Precedence: authenticated termi9ne Signal, provider hook/event, conservative
+- Precedence: authenticated ultraplexr Signal, provider hook/event, conservative
   rendered-screen heuristic, then `Unknown`.
 - `status explain` output naming the evidence, adapter version, timestamp, and
   confidence boundary.
@@ -190,7 +190,7 @@ secure remote supervision.
 
 ### 4.6 Mission templates and orchestration
 
-- Versioned `.termi9ne/mission.toml` defining Runs, dependency edges, actors,
+- Versioned `.ultraplexr/mission.toml` defining Runs, dependency edges, actors,
   drivers, worktree policy, scheduler policy, setup hooks, and initial Surface
   preferences.
 - Idempotent reconciliation: applying a template twice does not duplicate Runs
@@ -227,9 +227,9 @@ secure remote supervision.
 
 ### 4.9 Security and reliability
 
-- `termi9ne doctor` for read-only inspection of daemon, socket, terminfo,
+- `ultraplexr doctor` for read-only inspection of daemon, socket, terminfo,
   renderer, hooks, drivers, sandbox backends, permissions, and protocol versions.
-- Idempotent `termi9ne fix` limited to clearly owned integration files.
+- Idempotent `ultraplexr fix` limited to clearly owned integration files.
 - Nested per-tool sandbox profiles and credential mediation as a later security
   milestone.
 - Optimistic file-save conflicts based on the exact opened version when a small
@@ -479,12 +479,12 @@ were high.
 | [Emdash](https://github.com/generalaction/emdash) | Parallel worktrees; issue intake from Linear, GitHub, Jira, GitLab, Asana, Featurebase, Monday, Forgejo, and Plain; diff/PR/CI flow; remote SSH/SFTP projects; marker-owned provider hooks. | Useful model for tracker adapters and integration files that remain inert outside the product. Apache-2.0 at review time. |
 | [OpenChamber](https://github.com/openchamber/openchamber) | Session Goals that continue until complete, blocked, or limited; up-to-five-run comparison and Fusion; guided Changes Walkthrough; browser inspection; PR feedback loop; scheduled goal runs; E2E private relay. | The goal-loop boundary and guided diff tour are distinctive. Fusion should remain an explicit new Run with provenance, never an invisible merge. |
 | [Pane](https://github.com/dcouple/Pane) | Agent-agnostic terminal workspace; automatic worktree/rebase/cleanup lifecycle; remote desktop/phone client; global orchestrator terminal; stable `runpane` CLI with lazy-loaded agent help; panes as worktrees and tabs as tools. | Strong example of keeping the terminal as the universal adapter and making worktree mechanics disappear without hiding destructive actions. |
-| [agtx](https://github.com/fynnfluegge/agtx) | Blackboard task model; worktree/tmux isolation; phase-specific agent switching; dependency gating; automatic artifact propagation; spec-framework plugins; orchestrator over MCP. | The phase-to-agent mapping and artifact handoff fit termi9ne's DAG. Avoid duplicating the Mission graph with a separate board database. |
-| [Gas Town](https://github.com/gastownhall/gastown) | Persistent worker identity over ephemeral sessions; Git-backed work records; TOML workflow formulas; scheduler; three-tier watchdogs; severity escalation; previous-session discovery; problem view; OTLP events and metrics. | Best new reference for health reconciliation and escalation at fleet scale. Its themed role hierarchy should be translated into explicit termi9ne domain vocabulary. |
-| [Paperclip](https://github.com/paperclipai/paperclip) | Organization goals, roles, budgets, governance, tickets, atomic work checkout, heartbeat queue, orphan recovery, workspaces, schedules, audit, out-of-process plugins, scoped secrets, organization export/import. | Valuable control-plane patterns: execution leases, coalesced wakeups, hierarchical budgets, hard stops, and portable scrubbed exports. Org charts are outside termi9ne's current product scope. |
+| [agtx](https://github.com/fynnfluegge/agtx) | Blackboard task model; worktree/tmux isolation; phase-specific agent switching; dependency gating; automatic artifact propagation; spec-framework plugins; orchestrator over MCP. | The phase-to-agent mapping and artifact handoff fit ultraplexr's DAG. Avoid duplicating the Mission graph with a separate board database. |
+| [Gas Town](https://github.com/gastownhall/gastown) | Persistent worker identity over ephemeral sessions; Git-backed work records; TOML workflow formulas; scheduler; three-tier watchdogs; severity escalation; previous-session discovery; problem view; OTLP events and metrics. | Best new reference for health reconciliation and escalation at fleet scale. Its themed role hierarchy should be translated into explicit ultraplexr domain vocabulary. |
+| [Paperclip](https://github.com/paperclipai/paperclip) | Organization goals, roles, budgets, governance, tickets, atomic work checkout, heartbeat queue, orphan recovery, workspaces, schedules, audit, out-of-process plugins, scoped secrets, organization export/import. | Valuable control-plane patterns: execution leases, coalesced wakeups, hierarchical budgets, hard stops, and portable scrubbed exports. Org charts are outside ultraplexr's current product scope. |
 | [AgentsMesh](https://github.com/AgentsMesh/AgentsMesh) | Runner fleet; AgentPods combining PTY, worktree, and stream; scheduler; control plane over gRPC/mTLS; separate stateless terminal relay; collaboration mesh/channels; autonomous pod watchdog. | Reference for a future multi-machine fleet where central orchestration does not proxy every PTY byte. The repository identified itself as BSL-1.1 at review time. |
 | [Omnigent](https://github.com/omnigent-ai/omnigent) | Meta-harness across existing agents; synchronized terminal/browser/phone Sessions; multi-agent supervision; disposable cloud sandboxes; shared/forked Sessions; policy stacking; YAML agents; cross-provider review; harness conformance test bench. | Strong reference for adapter contracts, cross-provider verification, policy composition, and capability testing. Multi-user co-drive needs a stronger authority model than a shared chat link. |
-| [Apache Maka](https://github.com/apache/maka) | Local-first Runtime Host; append-only model/tool/permission/termination record; context reduction without evidence deletion; sandbox boundary; crash recovery; branch-from-Turn; durable graph execution; normalized evaluation kernel. | Closely aligned with termi9ne's event-sourced philosophy. The key new idea is separating prompt compaction from evidence retention. Apache-2.0, but still incubating and prerelease at review time. |
+| [Apache Maka](https://github.com/apache/maka) | Local-first Runtime Host; append-only model/tool/permission/termination record; context reduction without evidence deletion; sandbox boundary; crash recovery; branch-from-Turn; durable graph execution; normalized evaluation kernel. | Closely aligned with ultraplexr's event-sourced philosophy. The key new idea is separating prompt compaction from evidence retention. Apache-2.0, but still incubating and prerelease at review time. |
 | [ORG-II](https://github.com/org2AI/ORG2) | Imports and replays sessions from many agent CLIs; synchronized trajectory timeline; comments on execution steps; “AI blame” from code to agent decisions; shared memory; Git/browser/LSP surfaces; resource-aware execution. | Excellent reference for provenance and trajectory review. AGPL-3.0-or-later at review time. |
 | [Atlas](https://github.com/pacifio/atlas) | Commits linked to prompts, tool calls, reasoning, and file changes; cross-agent local memory; `@` references to code, commits, notes, and past Sessions; ACP agents; secret scrubbing; checkpoint links surviving rebases/amends. | The most focused reference for Run/commit checkpoints and queryable development provenance. MIT at review time. |
 | [Kungfu](https://github.com/kungfu-systems/kungfu) | Durable Work exists independently of chat; multiple Attempts survive disconnect/crash; single-writer ownership; explicit evidence and next action; independent review and settlement authority. | Its Work/Attempt/Settlement separation maps naturally to Mission objective, Run attempts, and human acceptance. Strong model for preventing the producing agent from approving itself. |
@@ -492,7 +492,7 @@ were high.
 | [Mission Control](https://github.com/builderz-labs/mission-control) | Runtime-neutral task and quality-review control plane; tasks, heartbeats, Sessions, schedules, spend, activity, skills, memory graph, OpenAPI, CLI, and MCP; explicit operator evidence guidance. | Useful small control-plane reference, especially its distinction between logs and completion receipts. Alpha status means contracts should not be adopted verbatim. |
 | [SuperPlane](https://github.com/superplanehq/superplane) | Git-backed workflow applications; event triggers; deterministic durable graphs; human approvals; policy checks; retries/resume; app memory; operational consoles; CI/deploy/incident integrations. | Useful for future webhook- and event-driven Missions that cross Git, CI, observability, and deployment systems. It is adjacent orchestration infrastructure rather than an agent IDE. |
 | [Tutti](https://github.com/tutti-os/tutti) | Real-time shared multi-user/multi-agent workspace; cross-agent `@` references to conversations, files, tasks, and app outputs; shared task decomposition; locally run agents connected to cloud rooms. | Strong reference for typed context references and cross-agent handoffs. The cloud-room collaboration model is later scope and requires explicit privacy/authority boundaries. |
-| [Claude Codex Bridge](https://github.com/SeemSeam/claude_codex_bridge) | Visible provider-neutral agent topology; stable cross-provider requests; daemon persistence; shared memory; mobile control; rich terminal/files; Agent Roles specification and Role Packs; transactional updates. | Useful for an adapter-neutral role package and cross-agent request contract. termi9ne should store coordination as domain events rather than a shared Markdown file alone. |
+| [Claude Codex Bridge](https://github.com/SeemSeam/claude_codex_bridge) | Visible provider-neutral agent topology; stable cross-provider requests; daemon persistence; shared memory; mobile control; rich terminal/files; Agent Roles specification and Role Packs; transactional updates. | Useful for an adapter-neutral role package and cross-agent request contract. ultraplexr should store coordination as domain events rather than a shared Markdown file alone. |
 | [Archon](https://github.com/coleam00/Archon) | YAML coding workflows with deterministic and AI nodes; loops, validations, approvals, artifacts, and PR creation; worktree isolation; reusable workflow packs; CLI/web/chat-platform execution. | Strong reference for a future declarative Mission format. The useful unit is a versioned workflow contract, not the visual canvas itself. |
 | [Babysitter](https://github.com/a5c-ai/babysitter) | Harness-neutral deterministic processes; enforced gates; human breakpoints; immutable journal; adapter runtime and SDK; internal headless harness. | Reinforces runtime-enforced workflow gates. Claims such as “hallucination-free” should not be repeated without narrowly defined proof. |
 | [Stagewise](https://github.com/stagewise-io/stagewise) | Agent sees live browser tab console/debugger; temporary versus connected-codebase edits; website component/style reverse engineering; editor handoff; broad model/provider support. | Browser/debugger context is useful, but this is closer to a browser-centric IDE than a multiplexer. AGPL-3.0 at review time. |
@@ -503,13 +503,13 @@ were high.
 
 ### 8.2 Innovative adjacent repositories
 
-| Project | Primitive | Potential termi9ne use |
+| Project | Primitive | Potential ultraplexr use |
 |---|---|---|
 | [sem](https://github.com/Ataraxy-Labs/sem) | Tree-sitter entity diffs, rename/move detection, dependency impact, entity history/blame, co-change hotspots, and token-budgeted context. | Enrich diff Artifacts and agent context with semantic entities and blast radius without feeding entire files. Keep it an optional adapter until language accuracy is proven. |
 | [Git AI](https://github.com/git-ai-project/git-ai) | Explicit line-level agent/model/session attribution stored in Git Notes; prompt links kept outside Git; attribution propagation across rebases, squashes, stashes, and merges. | Add an opt-in export from Run checkpoints to a standard Git provenance layer. Explicit reporting is preferable to heuristic “AI code detection.” |
 | [Agent File](https://github.com/letta-ai/agent-file) | Portable serialized agent prompt, editable memory, tools, and model settings with secrets nulled on export. | Inspires a provider-neutral Driver/Actor profile bundle, but importing executable tools must require provenance and capability review. |
 | [Continuous Claude](https://github.com/parcadei/Continuous-Claude-v3) | “Compound, don't compact”: extract decisions and learnings before starting fresh context; rule-based skill activation; shift-left validation hooks. | Add explicit context-summary Artifacts with source links and validation rather than treating lossy provider compaction as durable Mission memory. |
-| [OpenShell](https://github.com/NVIDIA/OpenShell) | Container/MicroVM sandbox control plane; declarative filesystem/process/network/inference policy; L7 egress enforcement; credential providers; hot-reloadable dynamic policy. | Strong adjacent reference for future network and credential enforcement beyond termi9ne's current workspace-write sandbox. |
+| [OpenShell](https://github.com/NVIDIA/OpenShell) | Container/MicroVM sandbox control plane; declarative filesystem/process/network/inference policy; L7 egress enforcement; credential providers; hot-reloadable dynamic policy. | Strong adjacent reference for future network and credential enforcement beyond ultraplexr's current workspace-write sandbox. |
 | [Wigolo](https://github.com/KnockOutEZ/wigolo) | Local-first web intelligence over MCP, REST, CLI, and SDKs; search, fetch, crawl, extraction, local cache, similar-page retrieval, research, autonomous gather, change diff, and watch; byte-pinned excerpts and explicit freshness/degradation signals. | Useful reference for an optional Web Evidence adapter and evidence Artifact contract. Keep direct HTTP as the default and escalate to a headless browser only on observable signals. The README identifies the public-beta project as AGPL-3.0. |
 
 ### 8.3 Projects intentionally left out of the direct comparison
@@ -520,7 +520,7 @@ The searches also returned important projects such as
 [CrewAI](https://github.com/crewAIInc/crewAI), agent and skill catalogs, model
 routers, general workflow builders, and individual coding-agent harnesses. They
 may be useful dependencies or ecosystem references, but they do not directly
-answer termi9ne's product question: how should a human supervise durable,
+answer ultraplexr's product question: how should a human supervise durable,
 terminal-native agent work organized as Missions, Runs, and Sessions?
 
 ## 9. New feature concepts from the broader pass
@@ -528,7 +528,7 @@ terminal-native agent work organized as Missions, Runs, and Sessions?
 ### 9.1 Work, Attempt, and Settlement
 
 Several projects distinguish the durable objective from one agent execution.
-termi9ne already has the necessary ingredients, but the product should make the
+ultraplexr already has the necessary ingredients, but the product should make the
 separation more explicit:
 
 ```text
@@ -638,7 +638,7 @@ Instead of copying text between agents, prompts may reference stable objects:
   pastes;
 - access is audited and revoked with the underlying Share or Run capability.
 
-Primary references: Tutti, Atlas, CCB, and termi9ne's existing domain IDs.
+Primary references: Tutti, Atlas, CCB, and ultraplexr's existing domain IDs.
 
 ### 9.9 Adapter conformance and capability matrices
 
@@ -658,7 +658,7 @@ suite, and CCB's provider-neutral collaboration layer.
 
 ### 9.10 Remote fleet architecture
 
-If termi9ne grows beyond owner SSH attachment, separate:
+If ultraplexr grows beyond owner SSH attachment, separate:
 
 - control plane: scheduling, identity, policy, leases, events, and metadata;
 - execution plane: per-machine Runner owning PTYs, worktrees, and credentials;
@@ -719,7 +719,7 @@ These are deltas to the implementation order in section 5.
 
 ## 11. Bottom line
 
-The survey does not suggest replacing termi9ne's foundation. Its durable
+The survey does not suggest replacing ultraplexr's foundation. Its durable
 Mission/Run/Session graph, structured Signals, canonical terminal frames, and
 explicit control model are stronger foundations than the pane-centric designs
 in most of the field.
@@ -739,5 +739,5 @@ Mission plan
 
 Browser, mobile, and plugins are valuable later products. Worktree isolation,
 SCM feedback, semantic automation, and evidence-backed attention are the
-features most likely to make termi9ne materially better rather than merely
+features most likely to make ultraplexr materially better rather than merely
 broader.

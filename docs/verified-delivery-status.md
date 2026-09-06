@@ -1,9 +1,9 @@
 # Verified work delivery status
 
-Updated: 2026-09-01.
+Updated: 2026-09-05.
 
 For the combined product, research, and release roadmap, see
-[termi9ne-unified-roadmap.md](termi9ne-unified-roadmap.md).
+[ultraplexr-unified-roadmap.md](ultraplexr-unified-roadmap.md).
 
 The research review and multiplexer survey identify the same product gap: a
 fast terminal workspace is useful, but an agentic workspace becomes distinct
@@ -70,16 +70,36 @@ and macOS; passing Rust unit tests on macOS is not Linux release evidence.
 
 ## Next build order
 
+The first real-daemon macOS acceptance journey now covers actual producer and
+verifier execution, failed-check return, retry resubmission, fresh evidence,
+owner acceptance, and restarts between stages. A second test covers interruption
+after publication without false success or automatic relaunch. Both run in the
+normal workspace suite. See the
+[journey evidence and its limits](engineering/delivery-journey-evidence.md).
+The original journey uses deterministic fixture drivers. A reusable
+[bounded verification runner](design/bounded-verification-runner.md) now executes
+explicit owner-configured plans inside verifier Runs and collects retained,
+digested results into receipts. Separate real-daemon tests cover this production
+CLI path, including failures, restart, tampering and cancellation. Desktop setup,
+reviewed-plan launch, per-Run file choices and receipt inspection now use the same
+module. Plan bytes are rechecked before Run creation and before execution.
+An opt-in [Cargo binary recipe](design/rust-project-verification.md) now generates
+plans for actual Cargo format/lint/test, installation and expected output,
+tracked-input provenance and fresh-build binary comparison. A real compiled
+fixture exercises the production CLI/runtime path, including failed delivery and
+external path provenance. Native visual acceptance, Linux journeys, stronger
+isolation and broader real-project recipes/acceptance remain.
+
 1. Complete the realized-change adversarial and platform matrix: generated
    provenance, concurrent-write and symlink races, and macOS/Linux fixtures;
    extend fencing to mutable external-effect adapters.
-2. Execute the normalized review contract in verifier Runs and materialize real
-   test, semantic-impact, delivery/install, provenance, and repeatability
-   Artifacts plus the resulting EvaluationReceipt.
+2. Extend the bounded runner with real-project test, semantic-impact,
+   delivery/install, provenance and repeatability recipes; complete desktop QA and
+   stronger immutable tool/plan admission around the existing receipt workflow.
 3. Complete retry resubmission, inline review comments, landing preview, and
    explicit land/merge without force operations.
-4. Build one end-to-end delivery fixture and run it on macOS, Linux Wayland, and
-   Linux X11 with performance telemetry.
+4. Extend the existing headless end-to-end delivery fixture to native interaction
+   and run it on macOS, Linux Wayland, and Linux X11 with performance telemetry.
 
 After that gate, the highest-value research-derived features are fan-out
 experiments with side-by-side candidate comparison, evidence-preserving context

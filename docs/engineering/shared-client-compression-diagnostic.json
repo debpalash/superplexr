@@ -1,0 +1,201 @@
+{
+  "benchmark": "shared_client_resources",
+  "version": 2,
+  "date": "2026-09-05T18:50:46.090Z",
+  "platform": "darwin",
+  "architecture": "arm64",
+  "cpu": "Apple M2",
+  "logical_cpus": 8,
+  "host_memory_mib": 16384,
+  "binaries": {
+    "ultraplexr-server": {
+      "path": "/Users/USER/Desktop/ultraplexr/target/release/ultraplexr-server",
+      "bytes": 9900384,
+      "sha256": "7c75a5bb2a530a90f4826cf232e7d210cff29a71a2f065f25ba994c890ddbec7"
+    },
+    "ultraplexr": {
+      "path": "/Users/USER/Desktop/ultraplexr/target/release/ultraplexr",
+      "bytes": 8952944,
+      "sha256": "b106d8084989b9e3513d3e8e220de000a087a5060f3b64b12583bc7eb3db19e5"
+    },
+    "ultraplexr-observer": {
+      "path": "/Users/USER/Desktop/ultraplexr/target/release/ultraplexr-observer",
+      "bytes": 6830864,
+      "sha256": "a62d696e850d1ec6b06cfe745f70dca67ca6bd1a8d9810548e2fe5127398d573"
+    },
+    "ultraplexr-tui": {
+      "path": "/Users/USER/Desktop/ultraplexr/target/release/ultraplexr-tui",
+      "bytes": 5164512,
+      "sha256": "3a0d440d00b69500ad5f26a1260d71e5b98aa9b6a08a4678585e42b74414eae1"
+    },
+    "ultraplexr-desktop": {
+      "path": "/Users/USER/Desktop/ultraplexr/target/release/ultraplexr-desktop",
+      "bytes": 25755824,
+      "sha256": "1a11679d266af25b94571e98257bb110a0c8e8ee197eeda54983037787f2d474"
+    }
+  },
+  "build_profile": "provided binaries; reproduce using documented --release build command",
+  "workload": {
+    "sessions": 12,
+    "grid": "80x24",
+    "history_rows_requested": 100000,
+    "seed_lines": 100024,
+    "history_marker_verified": "H000000",
+    "desktop": true,
+    "desktop_role": "observer",
+    "desktop_visible_surfaces": 1,
+    "reference_verified_before_and_after_idle": true,
+    "tui_panes": 1,
+    "browser_event_feeds": 1,
+    "browser_metadata_poll_seconds": 2,
+    "warmup_seconds": 10
+  },
+  "idle": {
+    "seconds": 15.067121415999997,
+    "processes": {
+      "runtime": {
+        "pid": 49140,
+        "cpu_percent_one_core": 1.1946542078625257,
+        "rss_start_mib": 984.8125,
+        "rss_end_mib": 984.828125,
+        "rss_peak_mib": 984.828125,
+        "rss_growth_mib": 0.015625
+      },
+      "gateway": {
+        "pid": 49677,
+        "cpu_percent_one_core": 0.06636967821458485,
+        "rss_start_mib": 6.40625,
+        "rss_end_mib": 6.5625,
+        "rss_peak_mib": 6.5625,
+        "rss_growth_mib": 0.15625
+      },
+      "tui": {
+        "pid": 49699,
+        "cpu_percent_one_core": 0.06636967821458485,
+        "rss_start_mib": 3.625,
+        "rss_end_mib": 3.625,
+        "rss_peak_mib": 3.625,
+        "rss_growth_mib": 0
+      },
+      "desktop": {
+        "pid": 49701,
+        "cpu_percent_one_core": 0.3318483910729242,
+        "rss_start_mib": 109.046875,
+        "rss_end_mib": 108.71875,
+        "rss_peak_mib": 109.046875,
+        "rss_growth_mib": -0.328125
+      }
+    },
+    "unexpected_browser_frames": 0,
+    "tui_bytes_during_idle": 0,
+    "runtime_plus_desktop_peak_rss_mib": 1093.859375
+  },
+  "samples": [
+    {
+      "monotonic_ms": 15625.652792,
+      "processes": {
+        "49140": {
+          "rss_mib": 984.8125,
+          "cpu_seconds": 2.41
+        },
+        "49677": {
+          "rss_mib": 6.40625,
+          "cpu_seconds": 0.02
+        },
+        "49699": {
+          "rss_mib": 3.625,
+          "cpu_seconds": 0.02
+        },
+        "49701": {
+          "rss_mib": 109.046875,
+          "cpu_seconds": 0.2
+        }
+      }
+    },
+    {
+      "monotonic_ms": 20683.880792,
+      "processes": {
+        "49140": {
+          "rss_mib": 984.8125,
+          "cpu_seconds": 2.47
+        },
+        "49677": {
+          "rss_mib": 6.484375,
+          "cpu_seconds": 0.02
+        },
+        "49699": {
+          "rss_mib": 3.625,
+          "cpu_seconds": 0.03
+        },
+        "49701": {
+          "rss_mib": 108.71875,
+          "cpu_seconds": 0.21
+        }
+      }
+    },
+    {
+      "monotonic_ms": 25746.399125,
+      "processes": {
+        "49140": {
+          "rss_mib": 984.828125,
+          "cpu_seconds": 2.53
+        },
+        "49677": {
+          "rss_mib": 6.5,
+          "cpu_seconds": 0.02
+        },
+        "49699": {
+          "rss_mib": 3.625,
+          "cpu_seconds": 0.03
+        },
+        "49701": {
+          "rss_mib": 108.71875,
+          "cpu_seconds": 0.23
+        }
+      }
+    },
+    {
+      "monotonic_ms": 30692.774208,
+      "processes": {
+        "49140": {
+          "rss_mib": 984.828125,
+          "cpu_seconds": 2.59
+        },
+        "49677": {
+          "rss_mib": 6.5625,
+          "cpu_seconds": 0.03
+        },
+        "49699": {
+          "rss_mib": 3.625,
+          "cpu_seconds": 0.03
+        },
+        "49701": {
+          "rss_mib": 108.71875,
+          "cpu_seconds": 0.25
+        }
+      }
+    }
+  ],
+  "latency_ms": {
+    "p50": 64.92870799999946,
+    "p95": 68.76283399999738,
+    "max": 68.93158399999811,
+    "includes": "CLI startup + IPC + PTY echo + HTTP SSE, with 50ms observation granularity; not input-to-pixel"
+  },
+  "identity_preserved": true,
+  "limits": [
+    "Browser process/compositor/outer terminal are not measured",
+    "Short ASCII history, no Kitty images or wide-cell worst cases",
+    "Single host/sample, not cross-platform certification",
+    "RSS is sampled, not an allocation high-water mark",
+    "CPU uses ps counters; resolution is platform dependent"
+  ],
+  "gate_observations": {
+    "five_minute_sample": false,
+    "runtime_idle_cpu": false,
+    "desktop_idle_cpu": true,
+    "runtime_plus_desktop_rss": false,
+    "idle_browser_frames": true,
+    "idle_tui_output": true
+  }
+}

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-maximum_desktop_cpu="${TERMI9NE_DESKTOP_MAX_IDLE_CPU:-1.0}"
-maximum_runtime_cpu="${TERMI9NE_RUNTIME_MAX_IDLE_CPU:-0.5}"
-maximum_combined_rss_mib="${TERMI9NE_MAX_COMBINED_RSS_MIB:-600}"
-benchmark_root="$(mktemp -d "${TMPDIR:-/tmp}/termi9ne-idle-bench.XXXXXX")"
+maximum_desktop_cpu="${ULTRAPLEXR_DESKTOP_MAX_IDLE_CPU:-1.0}"
+maximum_runtime_cpu="${ULTRAPLEXR_RUNTIME_MAX_IDLE_CPU:-0.5}"
+maximum_combined_rss_mib="${ULTRAPLEXR_MAX_COMBINED_RSS_MIB:-600}"
+benchmark_root="$(mktemp -d "${TMPDIR:-/tmp}/ultraplexr-idle-bench.XXXXXX")"
 socket_path="$benchmark_root/control.sock"
 state_path="$benchmark_root/state"
 server_pid=""
@@ -14,14 +14,14 @@ cleanup() {
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
   fi
-  if [[ "$benchmark_root" == "${TMPDIR:-/tmp}"/termi9ne-idle-bench.* ]]; then
+  if [[ "$benchmark_root" == "${TMPDIR:-/tmp}"/ultraplexr-idle-bench.* ]]; then
     find "$benchmark_root" -depth -delete 2>/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
 
-cargo build -p termi9ne-server -p termi9ne-cli -p termi9ne-desktop
-target/debug/termi9ne-server --socket "$socket_path" --state-dir "$state_path" &
+cargo build -p ultraplexr-server -p ultraplexr-cli -p ultraplexr-desktop
+target/debug/ultraplexr-server --socket "$socket_path" --state-dir "$state_path" &
 server_pid="$!"
 
 for _ in {1..100}; do
@@ -32,14 +32,14 @@ done
 
 group_arguments=()
 for _ in {1..12}; do
-  response="$(target/debug/termi9ne --socket "$socket_path" terminal-new --program /bin/cat)"
+  response="$(target/debug/ultraplexr --socket "$socket_path" terminal-new --program /bin/cat)"
   session_id="$(sed -n 's/.*"session_id": "\([^"]*\)".*/\1/p' <<<"$response" | head -n 1)"
   [[ -n "$session_id" ]] || { echo "idle benchmark terminal did not start" >&2; exit 1; }
   group_arguments+=(--session "$session_id")
 done
-target/debug/termi9ne --socket "$socket_path" session-group-create quiet-grid "${group_arguments[@]}" >/dev/null
+target/debug/ultraplexr --socket "$socket_path" session-group-create quiet-grid "${group_arguments[@]}" >/dev/null
 
-result="$(target/debug/termi9ne-desktop \
+result="$(target/debug/ultraplexr-desktop \
   --connect-only \
   --socket "$socket_path" \
   --state-dir "$state_path" \

@@ -1,0 +1,105 @@
+diff --git a/src/terminal/mem.zig b/src/terminal/mem.zig
+index 7fa314802..8183e45bc 100644
+--- a/src/terminal/mem.zig
++++ b/src/terminal/mem.zig
+@@ -52,10 +52,8 @@ pub inline fn canReclaim(comptime mode: DecommitMode) bool {
+             // Zig reaches this through the raw syscall path without libc.
+             if (builtin.target.os.tag == .linux) break :supported true;
+ 
+-            // Darwin provides the paired MADV_FREE_REUSABLE/FREE_REUSE
+-            // operations used below. Darwin requires libc independently of
+-            // this feature, so using its madvise entry point adds no new
+-            // dependency to libghostty-vt.
++            // macOS replaces owned anonymous backing at its existing address.
++            // Other Darwin targets retain the original reusable-mapping path.
+             if (builtin.target.os.tag.isDarwin()) break :supported true;
+ 
+             // Other targets have no retained-mapping reclamation contract in
+@@ -112,32 +110,43 @@ pub fn decommit(
+         }
+     }
+ 
+-    // FREE_REUSABLE removes the range from the Darwin process footprint while
+-    // retaining its mapping. Zero mode clears its dirty prefix first because
+-    // the kernel may preserve the contents. Strict mode avoids that write
+-    // because its caller will replace the entire mapping after recommit.
+-    if (comptime builtin.os.tag.isDarwin()) {
+-        if (comptime mode == .zero) @memset(memory[0..dirty_len], 0);
+-
+-        if (std.posix.madvise(
++    // Replace ONLY the caller-owned, page-aligned anonymous mapping. A single
++    // MAP_FIXED operation preserves its address without a munmap/allocation gap
++    // in which another thread's allocation could acquire that address. The
++    // compressed representation is already complete before strict decommit.
++    // Zero mode may also discard the full range: its untouched tail is zero by
++    // contract. Test allocator ranges are handled above, never remapped here.
++    if (comptime builtin.os.tag == .macos) {
++        const page_size = std.heap.pageSize();
++        // Never let kernel rounding replace a neighboring allocation.
++        if (@intFromPtr(memory.ptr) % page_size != 0 or memory.len % page_size != 0) {
++            if (comptime mode == .zero) @memset(memory[0..dirty_len], 0);
++            return false;
++        }
++        const mach = @import("../os/mach.zig");
++        if (std.posix.mmap(
+             memory.ptr,
+             memory.len,
+-            std.posix.MADV.FREE_REUSABLE,
++            .{ .READ = true, .WRITE = true },
++            .{ .TYPE = .PRIVATE, .ANONYMOUS = true, .FIXED = true },
++            mach.VMTag.application_specific_1.make(),
++            0,
+         )) |_| return true else |err| {
++            log.warn("owned backing replacement failed err={}", .{err});
++            if (comptime mode == .zero) @memset(memory[0..dirty_len], 0);
++            return false;
++        }
++    } else if (comptime builtin.os.tag.isDarwin()) {
++        // Preserve the upstream behavior on unvalidated mobile Darwin targets.
++        if (comptime mode == .zero) @memset(memory[0..dirty_len], 0);
++        if (std.posix.madvise(memory.ptr, memory.len, std.posix.MADV.FREE_REUSABLE)) |_| return true else |err| {
+             switch (mode) {
+                 .strict => {
+                     log.warn("madvise(FREE_REUSABLE) failed err={}", .{err});
+                     return false;
+                 },
+-
+                 .zero => {
+-                    // Plain FREE can still reclaim the already-zero mapping
+-                    // under pressure and does not require a reuse pairing.
+-                    std.posix.madvise(
+-                        memory.ptr,
+-                        memory.len,
+-                        std.posix.MADV.FREE,
+-                    ) catch {};
++                    std.posix.madvise(memory.ptr, memory.len, std.posix.MADV.FREE) catch {};
+                     return false;
+                 },
+             }
+@@ -150,22 +159,16 @@ pub fn decommit(
+ 
+ /// Prepare a mapping previously passed to decommit for reuse.
+ ///
+-/// Linux and test builds need no explicit operation. Darwin pairs
+-/// FREE_REUSABLE with FREE_REUSE so pages touched by the caller are accounted
+-/// to the process again. Failure does not invalidate the retained mapping, so
+-/// reuse can continue after logging the accounting failure.
++/// Linux and macOS retain writable zero-filled mappings after decommit. Other
++/// Darwin targets still pair FREE_REUSABLE with FREE_REUSE for accounting.
+ pub fn recommit(memory: []align(std.heap.page_size_min) u8) void {
+     assert(memory.len > 0);
+     assert(@intFromPtr(memory.ptr) % std.heap.page_size_min == 0);
+     assert(memory.len % std.heap.page_size_min == 0);
+ 
+-    if (comptime builtin.is_test) return;
++    if (comptime builtin.is_test or builtin.os.tag == .macos) return;
+     if (comptime builtin.os.tag.isDarwin()) {
+-        std.posix.madvise(
+-            memory.ptr,
+-            memory.len,
+-            std.posix.MADV.FREE_REUSE,
+-        ) catch |err| {
++        std.posix.madvise(memory.ptr, memory.len, std.posix.MADV.FREE_REUSE) catch |err| {
+             log.warn("madvise(FREE_REUSE) failed err={}", .{err});
+         };
+     }

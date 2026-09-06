@@ -1,0 +1,39 @@
+{
+  "benchmark": "observer_event_stream",
+  "date": "2026-09-05T11:12:18.390Z",
+  "platform": "darwin",
+  "architecture": "arm64",
+  "cpu": "Apple M2",
+  "logical_cpus": 8,
+  "build": "optimized development (not release)",
+  "workload": {
+    "sessions": 1,
+    "grid": "80x24",
+    "markers": 50,
+    "metadata_poll_seconds": 2,
+    "idle_seconds": 5.025068416999999,
+    "stream_seconds": 2.6505567919999993
+  },
+  "latency_ms": {
+    "p50": 34.96520799999962,
+    "p95": 36.635041999999885,
+    "max": 36.885167000000365,
+    "includes": "CLI process launch + IPC + PTY echo + SSE delivery; 25ms observation granularity"
+  },
+  "idle": {
+    "frames": 0,
+    "runtime_rss_mib": 11.34375,
+    "observer_rss_mib": 6.203125,
+    "runtime_cpu_percent": 0.19900226564417745,
+    "observer_cpu_percent": 0.19900226564417745
+  },
+  "streaming": {
+    "frames": 79,
+    "sequence": 100,
+    "runtime_rss_mib": 12.390625,
+    "observer_rss_mib": 6.640625,
+    "runtime_cpu_percent": 3.0182337628629097,
+    "observer_cpu_percent": 0.7545584407157273
+  },
+  "terminal_count": 1
+}

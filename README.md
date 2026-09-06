@@ -1,10 +1,10 @@
-# termi9ne
+# Ultraplexr
 
 An agent-native execution environment built around missions, runs, and human
 attention—not windows, tabs, and panes.
 
 Traditional terminal multiplexers preserve processes and arrange terminal
-rectangles. termi9ne's durable state is a graph of work: what is being attempted,
+rectangles. ultraplexr's durable state is a graph of work: what is being attempted,
 who is doing it, which runs depend on one another, what needs a human decision,
 and which artifacts were produced. A terminal Surface is one transient projection
 of a durable Session, which may host agent Runs or ordinary shell work.
@@ -28,13 +28,13 @@ of a durable Session, which may host agent Runs or ordinary shell work.
 ## Architecture
 
 ```text
-termi9ne desktop (one Rust app for macOS and Linux)
+ultraplexr desktop (one Rust app for macOS and Linux)
   Mission tabs + Session sidebar + responsive terminal waterfall
   GPUI + custom TerminalElement + shared SessionProjection
                               |
           binary terminal data + JSON control protocol
                               |
-termi9ne runtime ----------------------------- agent side-channel
+ultraplexr runtime ----------------------------- agent side-channel
   mission/run events + durable Sessions + PTYs + canonical libghostty-vt state
 ```
 
@@ -47,8 +47,12 @@ interface. The complete v1 design is in
 [`docs/architecture/v1-cross-platform-multiplexer.md`](docs/architecture/v1-cross-platform-multiplexer.md).
 The product interaction, visual, protocol, and delivery plan is in
 [`docs/design/browser-waterfall-v1.md`](docs/design/browser-waterfall-v1.md).
-The evidence required before termi9ne calls itself superior is recorded in
+The evidence required before ultraplexr calls itself superior is recorded in
 [`docs/product/north-star.md`](docs/product/north-star.md).
+The broader Ultraplexr direction, proposed stack, optional TUI, remote transports,
+and footprint requirements are recorded in
+[`Universal runtime and clients`](docs/architecture/universal-runtime-and-clients.md).
+That proposal extends the planning horizon; it does not replace the current v1 contract.
 The normative v1 product and engineering contract starts at
 [`docs/spec/README.md`](docs/spec/README.md), covering the execution graph,
 module interfaces, terminal protocol, desktop behavior, security, reliability,
@@ -73,20 +77,25 @@ The release wire contract is defined in
 
 ## Run the desktop
 
+For a headless host, terminal-only client, web gateway or automation installation,
+the source-only [development profile builder](docs/design/distribution-profiles.md)
+selects the required executables without bundling every interface. It is untested
+and does not replace release packaging or platform acceptance.
+
 The native desktop boots on macOS and Linux, starts an exact-version self-hosted
 daemon when needed, restores Mission tabs, and attaches real terminal Sessions. Focus a grid
 to type, use the Mission sidebar to switch Sessions, and open the command deck
 with Cmd/Ctrl-K. Unsafe multiline paste is held for explicit confirmation:
 
 ```sh
-cargo run -p termi9ne-desktop
+cargo run -p ultraplexr-desktop
 ```
 
 Graphite and Paper are built in under **View → Theme**. A custom data-only theme
 can be loaded without placing code in the desktop process:
 
 ```sh
-cargo run -p termi9ne-desktop -- --theme docs/examples/theme.json
+cargo run -p ultraplexr-desktop -- --theme docs/examples/theme.json
 ```
 
 Custom themes use the bounded, strict JSON schema in
@@ -96,10 +105,32 @@ changes. Invalid colors, fonts, fields, versions, file types, sizes, or contrast
 leave the previous theme active. Theme parsing and file I/O never occur in
 terminal paint paths.
 
-Debug desktops use `.termi9ne-dev/v25` so they can run beside an older packaged
-runtime without taking over its socket or state. Release builds use `.termi9ne`.
+Fresh installs keep debug state under `.ultraplexr-dev/v25` so a debug desktop
+can run beside an older packaged runtime without taking over its socket or
+state; upgraded workspaces keep using `.termi9ne-dev/v25` until the branded
+directory exists (see below). Release builds use `.ultraplexr`.
 An explicit incompatible `--socket` fails before GPUI starts, reports both wire
 versions, and never replaces a daemon that may own live PTYs.
+
+### Upgrading from the previous name
+
+The product, crates, and commands are now **Ultraplexr** (`ultraplexr`,
+`ultraplexr-desktop`, `ultraplexr-server`, `ultraplexr-tui`, and
+`ultraplexr-observer`). Source directories use `crates/ultraplexr-*`.
+
+Existing `.termi9ne` and `.termi9ne-dev/v25` state is reused when the matching
+branded directory does not exist. Nothing is moved, copied, or deleted, and a
+running daemon can stay alive while clients are upgraded. If both directories
+exist, the branded directory wins; use `--socket` and `--state-dir` explicitly
+to select an older installation. User-authored workspace/session names and
+terminal history are not rewritten. Previously built binaries and installed
+app bundles are not removed automatically.
+
+New integrations use `ULTRAPLEXR_*`. Runtime launch environments also expose
+legacy `TERMI9NE_*` aliases for existing agents and shell hooks; branded values
+win if both are present. `ultraplexr shell-init --install` replaces a legacy managed
+shell block in place. Update external launch scripts and MCP configurations to
+the new executable names; old executable aliases are not installed.
 
 ## Install the first executable plugin
 
@@ -109,16 +140,17 @@ plugin before starting the runtime. If it is already running, restart the
 durable runtime; closing only the desktop does not stop it:
 
 ```sh
-cargo build -p termi9ne-plugin --bin termi9ne-agent-status-plugin
-cargo run -p termi9ne-cli -- plugin-install-agent-status \
-  target/debug/termi9ne-agent-status-plugin \
+cargo build -p ultraplexr-plugin --bin ultraplexr-agent-status-plugin
+cargo run -p ultraplexr-cli -- plugin-install-agent-status \
+  target/debug/ultraplexr-agent-status-plugin \
   --plugin-dir .termi9ne-dev/v25/plugins
-cargo run -p termi9ne-cli -- \
+cargo run -p ultraplexr-cli -- \
   --socket .termi9ne-dev/v25/control.sock plugin-list
 ```
 
-The shown path targets `cargo run -p termi9ne-desktop`; packaged builds use
-`.termi9ne/plugins`. The installer refuses to replace an existing plugin.
+The shown paths target `cargo run -p ultraplexr-desktop` in an upgraded
+workspace; fresh installs use `.ultraplexr-dev/v25` instead. Packaged builds
+use `.ultraplexr/plugins`. The installer refuses to replace an existing plugin.
 Manifests and executable paths must be owner-controlled, non-symlink files under
 the selected plugin directory. Runtime health is visible under
 **Tools → Plugins**.
@@ -130,6 +162,25 @@ shutdown, and restart isolation. Installation/enable/disable UI, live discovery,
 signed packages, command contributions, and a WASM adapter remain later slices
 behind this same seam.
 
+## Agent access: MCP bridge and bounded verification
+
+Agents that speak MCP can read runtime Faults (and, only where explicitly
+scoped, inspect terminal state) through a stdio bridge that attaches to the
+same durable runtime as the desktop and CLI:
+
+```sh
+cargo run -p ultraplexr-mcp -- --socket .termi9ne-dev/v25/control.sock
+```
+
+The bridge mints no authority of its own: it enforces the same Run-scoped,
+capability-filtered reads as the agent side-channel, and terminal inspection
+stays off unless a Share or Session binding opts in.
+
+For delivery checks, the CLI plans, executes, and collects bounded verification
+without accepting work (`verification-plan-rust`, `verification-execute`,
+`verification-collect`), backed by the `ultraplexr-verification` crate's
+time/output-limited runner and resumable evidence collection described below.
+
 Workspace tabs use browser navigation: Cmd/Ctrl-T creates, Cmd/Ctrl-W closes,
 Cmd/Ctrl-Shift-T restores, Cmd/Ctrl-Tab cycles, and Cmd/Ctrl-1 through 9 jumps
 directly. New Session, new terminal, sidebar, focus mode, and graph inspector
@@ -140,12 +191,22 @@ from returned work. The runtime freezes the exact Candidate, harness, and Return
 note onto the new Run, prepares a separate Candidate checkout off the UI thread,
 and refuses to launch that workflow from an unrelated working directory.
 
+The optional [bounded verification runner](docs/design/bounded-verification-runner.md)
+executes explicit owner-configured checks with time/output limits, then records
+digested evidence through resumable collection. It does not accept or merge work.
+The desktop Mission graph also provides plan selection, exact-command review,
+confirmed launch and receipt inspection through the same verification module.
+Native visual acceptance for these new controls is still pending.
+For Cargo binary projects, `verification-plan-rust` generates a reviewable
+[six-check project recipe](docs/design/rust-project-verification.md), including
+fresh installation, expected output, tracked-input provenance and binary comparison.
+
 Rust 1.97.1 is selected by `rust-toolchain.toml`; Zig 0.16.0 must be available
 on `PATH`. A reproducible Linux verification, including both Wayland and X11
 features, is available when Docker is installed:
 
 ```sh
-docker build --file ci/linux.Dockerfile --tag termi9ne-ci .
+docker build --file ci/linux.Dockerfile --tag ultraplexr-ci .
 ```
 
 On a graphical macOS, Wayland, or X11 host, run the six-PTY output/render gate:
@@ -174,57 +235,57 @@ ci/desktop-input-smoke.sh
 Run the daemon in one terminal:
 
 ```sh
-cargo run -p termi9ne-server
+cargo run -p ultraplexr-server
 ```
 
 Create and inspect a mission from another:
 
 ```sh
-cargo run -p termi9ne-cli -- create "Ship the first agent-native terminal"
-cargo run -p termi9ne-cli -- list
-cargo run -p termi9ne-cli -- status
-cargo run -p termi9ne-cli -- schedule MISSION_ID --max-concurrency 4
-cargo run -p termi9ne-cli -- run-launch MISSION_ID RUN_ID --program /usr/bin/env -- bash -lc 'your-agent-command'
-cargo run -p termi9ne-cli -- schedule-launch MISSION_ID --max-concurrency 4 --program /usr/bin/env -- your-agent-command
-cargo run -p termi9ne-cli -- schedule-engine-launch MISSION_ID --max-concurrency 4
-cargo run -p termi9ne-cli -- schedule-auto MISSION_ID --max-concurrency 4
-cargo run -p termi9ne-cli -- schedule-auto-list
-cargo run -p termi9ne-cli -- schedule-settings --global-max-concurrency 12
-cargo run -p termi9ne-cli -- schedule-settings-show
-cargo run -p termi9ne-cli -- run-engine MISSION_ID RUN_ID
-cargo run -p termi9ne-cli -- run-engine-preview MISSION_ID RUN_ID
-cargo run -p termi9ne-cli -- run-checkout-new MISSION_ID RUN_ID --repository /path/to/repo --base-ref main
-cargo run -p termi9ne-cli -- run-engine MISSION_ID RUN_ID --checkout
-cargo run -p termi9ne-cli -- run-checkout-list --mission-id MISSION_ID
-cargo run -p termi9ne-cli -- evidence-check MISSION_ID RUN_ID --provider github --adapter-version 1 --key check/test --revision COMMIT --name test --state passed --summary "tests passed"
-cargo run -p termi9ne-cli -- evidence-review MISSION_ID RUN_ID --provider github --adapter-version 1 --key pr/42 --revision COMMIT --title "Ship feature" --state approved --summary "review approved"
-cargo run -p termi9ne-cli -- evidence-list MISSION_ID RUN_ID
-cargo run -p termi9ne-cli -- run-checkout-retire MISSION_ID RUN_ID --merged-into-ref main
-cargo run -p termi9ne-cli -- provider-report MISSION_ID RUN_ID --provider codex --adapter-version 1 --state working --summary 'executing a tool'
-cargo run -p termi9ne-cli -- provider-status MISSION_ID RUN_ID
-cargo run -p termi9ne-cli -- provider-list MISSION_ID
-cargo run -p termi9ne-cli -- terminal-capture SESSION_ID
-cargo run -p termi9ne-cli -- terminal-wait-text SESSION_ID 'ready>' --timeout-millis 30000
-cargo run -p termi9ne-cli -- terminal-wait-quiet SESSION_ID --quiet-millis 500 --timeout-millis 30000
-cargo run -p termi9ne-cli -- terminal-wait-exit SESSION_ID --timeout-millis 300000
-cargo run -p termi9ne-cli -- events --scope all
-cargo run -p termi9ne-cli -- terminal-ssh user@host --port 22
-cargo run -p termi9ne-cli -- terminal-history SESSION_ID --rows-before-bottom 500
-cargo run -p termi9ne-cli -- terminal-list --all
-cargo run -p termi9ne-cli -- terminal-archive SESSION_ID
-cargo run -p termi9ne-cli -- terminal-restore SESSION_ID
-cargo run -p termi9ne-cli -- session-group-create "review agents" --session SESSION_ID
-cargo run -p termi9ne-cli -- session-group-list
-cargo run -p termi9ne-cli -- session-group-rename GROUP_ID GROUP_VERSION "landing queue"
-cargo run -p termi9ne-cli -- session-group-detach GROUP_ID GROUP_VERSION
-cargo run -p termi9ne-cli -- session-group-reattach GROUP_ID GROUP_VERSION
-cargo run -p termi9ne-cli -- events --scope groups
+cargo run -p ultraplexr-cli -- create "Ship the first agent-native terminal"
+cargo run -p ultraplexr-cli -- list
+cargo run -p ultraplexr-cli -- status
+cargo run -p ultraplexr-cli -- schedule MISSION_ID --max-concurrency 4
+cargo run -p ultraplexr-cli -- run-launch MISSION_ID RUN_ID --program /usr/bin/env -- bash -lc 'your-agent-command'
+cargo run -p ultraplexr-cli -- schedule-launch MISSION_ID --max-concurrency 4 --program /usr/bin/env -- your-agent-command
+cargo run -p ultraplexr-cli -- schedule-engine-launch MISSION_ID --max-concurrency 4
+cargo run -p ultraplexr-cli -- schedule-auto MISSION_ID --max-concurrency 4
+cargo run -p ultraplexr-cli -- schedule-auto-list
+cargo run -p ultraplexr-cli -- schedule-settings --global-max-concurrency 12
+cargo run -p ultraplexr-cli -- schedule-settings-show
+cargo run -p ultraplexr-cli -- run-engine MISSION_ID RUN_ID
+cargo run -p ultraplexr-cli -- run-engine-preview MISSION_ID RUN_ID
+cargo run -p ultraplexr-cli -- run-checkout-new MISSION_ID RUN_ID --repository /path/to/repo --base-ref main
+cargo run -p ultraplexr-cli -- run-engine MISSION_ID RUN_ID --checkout
+cargo run -p ultraplexr-cli -- run-checkout-list --mission-id MISSION_ID
+cargo run -p ultraplexr-cli -- evidence-check MISSION_ID RUN_ID --provider github --adapter-version 1 --key check/test --revision COMMIT --name test --state passed --summary "tests passed"
+cargo run -p ultraplexr-cli -- evidence-review MISSION_ID RUN_ID --provider github --adapter-version 1 --key pr/42 --revision COMMIT --title "Ship feature" --state approved --summary "review approved"
+cargo run -p ultraplexr-cli -- evidence-list MISSION_ID RUN_ID
+cargo run -p ultraplexr-cli -- run-checkout-retire MISSION_ID RUN_ID --merged-into-ref main
+cargo run -p ultraplexr-cli -- provider-report MISSION_ID RUN_ID --provider codex --adapter-version 1 --state working --summary 'executing a tool'
+cargo run -p ultraplexr-cli -- provider-status MISSION_ID RUN_ID
+cargo run -p ultraplexr-cli -- provider-list MISSION_ID
+cargo run -p ultraplexr-cli -- terminal-capture SESSION_ID
+cargo run -p ultraplexr-cli -- terminal-wait-text SESSION_ID 'ready>' --timeout-millis 30000
+cargo run -p ultraplexr-cli -- terminal-wait-quiet SESSION_ID --quiet-millis 500 --timeout-millis 30000
+cargo run -p ultraplexr-cli -- terminal-wait-exit SESSION_ID --timeout-millis 300000
+cargo run -p ultraplexr-cli -- events --scope all
+cargo run -p ultraplexr-cli -- terminal-ssh user@host --port 22
+cargo run -p ultraplexr-cli -- terminal-history SESSION_ID --rows-before-bottom 500
+cargo run -p ultraplexr-cli -- terminal-list --all
+cargo run -p ultraplexr-cli -- terminal-archive SESSION_ID
+cargo run -p ultraplexr-cli -- terminal-restore SESSION_ID
+cargo run -p ultraplexr-cli -- session-group-create "review agents" --session SESSION_ID
+cargo run -p ultraplexr-cli -- session-group-list
+cargo run -p ultraplexr-cli -- session-group-rename GROUP_ID GROUP_VERSION "landing queue"
+cargo run -p ultraplexr-cli -- session-group-detach GROUP_ID GROUP_VERSION
+cargo run -p ultraplexr-cli -- session-group-reattach GROUP_ID GROUP_VERSION
+cargo run -p ultraplexr-cli -- events --scope groups
 ```
 
-Every command accepts `--socket`; the default is `.termi9ne/control.sock` in the
+Every command accepts `--socket`; the default is `.ultraplexr/control.sock` in the
 current workspace. Mission mutations also accept `--expected-version` and
 `--idempotency-key`. The daemon persists owner-only enveloped event journals
-under `.termi9ne/missions` and raw terminal output under `.termi9ne/sessions`.
+under `.ultraplexr/missions` and raw terminal output under `.ultraplexr/sessions`.
 `status` reports daemon identity, platform, uptime, connection/subscriber counts,
 Mission and scheduler-policy counts, global agent capacity, and terminal
 lifecycle counts without exposing state paths, environment values, commands, or
@@ -258,16 +319,16 @@ daemon-owned PTY. The runtime observes the child before it can emit or exit;
 process completion then durably finishes the Session and Run. Launch failure is
 recorded through a compensating failed completion, and retrying the same bound
 Session is idempotent.
-Agent processes receive daemon-owned `TERMI9NE_MISSION_ID`, `TERMI9NE_RUN_ID`,
-and `TERMI9NE_SESSION_ID` environment values; caller-supplied values cannot spoof
+Agent processes receive daemon-owned `ULTRAPLEXR_MISSION_ID`, `ULTRAPLEXR_RUN_ID`,
+and `ULTRAPLEXR_SESSION_ID` environment values; caller-supplied values cannot spoof
 those bindings.
-They also receive an owner-only `TERMI9NE_AGENT_SOCKET`. The daemon authenticates
+They also receive an owner-only `ULTRAPLEXR_AGENT_SOCKET`. The daemon authenticates
 its kernel-reported peer PID against the live PTY process group and permits only
 Run-scoped reads, Signals, Artifacts, and configured-driver preview. Global
 listing, approval resolution, Grant issuance, unrelated Runs, and terminal
 control are denied; authorization is rechecked and revoked on Run or Session
 completion.
-`run-engine` resolves the Run actor's engine through `.termi9ne/engines.json`.
+`run-engine` resolves the Run actor's engine through `.ultraplexr/engines.json`.
 Configuration is structured argv—never an interpolated shell string—and is
 reloaded for each launch. For example:
 
@@ -312,7 +373,7 @@ snapshots followed by NDJSON updates, so scripts can react without polling or
 screen scraping.
 The optional fail-closed `workspace_write` sandbox canonicalizes the working
 directory, exposes the host read-only, permits writes only inside that workspace,
-and re-protects `.termi9ne`. It uses `/usr/bin/sandbox-exec` on macOS and
+and re-protects `.ultraplexr`. It uses `/usr/bin/sandbox-exec` on macOS and
 Bubblewrap on Linux. Network remains available so agents can reach providers and
 their restricted local channel; preview and Mission history say so explicitly
 rather than implying network isolation. If the platform backend is missing, the
@@ -333,15 +394,15 @@ owner-only directory on the client, then forward its control socket through
 OpenSSH:
 
 ```sh
-mkdir -m 700 /absolute/local/termi9ne-remote
-cargo run -p termi9ne-cli -- remote-forward user@host \
-  --local-socket /absolute/local/termi9ne-remote/control.sock \
-  --remote-socket /absolute/remote/project/.termi9ne/control.sock \
+mkdir -m 700 /absolute/local/ultraplexr-remote
+cargo run -p ultraplexr-cli -- remote-forward user@host \
+  --local-socket /absolute/local/ultraplexr-remote/control.sock \
+  --remote-socket /absolute/remote/project/.ultraplexr/control.sock \
   --identity /absolute/path/to/id_ed25519 \
   --known-hosts /absolute/path/to/known_hosts
 
-cargo run -p termi9ne-desktop -- \
-  --socket /absolute/local/termi9ne-remote/control.sock \
+cargo run -p ultraplexr-desktop -- \
+  --socket /absolute/local/ultraplexr-remote/control.sock \
   --connect-only --runtime-label staging
 ```
 
@@ -357,15 +418,15 @@ Scope it to explicit Missions and/or Sessions and capture the one-time token in
 an owner-only file. Observer is the default read-only role:
 
 ```sh
-(umask 077; target/debug/termi9ne share-create reviewer \
+(umask 077; target/debug/ultraplexr share-create reviewer \
   --mission MISSION_ID --expires-in-seconds 86400 | jq -r .token > reviewer.token)
 
-target/debug/termi9ne --share-token-file reviewer.token list
-target/debug/termi9ne-desktop --socket /absolute/path/control.sock \
+target/debug/ultraplexr --share-token-file reviewer.token list
+target/debug/ultraplexr-desktop --socket /absolute/path/control.sock \
   --connect-only --share-token-file reviewer.token
 
-target/debug/termi9ne share-list
-target/debug/termi9ne share-revoke SHARE_ID
+target/debug/ultraplexr share-list
+target/debug/ultraplexr share-revoke SHARE_ID
 ```
 
 Observers receive only scoped Mission/terminal reads and live updates. Terminal
@@ -381,6 +442,28 @@ releases its leases and closes live streams promptly. Tokens never enter argv an
 only their SHA-256 digests persist. The current channel is the local Unix protocol
 (and may be carried by an encrypted owner-managed transport); a public
 browser/mobile TLS gateway is separate release work.
+
+An optional **localhost browser observer prototype** is now available. It uses
+an Observer Share, streams canonical text snapshots, and offers selection/copy
+without input by default. Explicit `--allow-control` with a Controller Share
+adds safe take/return Control, keyboard input, confirmed paste, and resize.
+Reconnect never replays input or reacquires Control. No owner controls are
+exposed. See the [setup and limits](docs/design/browser-observer-prototype.md).
+
+The optional **terminal workspace TUI** attaches to the same runtime from a terminal:
+
+```sh
+cargo run -p ultraplexr-tui -- --socket /absolute/path/control.sock --list
+cargo run -p ultraplexr-tui -- --socket /absolute/path/control.sock
+cargo run -p ultraplexr-tui -- --socket /absolute/path/control.sock SESSION_ID
+```
+
+It observes by default. Press `Ctrl-]`, then `c` to request Control, or `d` to
+detach without stopping the Session. It supports canonical styled cells, local
+pause/history, controlled resize, and guarded paste. Without a Session ID it opens
+Mission/Session/Attention navigation. `Ctrl-] v` / `s` choose a second Session for
+side-by-side / stacked panes; `Ctrl-] o` changes focus. See the
+[TUI guide and tested limits](docs/design/focused-session-tui.md).
 
 `terminal-history` reads deterministic viewports from the daemon's retained raw
 journal without moving a live surface: offset zero is the bottom and increasing
@@ -407,7 +490,7 @@ license/NOTICE texts, and a `SHA256SUMS` manifest.
 cargo fmt --all -- --check
 cargo test --workspace --all-targets --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
-TERMI9NE_SOAK_SECONDS=60 TERMI9NE_SOAK_SESSIONS=12 ./ci/runtime-soak.sh .
+ULTRAPLEXR_SOAK_SECONDS=60 ULTRAPLEXR_SOAK_SESSIONS=12 ./ci/runtime-soak.sh .
 ```
 
 Executed evidence and remaining release gaps are kept separate in
@@ -416,14 +499,26 @@ A package smoke is not production signing/notarization, and the Linux Docker
 matrix must pass on an available Docker host before a cross-platform release
 claim is made.
 
+The isolated [shared-client resource benchmark](docs/engineering/shared-client-resource-evidence.md)
+measures release runtime/desktop/TUI/observer processes with twelve 100,000-row
+Sessions. It records five-minute CPU deltas, sampled RSS, idle traffic and Session
+identity; failed budget observations remain visible rather than implying release
+certification. It also documents the real-history regression and byte-cap fix.
+
 ## Repository map
 
-- `termi9ne-core`: event-sourced Mission, Run, Session, and attention model.
-- `termi9ne-protocol`: negotiated v3 framing, sequencing, compression, JSON control, and protobuf terminal codecs.
-- `termi9ne-server`: durable local runtime and Unix-socket server.
-- `termi9ne-cli`: human- and agent-usable control client.
-- `termi9ne-terminal`: product-owned libghostty adapter and semantic frames.
-- `termi9ne-desktop`: GPUI application shell and custom terminal painter.
+- `ultraplexr-core`: event-sourced Mission, Run, Session, and attention model.
+- `ultraplexr-protocol`: negotiated v3 framing, sequencing, compression, JSON control, and protobuf terminal codecs.
+- `ultraplexr-server`: durable local runtime and Unix-socket server.
+- `ultraplexr-cli`: human- and agent-usable control client.
+- `ultraplexr-mcp`: MCP stdio bridge for Faults and opt-in scoped terminal inspection.
+- `ultraplexr-verification`: bounded check execution and evidence collection.
+- `ultraplexr-runtime`: durable PTY session actors behind the server.
+- `ultraplexr-plugin`: supervised executable-plugin host and first-party proof plugin.
+- `ultraplexr-observer`: read-only browser observer prototype over an Observer Share.
+- `ultraplexr-tui`: terminal workspace client with take/return Control.
+- `ultraplexr-terminal`: product-owned libghostty adapter and semantic frames.
+- `ultraplexr-desktop`: GPUI application shell and custom terminal painter.
 - `gpui-*-compat` / `ztracing-compat`: small permissively licensed seams that
   keep unapproved Zed auxiliary crates out of the product graph.
 - `CONTEXT.md`: canonical product language.

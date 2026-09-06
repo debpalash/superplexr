@@ -8,7 +8,7 @@ human sees and where attention goes; it does not change terminal correctness.
 ## System shape
 
 ```text
-┌────────────────── termi9ne desktop ──────────────────┐
+┌────────────────── ultraplexr desktop ──────────────────┐
 │ GPUI                                                   │
 │   Mission tabs · Session sidebar · terminal waterfall│
 │                                                       │
@@ -17,7 +17,7 @@ human sees and where attention goes; it does not change terminal correctness.
 └────────────────────────┬──────────────────────────────┘
                          │ binary terminal data + JSON control
 ┌────────────────────────▼──────────────────────────────┐
-│ termi9ned                                              │
+│ ultraplexrd                                              │
 │                                                       │
 │ MissionRuntime                                        │
 │   event log · run graph · attention projection       │
@@ -40,7 +40,7 @@ Mission tabs, the per-Mission Session sidebar, and the waterfall are ordinary
 GPUI views. A custom `TerminalElement` owns terminal-grid layout and painting so
 cells are not represented as thousands of general-purpose view nodes.
 
-GPUI is pre-1.0, so `termi9ne-desktop` pins an exact revision and is the only
+GPUI is pre-1.0, so `ultraplexr-desktop` pins an exact revision and is the only
 module allowed to expose GPUI types. Core, protocol, PTY, and terminal modules
 remain GUI-independent. Small platform adapters remain for notifications,
 application menus, secure storage, service installation, and packaging.
@@ -53,16 +53,16 @@ Wayland and X11. Linux ARM can follow without changing the architecture.
 `libghostty-vt` is pinned to an exact upstream commit and built as a static
 library. The first spike audits `libghostty-rs`, which already separates generated
 raw bindings from safe Rust wrappers and includes `Terminal`, `RenderState`, key
-and mouse encoders, and a Rust Ghostling port. If the audit passes, termi9ne pins
+and mouse encoders, and a Rust Ghostling port. If the audit passes, ultraplexr pins
 or forks that revision rather than recreating its unsafe work. The product seam
 remains ours:
 
 ```text
 libghostty-vt-sys / libghostty-vt   raw and safe upstream bindings
                   ↓
-termi9ne-terminal                   terminal state and effects
+ultraplexr-terminal                   terminal state and effects
                   ↓
-termi9ned                           sole canonical consumer
+ultraplexrd                           sole canonical consumer
 ```
 
 The terminal module presents three operations:
@@ -115,7 +115,7 @@ Surfaces never issue authoritative resize events.
 
 ## Persistence guarantees
 
-Closing every GUI window leaves `termi9ned`, its Sessions, PTYs, and child
+Closing every GUI window leaves `ultraplexrd`, its Sessions, PTYs, and child
 processes alive. For each Session the daemon stores:
 
 - periodic backend-neutral full frames and sequenced terminal deltas;
@@ -172,10 +172,10 @@ record rather than a claim that only the foundation exists.
    on macOS and Linux CI.
 2. Spike GPUI on macOS, Wayland, and X11 with custom terminal painting, IME,
    clipboard, focus, accessibility, and packaging smoke tests.
-3. Implement `termi9ne-terminal` with golden VT fixtures, full frames, dirty-row
+3. Implement `ultraplexr-terminal` with golden VT fixtures, full frames, dirty-row
    deltas, input encoding, and PTY device replies.
 4. Add POSIX PTY ownership and a single-Session binary attachment data plane to
-   `termi9ned`, retaining JSON for control commands.
+   `ultraplexrd`, retaining JSON for control commands.
 5. Build `SessionProjection` and the GPUI `TerminalElement`, then prove detach,
    reattach, observer mode, resynchronization, and stable-grid resize.
 6. Build Mission tabs, the per-tab Session sidebar, responsive waterfall,

@@ -6,7 +6,7 @@
 
 ## Brief
 
-termi9ne is a local workstation for a developer supervising several autonomous
+ultraplexr is a local workstation for a developer supervising several autonomous
 agents and ordinary shell processes. Its single job is to reveal what needs human
 judgment and make intervention immediate without losing the causal history of the
 work.

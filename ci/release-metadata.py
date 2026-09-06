@@ -50,6 +50,11 @@ def external_refs(package):
 
 def generate(workspace, output):
     metadata = cargo_metadata(workspace)
+    generate_from_metadata(workspace, output, metadata)
+
+
+def generate_from_metadata(workspace, output, metadata, name="ultraplexr-cargo-lock", scope_digest=None):
+    """Render supplied package evidence without resolving another Cargo graph."""
     output.mkdir(parents=True, exist_ok=True)
     lock_digest = hashlib.sha256((workspace / "Cargo.lock").read_bytes()).hexdigest()
     identifiers = {
@@ -94,20 +99,30 @@ def generate(workspace, output):
                 }
             )
 
+    if metadata.get("build_inputs_only"):
+        for package_id in sorted(identifiers):
+            relationships.append({
+                "spdxElementId": "SPDXRef-DOCUMENT",
+                "relationshipType": "CONTAINS",
+                "relatedSpdxElement": identifiers[package_id],
+            })
+
     document = {
         "spdxVersion": "SPDX-2.3",
         "dataLicense": "CC0-1.0",
         "SPDXID": "SPDXRef-DOCUMENT",
-        "name": "termi9ne-cargo-lock",
-        "documentNamespace": f"https://termi9ne.local/spdx/{lock_digest}",
+        "name": name,
+        "documentNamespace": f"https://ultraplexr.local/spdx/{scope_digest or lock_digest}",
         "creationInfo": {
             "created": created_at(),
-            "creators": ["Organization: termi9ne contributors"],
+            "creators": ["Organization: ultraplexr contributors"],
         },
         "packages": packages,
         "relationships": relationships,
     }
-    (output / "termi9ne.spdx.json").write_text(
+    if metadata.get("build_inputs_only"):
+        document["comment"] = "Observed Cargo build inputs, including build scripts and procedural macros; not a runtime-only dependency graph or system-library inventory."
+    (output / "ultraplexr.spdx.json").write_text(
         json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     generate_notices(metadata, output / "THIRD_PARTY_NOTICES.txt")
@@ -115,8 +130,8 @@ def generate(workspace, output):
 
 def generate_notices(metadata, destination):
     lines = [
-        "termi9ne third-party dependency and notice bundle",
-        "Generated from Cargo's locked resolved graph.",
+        "ultraplexr third-party dependency and notice bundle",
+        metadata.get("source_description", "Generated from Cargo's locked resolved graph."),
         "",
         "Dependency inventory",
         "====================",
@@ -131,19 +146,32 @@ def generate_notices(metadata, destination):
     patterns = ("LICENSE*", "COPYING*", "NOTICE*")
     for package in packages:
         root = Path(package["manifest_path"]).parent
-        for pattern in patterns:
-            for path in sorted(root.glob(pattern)):
-                if not path.is_file():
-                    continue
-                content = path.read_bytes()
-                digest = hashlib.sha256(content).hexdigest()
-                group = license_groups.setdefault(
-                    digest,
-                    {"content": content.decode("utf-8", errors="replace"), "packages": []},
-                )
-                label = f"{package['name']} {package['version']} ({path.name})"
-                if label not in group["packages"]:
-                    group["packages"].append(label)
+        candidates = set()
+        for notice_root in package.get("notice_roots", [str(root)]):
+            notice_root = Path(notice_root).resolve()
+            for pattern in patterns:
+                candidates.update(path for path in notice_root.glob(pattern)
+                                  if path.resolve().is_relative_to(notice_root))
+        explicit = package.get("license_file")
+        if explicit:
+            path = Path(explicit)
+            if not path.is_absolute():
+                path = root / path
+            allowed_root = Path(package.get("license_file_root", root)).resolve()
+            if path.resolve().is_relative_to(allowed_root):
+                candidates.add(path)
+        for path in sorted(candidates):
+            if not path.is_file():
+                continue
+            content = path.read_bytes()
+            digest = hashlib.sha256(content).hexdigest()
+            group = license_groups.setdefault(
+                digest,
+                {"content": content.decode("utf-8", errors="replace"), "packages": []},
+            )
+            label = f"{package['name']} {package['version']} ({path.name})"
+            if label not in group["packages"]:
+                group["packages"].append(label)
 
     lines.extend(["", "Collected license and notice texts", "=================================="])
     for digest, group in sorted(license_groups.items()):

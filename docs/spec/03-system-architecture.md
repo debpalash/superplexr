@@ -2,7 +2,7 @@
 
 ## 1. System shape — A-SYS-000
 
-termi9ne has one durable local runtime and any number of transient clients.
+ultraplexr has one durable local runtime and any number of transient clients.
 
 ```text
 ┌──────────────────── desktop process ─────────────────────┐
@@ -16,7 +16,7 @@ termi9ne has one durable local runtime and any number of transient clients.
 ┌──────── agent process ────┤ restricted capability channel
 └───────────────────────────┤
                             ▼
-┌──────────────────── termi9ned runtime ────────────────────┐
+┌──────────────────── ultraplexrd runtime ────────────────────┐
 │ MissionEngine · Scheduler · AttentionProjection           │
 │ RunExecutor · AgentDriver adapters                         │
 │ SessionSupervisor                                         │
@@ -39,7 +39,7 @@ device replies, output parsing, persistence, scheduling, or process continuity.
 ### A-SYS-003
 
 V1 runs as one OS user on one authoritative host. Runtime endpoints remain local
-Unix-domain sockets and no termi9ne TCP listener is permitted by default. An
+Unix-domain sockets and no ultraplexr TCP listener is permitted by default. An
 opt-in owner Remote attachment MAY ask OpenSSH to forward an owner-only local
 Unix socket to the authoritative control socket; SSH owns network
 authentication/encryption and the runtime retains its peer-UID check.
@@ -83,23 +83,23 @@ incrementally, but the seams are normative.
 
 | Crate/module | Responsibility | Types it may expose |
 |---|---|---|
-| `termi9ne-core` | domain decisions and projections | domain types only |
-| `termi9ne-store` | atomic Mission event storage and snapshots | store records/errors |
-| `termi9ne-terminal` | safe Ghostty adaptation and backend-neutral frames | terminal-domain types only |
-| `termi9ne-session` | PTY/process supervision and Session actor | session commands/events |
-| `termi9ne-agent` | Run execution, child setup, agent-driver adapters | Run launch types |
-| `termi9ne-server::share_store` | bounded Share capability lifecycle and durable digest metadata | Share summaries/authentication result |
-| `termi9ne-server::provider_status` | bounded expiring provider facts and explainable Run Activity projection | provider facts and derived activity only |
-| `termi9ne-protocol` | v3 framing, control types, terminal messages | transport types |
-| `termi9ne-server` | composition root, scheduler, protocol hub | standalone executable plus path-scoped embedded runtime entry point |
-| `termi9ne-plugin` | executable-plugin discovery, bounded protocol, supervision, SDK seam | semantic plugin events, manifests, health snapshots |
-| `termi9ne-desktop` | GPUI shell, projections, terminal painting | executable; GPUI-local types |
-| `termi9ne-cli` | human/script control client | executable |
+| `ultraplexr-core` | domain decisions and projections | domain types only |
+| `ultraplexr-store` | atomic Mission event storage and snapshots | store records/errors |
+| `ultraplexr-terminal` | safe Ghostty adaptation and backend-neutral frames | terminal-domain types only |
+| `ultraplexr-session` | PTY/process supervision and Session actor | session commands/events |
+| `ultraplexr-agent` | Run execution, child setup, agent-driver adapters | Run launch types |
+| `ultraplexr-server::share_store` | bounded Share capability lifecycle and durable digest metadata | Share summaries/authentication result |
+| `ultraplexr-server::provider_status` | bounded expiring provider facts and explainable Run Activity projection | provider facts and derived activity only |
+| `ultraplexr-protocol` | v3 framing, control types, terminal messages | transport types |
+| `ultraplexr-server` | composition root, scheduler, protocol hub | standalone executable plus path-scoped embedded runtime entry point |
+| `ultraplexr-plugin` | executable-plugin discovery, bounded protocol, supervision, SDK seam | semantic plugin events, manifests, health snapshots |
+| `ultraplexr-desktop` | GPUI shell, projections, terminal painting | executable; GPUI-local types |
+| `ultraplexr-cli` | human/script control client | executable |
 
-`termi9ne-core`, `termi9ne-store`, `termi9ne-terminal`, `termi9ne-session`, and
-`termi9ne-agent` MUST NOT depend on GPUI. Only `termi9ne-terminal` may depend on
+`ultraplexr-core`, `ultraplexr-store`, `ultraplexr-terminal`, `ultraplexr-session`, and
+`ultraplexr-agent` MUST NOT depend on GPUI. Only `ultraplexr-terminal` may depend on
 the safe libghostty wrapper; raw FFI is private to that wrapper or its `-sys`
-crate. Only `termi9ne-desktop` may expose GPUI types.
+crate. Only `ultraplexr-desktop` may expose GPUI types.
 
 ## 4. Deep module interfaces — A-INTERFACE-001
 
@@ -285,9 +285,9 @@ logs/
   runtime.jsonl
 ```
 
-On Linux, `run/` uses `$XDG_RUNTIME_DIR/termi9ne` and state uses
-`$XDG_STATE_HOME/termi9ne` with standards-compliant fallbacks. On macOS, state
-uses `~/Library/Application Support/termi9ne` and the socket uses a private
+On Linux, `run/` uses `$XDG_RUNTIME_DIR/ultraplexr` and state uses
+`$XDG_STATE_HOME/ultraplexr` with standards-compliant fallbacks. On macOS, state
+uses `~/Library/Application Support/ultraplexr` and the socket uses a private
 per-user runtime directory whose path length fits Unix-socket limits.
 
 Every directory MUST be mode `0700`; state files MUST be `0600`. Session output

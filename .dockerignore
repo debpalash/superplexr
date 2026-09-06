@@ -1,5 +1,7 @@
 .git
+.ultraplexr
+.ultraplexr-dev
 .termi9ne
+.termi9ne-dev
 target
 *.profraw
-

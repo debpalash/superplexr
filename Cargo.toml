@@ -1,20 +1,24 @@
 [workspace]
 members = [
-    "crates/termi9ne-core",
-    "crates/termi9ne-protocol",
-    "crates/termi9ne-client",
-    "crates/termi9ne-server",
-    "crates/termi9ne-cli",
-    "crates/termi9ne-mcp",
-    "crates/termi9ne-terminal",
-    "crates/termi9ne-runtime",
-    "crates/termi9ne-plugin",
-    "crates/termi9ne-desktop",
+    "crates/ultraplexr-core",
+    "crates/ultraplexr-protocol",
+    "crates/ultraplexr-client",
+    "crates/ultraplexr-server",
+    "crates/ultraplexr-cli",
+    "crates/ultraplexr-verification",
+    "crates/ultraplexr-mcp",
+    "crates/ultraplexr-terminal",
+    "crates/ultraplexr-runtime",
+    "crates/ultraplexr-plugin",
+    "crates/ultraplexr-desktop",
+    "crates/ultraplexr-observer",
+    "crates/ultraplexr-tui",
     "crates/gpui-shared-string-compat",
     "crates/gpui-util-compat",
     "crates/ztracing-compat",
 ]
 resolver = "2"
+exclude = ["vendor/libghostty-vt-sys"]
 
 [workspace.package]
 version = "0.1.0"
@@ -44,6 +48,9 @@ zstd = "0.13.3"
 gpui_shared_string = { path = "crates/gpui-shared-string-compat" }
 gpui_util = { path = "crates/gpui-util-compat" }
 ztracing = { path = "crates/ztracing-compat" }
+
+[patch."https://github.com/Uzaaft/libghostty-rs"]
+libghostty-vt-sys = { path = "vendor/libghostty-vt-sys" }
 
 # `cargo run` is the primary local-product loop. Unoptimized GPUI, text
 # shaping, serde, and VT parsing produce a build that is not representative of

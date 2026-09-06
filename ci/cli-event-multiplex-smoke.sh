@@ -2,8 +2,8 @@
 set -eu
 
 workspace=${1:-.}
-binary_dir=${TERMI9NE_MULTIPLEX_BINARY_DIR:-$workspace/target/debug}
-runtime_dir=$(mktemp -d "${TMPDIR:-/tmp}/termi9ne-cli-mux.XXXXXX")
+binary_dir=${ULTRAPLEXR_MULTIPLEX_BINARY_DIR:-$workspace/target/debug}
+runtime_dir=$(mktemp -d "${TMPDIR:-/tmp}/ultraplexr-cli-mux.XXXXXX")
 socket=$runtime_dir/control.sock
 state=$runtime_dir/state
 server_log=$runtime_dir/server.log
@@ -26,8 +26,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-cli=$binary_dir/termi9ne
-server=$binary_dir/termi9ne-server
+cli=$binary_dir/ultraplexr
+server=$binary_dir/ultraplexr-server
 test -x "$cli"
 test -x "$server"
 

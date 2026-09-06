@@ -1,6 +1,6 @@
 # Derive Run activity from explicit expiring facts
 
-Agent-provider activity is operational evidence, not Mission truth. termi9ne
+Agent-provider activity is operational evidence, not Mission truth. ultraplexr
 persists only the latest bounded provider fact per Run in an owner-only runtime
 store. The daemon authors its observation time and provenance: a report arrived
 through either the authenticated Run-scoped agent channel or the owner control

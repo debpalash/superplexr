@@ -1,7 +1,7 @@
 # Store SCM and CI as provider-neutral Run evidence
 
 SCM reviews and CI checks are durable evidence about a Run, but they are not the
-Run's lifecycle or a human's Mission decision. termi9ne records them in a
+Run's lifecycle or a human's Mission decision. ultraplexr records them in a
 bounded owner-only runtime store keyed by Run, provider, and provider-scoped
 evidence key. A newer observation replaces the same key atomically while the
 daemon authors its timestamp and authenticated source.

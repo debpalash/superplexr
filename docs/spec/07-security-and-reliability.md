@@ -2,7 +2,7 @@
 
 ## 1. V1 trust statement — S-TRUST-001
 
-termi9ne v1 is a single-user local application. The desktop and CLI are trusted
+ultraplexr v1 is a single-user local application. The desktop and CLI are trusted
 clients belonging to the logged-in OS user. Agent messages, terminal applications,
 terminal output, repository contents, pasted text, links, and artifact locators
 are untrusted input.
@@ -66,7 +66,7 @@ unless delegation explicitly transfers a narrower token.
 Capability comparison is constant time. Tokens expire at Run finish/revocation,
 are single-host, and rotate when control policy changes.
 
-S-AUTH-003 scopes the channel termi9ne supplies to an agent. It MUST NOT be cited
+S-AUTH-003 scopes the channel ultraplexr supplies to an agent. It MUST NOT be cited
 as containment of the agent process. An OS sandbox adapter may upgrade this claim
 only after its filesystem, socket, process, and network bypass tests pass on the
 specific platform.
@@ -154,7 +154,7 @@ was technically prevented from bypassing it.
 
 Terminal bytes are untrusted parser input. The implementation MUST:
 
-- use only the audited safe `termi9ne-terminal` seam for Ghostty FFI;
+- use only the audited safe `ultraplexr-terminal` seam for Ghostty FFI;
 - bound escape sequence, title, hyperlink, clipboard, image, and frame sizes;
 - deny OSC 52 writes by default and never allow reads without a user-mediated
   policy;
@@ -181,7 +181,7 @@ local inspection action.
 
 Working-directory and worktree creation reject paths escaping the selected root
 when isolation was requested. Cleanup previews exact paths and uses recoverable
-trash where practical. termi9ne never recursively deletes a workspace root.
+trash where practical. ultraplexr never recursively deletes a workspace root.
 
 Managed Run checkouts resolve the repository root and base commit before any Git
 mutation, use deterministic paths beneath an owner-only runtime directory, and
@@ -329,7 +329,7 @@ contain only app version, platform, architecture, and anonymous request metadata
 ### S-PLUGIN-001 — Executable plugin trust and containment
 
 Installing an executable plugin is an explicit owner action and grants that code
-the authority of the local OS user; plugin capabilities constrain the termi9ne
+the authority of the local OS user; plugin capabilities constrain the ultraplexr
 data channel but are not an OS sandbox claim. Plugin roots, manifests, and
 executables MUST be real owner-controlled paths without symlinks, traversal, or
 group/world write permission. The host clears inherited environment variables,

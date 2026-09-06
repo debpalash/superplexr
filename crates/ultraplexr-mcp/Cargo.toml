@@ -1,0 +1,21 @@
+[package]
+name = "ultraplexr-mcp"
+description = "MCP bridge for ultraplexr Faults and opt-in scoped terminal inspection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "ultraplexr-mcp"
+path = "src/main.rs"
+
+[dependencies]
+sha2.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+ultraplexr-client = { path = "../ultraplexr-client" }
+ultraplexr-core = { path = "../ultraplexr-core" }
+ultraplexr-protocol = { path = "../ultraplexr-protocol" }
