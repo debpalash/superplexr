@@ -36,6 +36,14 @@ The repository social card is
 repository is public, upload the PNG unchanged through GitHub's repository social
 preview control.
 
+The launch gallery uses captures from GPUI's real compositor with deterministic
+demo data. Use [superplexr-desktop-demo.gif](assets/launch/superplexr-desktop-demo.gif)
+as the repository walkthrough. Use the framed [terminal waterfall](assets/launch/desktop-waterfall-framed.png),
+[command deck](assets/launch/desktop-command-deck-framed.png), and
+[focus mode](assets/launch/desktop-focus-framed.png) stills for release listings
+and announcements. The editable wallpaper and window frame are in
+[desktop-wallpaper.svg](assets/launch/desktop-wallpaper.svg).
+
 ## Color
 
 | Token | Hex | Use |

@@ -7,6 +7,10 @@ use gpui::{AssetSource, Result, SharedString};
 
 const ICONS: &[(&str, &[u8])] = &[
     (
+        "icons/superplexr.svg",
+        include_bytes!("../assets/icons/superplexr.svg"),
+    ),
+    (
         "icons/claude.svg",
         include_bytes!("../assets/icons/claude.svg"),
     ),
@@ -54,7 +58,7 @@ mod tests {
             assert!(text.starts_with("<svg"), "{name} must be an svg");
             assert!(text.contains("viewBox"), "{name} needs a viewBox");
         }
-        assert_eq!(DesktopAssets.list("icons/").expect("listing").len(), 3);
+        assert_eq!(DesktopAssets.list("icons/").expect("listing").len(), 4);
         assert!(
             DesktopAssets
                 .load("icons/missing.svg")

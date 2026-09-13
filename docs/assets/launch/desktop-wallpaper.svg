@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1200" viewBox="0 0 1920 1200">
+  <title>SuperPlexr launch wallpaper and native window frame</title>
+  <desc>A graphite wallpaper with quiet control rails framing the SuperPlexr desktop.</desc>
+  <defs>
+    <pattern id="grid" width="80" height="80" patternUnits="userSpaceOnUse">
+      <path d="M80 0H0V80" fill="none" stroke="#8795A5" stroke-width="1" opacity=".055"/>
+    </pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="18"/>
+      <feOffset dy="16"/>
+      <feColorMatrix values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .52 0"/>
+      <feBlend in="SourceGraphic"/>
+    </filter>
+  </defs>
+
+  <rect width="1920" height="1200" fill="#10151B"/>
+  <rect width="1920" height="1200" fill="url(#grid)"/>
+  <path d="M0 248H92l28-28h28M1920 330h-96l-30 30h-34M0 954h88l34 34h26M1920 888h-98l-30-30h-32"
+        fill="none" stroke="#79A7D3" stroke-width="2" opacity=".20"/>
+  <circle cx="148" cy="220" r="5" fill="#D8A85B" opacity=".75"/>
+  <circle cx="1760" cy="360" r="5" fill="#79A7D3" opacity=".75"/>
+  <circle cx="148" cy="988" r="5" fill="#79A7D3" opacity=".75"/>
+  <circle cx="1760" cy="858" r="5" fill="#D7776B" opacity=".75"/>
+
+  <g transform="translate(108 22) scale(.075)">
+    <g fill="none" stroke="#E8EDF2" stroke-width="36" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M72 112h142c52 0 59 66 112 94"/>
+      <path d="M72 208h154c40 0 54 25 100 31"/>
+      <path d="M72 304h154c40 0 54-25 100-31"/>
+      <path d="M72 400h142c52 0 59-66 112-94"/>
+      <path d="M360 256h70"/>
+    </g>
+    <rect x="316" y="180" width="58" height="152" rx="29" fill="#79A7D3"/>
+    <circle cx="452" cy="256" r="24" fill="none" stroke="#E8EDF2" stroke-width="14"/>
+  </g>
+  <text x="158" y="58" fill="#E8EDF2" font-family="Avenir Next, Avenir, sans-serif" font-size="25" font-weight="600">SuperPlexr</text>
+  <text x="1812" y="56" text-anchor="end" fill="#8795A5" font-family="Avenir Next, Avenir, sans-serif" font-size="17" letter-spacing="1.4">MISSION CONTROL FOR CODING AGENTS</text>
+
+  <rect x="160" y="92" width="1600" height="1056" rx="18" fill="#05070A" filter="url(#shadow)"/>
+  <rect x="160" y="92" width="1600" height="56" rx="18" fill="#19212A"/>
+  <rect x="160" y="124" width="1600" height="24" fill="#19212A"/>
+  <circle cx="194" cy="120" r="7" fill="#D7776B"/>
+  <circle cx="218" cy="120" r="7" fill="#D8A85B"/>
+  <circle cx="242" cy="120" r="7" fill="#79A7D3"/>
+  <text x="960" y="126" text-anchor="middle" fill="#E8EDF2" font-family="Avenir Next, Avenir, sans-serif" font-size="17" font-weight="500">SuperPlexr · Native desktop</text>
+  <path d="M160 148H1760" stroke="#34404D"/>
+</svg>

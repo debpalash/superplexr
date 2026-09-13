@@ -20,6 +20,20 @@
   <url type="homepage">https://github.com/debpalash/superplexr</url>
   <url type="bugtracker">https://github.com/debpalash/superplexr/issues</url>
   <url type="vcs-browser">https://github.com/debpalash/superplexr</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/debpalash/superplexr/main/docs/assets/launch/desktop-waterfall-framed.png</image>
+      <caption>Mission tabs, Session status, and a two-terminal waterfall in the native desktop</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/debpalash/superplexr/main/docs/assets/launch/desktop-command-deck-framed.png</image>
+      <caption>Keyboard-first command deck for navigating and supervising agent work</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/debpalash/superplexr/main/docs/assets/launch/desktop-focus-framed.png</image>
+      <caption>Focus mode for reviewing one agent Session in context</caption>
+    </screenshot>
+  </screenshots>
   <releases>
     <release version="0.1.0" date="2026-09-01"/>
   </releases>

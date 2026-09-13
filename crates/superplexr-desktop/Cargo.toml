@@ -6,6 +6,15 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+launch-media = ["gpui/test-support", "gpui_platform/test-support"]
+
+[[test]]
+name = "launch-media"
+path = "src/launch_media_main.rs"
+harness = false
+required-features = ["launch-media"]
+
 [dependencies]
 clap.workspace = true
 gpui = { workspace = true, features = ["profiler"] }

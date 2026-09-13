@@ -5893,10 +5893,12 @@ impl SuperplexrDesktop {
                     })
                     .border_r_1()
                     .border_color(rgb(HAIRLINE))
-                    .font_family(UI_FONT)
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(RELAY))
-                    .child("up"),
+                    .child(
+                        gpui::svg()
+                            .path("icons/superplexr.svg")
+                            .size(ui_size(22.0))
+                            .text_color(rgb(RELAY)),
+                    ),
             )
             .children(
                 layout
@@ -8168,6 +8170,108 @@ mod tests {
             let surfaces = create_surfaces(window, cx);
             SuperplexrDesktop::new(surfaces, cx.focus_handle())
         })
+    }
+
+    #[cfg(all(target_os = "macos", feature = "launch-media"))]
+    pub(super) fn capture_desktop_launch_media() {
+        use gpui::{AppContext as _, HeadlessAppContext, px, size};
+        use std::{path::PathBuf, sync::Arc};
+
+        const LAUNCH_SURFACES: [SurfaceFixture; 5] = [
+            SurfaceFixture {
+                id: "desktop-launch",
+                output: b"\x1b[2J\x1b[H$ superplexr mission run desktop-launch\r\n\x1b[1;34mcodex\x1b[0m     implementation active\r\n\x1b[1;32mclaude\x1b[0m    independent review passed\r\n\x1b[1;33mopencode\x1b[0m  docs and launch media active",
+            },
+            SurfaceFixture {
+                id: "desktop-checks",
+                output: MACOS_SMOKE,
+            },
+            SurfaceFixture {
+                id: "candidate-review",
+                output: b"\x1b[2J\x1b[H$ superplexr session status review\r\n\x1b[1;33mwaiting\x1b[0m  candidate ready for human decision\r\n\x1b[1;32mchecks\x1b[0m   tests, clippy, and launch media passed\r\n\x1b[1;34mnext\x1b[0m     accept or request changes",
+            },
+            SurfaceFixture {
+                id: "wayland-smoke",
+                output: WAYLAND_SMOKE,
+            },
+            SurfaceFixture {
+                id: "x11-smoke",
+                output: X11_SMOKE,
+            },
+        ];
+
+        let output_dir = std::env::var_os("SUPERPLEXR_VISUAL_OUTPUT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../..")
+                    .join("docs/assets/launch")
+            });
+        std::fs::create_dir_all(&output_dir).expect("launch-media directory");
+
+        let platform = gpui_platform::current_platform(true);
+        let mut visual = HeadlessAppContext::with_platform(
+            platform.text_system(),
+            Arc::new(assets::DesktopAssets),
+            gpui_platform::current_headless_renderer,
+        );
+        let window = visual
+            .open_window(size(px(1280.0), px(800.0)), |window, cx| {
+                let surfaces = LAUNCH_SURFACES
+                    .iter()
+                    .map(|fixture| {
+                        cx.new(|surface_cx| {
+                            TerminalSurface::fixture(fixture.id, fixture.output, window, surface_cx)
+                                .expect("launch-media terminal fixture")
+                        })
+                    })
+                    .collect();
+                cx.new(|cx| SuperplexrDesktop::new(surfaces, cx.focus_handle()))
+            })
+            .expect("off-screen desktop window");
+        let any_window = AnyWindowHandle::from(window);
+
+        window
+            .update(&mut visual, |desktop, _, cx| {
+                desktop.runtime_label = "LOCAL".to_owned();
+                desktop.status_bar_visible = false;
+                cx.notify();
+            })
+            .expect("set launch-media runtime label");
+
+        let capture = |visual: &mut HeadlessAppContext, name: &str| {
+            visual
+                .update_window(any_window, |_, window, cx| {
+                    window.refresh();
+                    window.draw(cx).clear(cx);
+                })
+                .expect("desktop frame");
+            visual.run_until_parked();
+            visual
+                .capture_screenshot(any_window)
+                .expect("desktop screenshot")
+                .save(output_dir.join(name))
+                .expect("save desktop screenshot");
+        };
+
+        capture(&mut visual, "desktop-waterfall.png");
+
+        window
+            .update(&mut visual, |desktop, window, cx| {
+                desktop.command_query = "review agent work".to_owned();
+                desktop.toggle_command_deck(window, cx);
+            })
+            .expect("open command deck");
+        capture(&mut visual, "desktop-command-deck.png");
+
+        window
+            .update(&mut visual, |desktop, window, cx| {
+                desktop.toggle_command_deck(window, cx);
+                desktop.select_session(1, window, cx);
+                desktop.toggle_focus_mode(cx);
+            })
+            .expect("focus second session");
+        capture(&mut visual, "desktop-focus.png");
     }
 
     #[gpui::test]

@@ -15,8 +15,10 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/launch/social-preview.png" alt="SuperPlexr native desktop mission control for parallel coding agents" width="100%">
+  <img src="docs/assets/launch/superplexr-desktop-demo.gif" alt="SuperPlexr native desktop switching between its terminal waterfall, command deck, and focus mode" width="100%">
 </p>
+
+<p align="center"><sub>Actual GPUI desktop rendering on the branded SuperPlexr launch wallpaper.</sub></p>
 
 ## A GUI for parallel agent work
 
@@ -39,6 +41,19 @@ The desktop is organized around work rather than terminal windows:
 The desktop can close without killing the work. A local SuperPlexr runtime owns
 the PTYs and durable state, so reopening the app reattaches to the same sessions,
 terminal history, Mission graph, and attention queue.
+
+<table>
+  <tr>
+    <td width="50%">
+      <img src="docs/assets/launch/desktop-command-deck-framed.png" alt="SuperPlexr command deck over the native desktop">
+      <br><sub><strong>Command deck:</strong> search actions, workspaces, Sessions, and tracked commands.</sub>
+    </td>
+    <td width="50%">
+      <img src="docs/assets/launch/desktop-focus-framed.png" alt="SuperPlexr focus mode showing one agent review terminal">
+      <br><sub><strong>Focus mode:</strong> give one Session the window without losing its Mission context.</sub>
+    </td>
+  </tr>
+</table>
 
 ## Why developers use it
 
@@ -135,7 +150,7 @@ The browser observer is a secondary, scoped client for watching or sharing a
 Session. It is not the SuperPlexr desktop app.
 
 <p align="center">
-  <img src="docs/assets/launch/superplexr-demo.gif" alt="Secondary SuperPlexr browser observer switching and searching durable sessions" width="100%">
+  <img src="docs/assets/launch/superplexr-browser-observer-demo.gif" alt="Secondary SuperPlexr browser observer switching and searching durable sessions" width="100%">
 </p>
 
 </details>
