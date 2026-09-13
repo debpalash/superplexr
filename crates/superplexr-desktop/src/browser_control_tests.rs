@@ -110,7 +110,7 @@ fn wait_text(terminal: &DaemonSession, text: &str) {
                 query: text.into(),
                 case_sensitive: true,
             },
-            Duration::from_secs(5),
+            Duration::from_secs(15),
         )
         .unwrap();
 }

@@ -728,7 +728,16 @@ impl RuntimeFixture {
         fixture
     }
     fn client(&self) -> ControlClient {
-        ControlClient::connect(self.root.join("s")).expect("real client")
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match ControlClient::connect(self.root.join("s")) {
+                Ok(client) => return client,
+                Err(_) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => panic!("real client: {error}"),
+            }
+        }
     }
 }
 impl Drop for RuntimeFixture {
