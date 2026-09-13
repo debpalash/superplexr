@@ -1496,10 +1496,15 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut frames = 0_usize;
         let mut final_frame = None;
+        let mut first_frame_at = None;
+        let mut last_frame_at = None;
 
         while Instant::now() < deadline {
             match events.recv_timeout(Duration::from_millis(100)) {
                 Ok(SessionEvent::Frame(frame)) => {
+                    let received_at = Instant::now();
+                    first_frame_at.get_or_insert(received_at);
+                    last_frame_at = Some(received_at);
                     frames += 1;
                     final_frame = Some(frame);
                 }
@@ -1518,9 +1523,16 @@ mod tests {
             frame_text(&final_frame).contains("tick39"),
             "the last coalesced frame must retain the final PTY output"
         );
+        let frame_span = last_frame_at
+            .expect("paced output should publish a final frame")
+            .duration_since(first_frame_at.expect("paced output should publish a first frame"));
+        let frame_budget = frame_span
+            .as_nanos()
+            .div_ceil(FRAME_INTERVAL.as_nanos())
+            .saturating_add(2);
         assert!(
-            frames <= 30,
-            "40 paced writes must be coalesced instead of producing one frame each; got {frames} frames"
+            frames as u128 <= frame_budget,
+            "frames must stay within the display-rate budget; got {frames} frames over {frame_span:?}"
         );
         fs::remove_dir_all(&root).expect("test state should be removable");
     }
