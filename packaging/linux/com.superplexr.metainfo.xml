@@ -2,13 +2,15 @@
 <component type="desktop-application">
   <id>com.superplexr.desktop</id>
   <name>SuperPlexr</name>
-  <summary>Agent-native terminal multiplexer</summary>
+  <summary>Native mission control for coding agents</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <description>
     <p>
-      SuperPlexr combines durable terminal sessions, browser-like Mission
-      workspaces, structured agent attention, and auditable human control.
+      SuperPlexr is a native desktop application for running and supervising
+      parallel coding agents. It combines durable terminal sessions,
+      browser-like Mission workspaces, structured agent attention, and
+      auditable human control.
     </p>
   </description>
   <launchable type="desktop-id">com.superplexr.desktop.desktop</launchable>
@@ -18,12 +20,6 @@
   <url type="homepage">https://github.com/debpalash/superplexr</url>
   <url type="bugtracker">https://github.com/debpalash/superplexr/issues</url>
   <url type="vcs-browser">https://github.com/debpalash/superplexr</url>
-  <screenshots>
-    <screenshot type="default">
-      <image>https://raw.githubusercontent.com/debpalash/superplexr/main/docs/assets/launch/product-preview.png</image>
-      <caption>Observe durable terminal Sessions from a scoped SuperPlexr client</caption>
-    </screenshot>
-  </screenshots>
   <releases>
     <release version="0.1.0" date="2026-09-01"/>
   </releases>

@@ -3,82 +3,70 @@
 </p>
 
 <p align="center">
-  Run, observe, interrupt, delegate, and review parallel agent work from one durable workspace.
+  <strong>A native desktop command center for running parallel coding agents.</strong><br>
+  Keep every terminal, agent run, question, decision, and result in one durable workspace.
 </p>
 
 <p align="center">
   <a href="https://github.com/debpalash/superplexr/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/debpalash/superplexr/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-79A7D3.svg"></a>
-  <img alt="Rust 1.97.1" src="https://img.shields.io/badge/Rust-1.97.1-D8A85B.svg">
-  <img alt="macOS and Linux" src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux-8795A5.svg">
+  <img alt="Built with Rust and GPUI" src="https://img.shields.io/badge/native-Rust%20%2B%20GPUI-D8A85B.svg">
+  <img alt="macOS and Linux" src="https://img.shields.io/badge/desktop-macOS%20%7C%20Linux-8795A5.svg">
 </p>
-
-SuperPlexr is an open-source, native **agentic terminal multiplexer** for
-developers coordinating multiple coding agents. Its durable state is a graph of
-Missions, Runs, Sessions, Signals, and Artifacts—not a collection of terminal
-windows.
-
-Close the desktop and the daemon-owned terminals keep running. Reopen it and the
-same sessions, terminal state, run history, dependencies, and human-attention
-queue are still there.
-
-> **Launch status:** SuperPlexr is pre-release software at `0.1.0`. The macOS
-> source build is usable today. Linux support and packaging are implemented and
-> remain behind the published cross-platform release gates.
-
-## See it in action
 
 <p align="center">
-  <img src="docs/assets/launch/superplexr-demo.gif" alt="SuperPlexr switching durable terminal sessions, searching retained history, and opening a parallel read-only view" width="100%">
+  <img src="docs/assets/launch/social-preview.png" alt="SuperPlexr native desktop mission control for parallel coding agents" width="100%">
 </p>
 
-This capture shows the read-only browser observer connected to a disposable real
-runtime: switching durable Sessions, searching retained terminal history, and
-opening another live view without taking control from the operator.
+## A GUI for parallel agent work
 
-## Why SuperPlexr
+**Yes, SuperPlexr has a desktop GUI.** The main product is a native macOS and
+Linux application built in Rust with GPUI. It gives developers one visual place
+to launch, supervise, interrupt, and review several coding-agent sessions.
 
-| A terminal multiplexer gives you… | SuperPlexr adds… |
+The desktop is organized around work rather than terminal windows:
+
+- **Mission tabs** keep one outcome and all of its activity together.
+- **Session sidebar** shows active, waiting, finished, and attention-needing work.
+- **Terminal waterfall** lays out several live terminal surfaces without hiding
+  them behind a tab stack.
+- **Command deck** provides keyboard-first navigation and actions with
+  <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>K</kbd>.
+- **Run graph and verification views** connect agent attempts, dependencies,
+  candidates, checks, and human decisions.
+- **Graphite and Paper themes** provide dark and light native interfaces.
+
+The desktop can close without killing the work. A local SuperPlexr runtime owns
+the PTYs and durable state, so reopening the app reattaches to the same sessions,
+terminal history, Mission graph, and attention queue.
+
+## Why developers use it
+
+| When parallel agents create… | The SuperPlexr desktop gives you… |
 |---|---|
-| Persistent shell processes | Durable Missions and Runs with explicit outcomes |
-| Windows, tabs, and panes | A responsive waterfall of terminal Surfaces |
-| Raw terminal output | Structured progress, questions, approvals, and artifacts |
-| Manual process switching | Dependency-aware scheduling for parallel coding agents |
-| Shared input | One auditable Control lease with scoped observers/controllers |
-| Scrollback | Searchable retained history and deterministic replay |
-| Exit codes | Candidate, verification, evidence, and human settlement records |
+| Too many terminal windows | One Mission tab with a Session sidebar and waterfall |
+| Constant context switching | Stable views that never focus themselves on new output |
+| Hidden questions and blockers | Structured attention tied to the requesting Run and Session |
+| Unclear ownership of a terminal | Explicit, auditable human and agent Control leases |
+| Several competing attempts | A causal Run graph with dependencies and outcomes |
+| “Done” without proof | Candidate, verification, evidence, and acceptance records |
+| Lost work after closing a client | Daemon-owned PTYs, retained history, and deterministic reattach |
 
-SuperPlexr does not depend on one agent vendor. A configured engine driver can
-launch any command-line coding agent with structured arguments and a restricted,
-Run-scoped local channel.
+SuperPlexr is agent-vendor neutral. Its engine drivers launch command-line coding
+agents from structured process definitions, so the workspace is not tied to one
+model provider or agent CLI.
 
-## Product highlights
+## Run the desktop app
 
-- **Durable terminals** — real PTYs live in a local daemon and survive desktop
-  restarts, with canonical terminal state powered by `libghostty-vt`.
-- **Mission graph** — model parallel attempts, lineage, dependencies, priorities,
-  outcomes, and review separately from terminal process lifetime.
-- **Attention queue** — questions, blockers, approval requests, and failures
-  surface as structured Signals instead of terminal-text heuristics.
-- **Human control** — take and return exclusive terminal control explicitly;
-  observer and controller Shares stay scoped and revocable.
-- **Verified delivery** — freeze a candidate, execute bounded checks in an
-  independent verifier Run, retain evidence, then accept or return the work.
-- **Several clients, one runtime** — native GPUI desktop, CLI, TUI, MCP bridge,
-  browser observer, and remote attachment use the same authoritative state.
-- **Local-first security** — owner-only state, peer-PID-authenticated agent
-  channels, redacted diagnostics, and optional fail-closed workspace-write
-  sandboxing.
-
-## Quick start
+SuperPlexr is currently a `0.1.0` source preview. The macOS source build is usable
+today. Linux desktop support is implemented and still needs the published
+Wayland, X11, and packaging release gates.
 
 ### Requirements
 
-- macOS 13+ or Linux with Wayland/X11 development libraries
+- macOS 13+, or Linux with Wayland/X11 development libraries
 - [Rust 1.97.1](rust-toolchain.toml)
 - Zig 0.16.0 on `PATH` for the pinned Ghostty terminal dependency
-
-### Run the native desktop
 
 ```sh
 git clone https://github.com/debpalash/superplexr.git
@@ -86,60 +74,81 @@ cd superplexr
 cargo run -p superplexr-desktop
 ```
 
-The desktop starts its exact-version local runtime, restores Mission tabs, and
-reattaches durable Sessions. Use <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>K</kbd> for
-the command deck. Graphite and Paper themes are available under **View → Theme**.
+The desktop starts its matching local runtime automatically, opens a native
+window, restores Mission tabs, and reattaches any durable Sessions. You do not
+need to start a separate server for the normal desktop workflow.
 
-### Try the control plane
+Useful desktop shortcuts:
 
-Start the runtime:
+| Action | macOS | Linux |
+|---|---|---|
+| Command deck | <kbd>Cmd</kbd>+<kbd>K</kbd> | <kbd>Ctrl</kbd>+<kbd>K</kbd> |
+| New Mission workspace | <kbd>Cmd</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
+| New Session | <kbd>Cmd</kbd>+<kbd>N</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> |
+| New terminal Surface | <kbd>Cmd</kbd>+<kbd>D</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> |
+| Focus mode | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd> |
 
-```sh
-cargo run -p superplexr-server
-```
-
-Then create a Mission and inspect the runtime from another terminal:
-
-```sh
-cargo run -p superplexr-cli -- create "Ship the first agent-native terminal"
-cargo run -p superplexr-cli -- list
-cargo run -p superplexr-cli -- status
-```
-
-Every command accepts `--socket`. The runtime persists its event journals and
-terminal history under `.superplexr/` by default. Run `superplexr --help` for
-remote attachment, Shares, scheduling, verification, replay, and terminal
-automation.
-
-## How it works
+## Desktop and runtime architecture
 
 ```mermaid
 flowchart LR
-    H[Human operator] --> D[Native desktop]
-    A[Coding agents] --> C[Run-scoped agent channel]
-    D --> R[Durable SuperPlexr runtime]
-    C --> R
-    CLI[CLI · TUI · MCP · browser observer] --> R
-    R --> M[Mission event graph]
+    H[Developer] --> D[Native GPUI desktop]
+    D --> T[Mission tabs]
+    D --> S[Session sidebar]
+    D --> W[Terminal waterfall]
+    D --> A[Attention and review]
+    T & S & W & A --> R[Local SuperPlexr runtime]
+    G[Coding-agent CLIs] --> R
+    R --> M[Mission and Run graph]
     R --> P[Daemon-owned PTYs]
-    P --> T[Canonical Ghostty terminal state]
-    R --> E[Artifacts · evidence · retained history]
+    R --> E[History, artifacts, and evidence]
 ```
 
-The runtime owns processes and durable state. Clients are disposable projections:
-closing a Surface does not end a Session, and closing a Mission tab does not end
-the Mission. The local protocol carries sequenced binary terminal frames beside
-structured JSON control events.
+The desktop is the primary operator interface. The runtime owns processes,
+terminal state, control authority, and Mission history. This split lets the GUI
+restart or reconnect without making a view responsible for process lifetime.
+
+## What ships in this repository
+
+- Native GPUI desktop for macOS and Linux
+- Local durable runtime and daemon-owned PTYs
+- Ghostty-based terminal parsing and rendering
+- Mission, Run, Session, Signal, Intervention, and Artifact model
+- Dependency-aware agent scheduler and configurable engine drivers
+- Structured attention, Control handoff, history search, and replay
+- Candidate review and independent verification workflow
+- CLI, TUI, MCP bridge, browser observer, and remote attachment clients
+- Scoped observer/controller Shares and local-first security boundaries
+
+The CLI and other clients use the same runtime as the GUI. For example:
+
+```sh
+cargo run -p superplexr-cli -- list
+cargo run -p superplexr-cli -- status
+cargo run -p superplexr-cli -- terminal-list
+```
+
+<details>
+<summary>Browser observer preview</summary>
+
+The browser observer is a secondary, scoped client for watching or sharing a
+Session. It is not the SuperPlexr desktop app.
+
+<p align="center">
+  <img src="docs/assets/launch/superplexr-demo.gif" alt="Secondary SuperPlexr browser observer switching and searching durable sessions" width="100%">
+</p>
+
+</details>
 
 ## Project status
 
-The repository includes working implementations of the desktop, runtime, CLI,
+SuperPlexr is pre-release software for contributors and technical evaluators.
+The repository contains working implementations of the desktop, runtime, CLI,
 TUI, MCP bridge, browser observer, durable PTYs, Mission graph, scheduler,
-structured Signals, remote owner attachment, scoped Shares, retained history,
-and verification workflow.
+structured Signals, scoped Shares, retained history, and verification workflow.
 
-Release claims are evidence-based. The current macOS results and outstanding
-Wayland/X11, packaging, signing, and long-duration gates are recorded in the
+Release claims remain tied to evidence. Current macOS results and outstanding
+Linux, packaging, signing, and long-duration checks are recorded in the
 [release evidence ledger](docs/engineering/m2-runtime-release-evidence.md) and
 [product completion matrix](docs/engineering/product-completion-matrix.md).
 
@@ -147,56 +156,50 @@ Wayland/X11, packaging, signing, and long-duration gates are recorded in the
 
 | Start here | What it covers |
 |---|---|
+| [Desktop experience](docs/spec/06-desktop-experience.md) | Mission tabs, sidebar, waterfall, attention, and keyboard model |
 | [Product specification](docs/spec/README.md) | Normative product and engineering contract |
-| [Desktop interaction design](docs/design/browser-waterfall-v1.md) | Mission tabs, Session sidebar, terminal waterfall, attention |
-| [System architecture](docs/spec/03-system-architecture.md) | Module boundaries and dependency direction |
-| [Local protocol](docs/spec/05-local-protocol.md) | Negotiation, sequencing, terminal frames, control messages |
-| [Security and reliability](docs/spec/07-security-and-reliability.md) | Trust boundaries, authority, recovery, limits |
-| [Universal runtime and clients](docs/architecture/universal-runtime-and-clients.md) | Native, terminal, web, MCP, and remote-client direction |
+| [System architecture](docs/spec/03-system-architecture.md) | Desktop, runtime, terminal, and storage boundaries |
+| [Local protocol](docs/spec/05-local-protocol.md) | Negotiation, sequencing, terminal frames, and control messages |
+| [Security and reliability](docs/spec/07-security-and-reliability.md) | Trust boundaries, authority, recovery, and limits |
 | [Brand guide](docs/brand.md) | Name, logo, color, typography, and voice |
-| [North star](docs/product/north-star.md) | Product thesis and measurable differentiation gates |
 
-The canonical domain vocabulary lives in [CONTEXT.md](CONTEXT.md). It explains
-why a Mission is not a workspace, a Run is not a Session, and a Surface never
-owns the process it displays.
+The canonical vocabulary is in [CONTEXT.md](CONTEXT.md): a Mission is an
+outcome, a Run is an attempt, a Session owns process lifetime, and a Surface is
+only a view.
 
 ## Frequently asked questions
 
-### What is SuperPlexr?
+### Is SuperPlexr a desktop application?
 
-SuperPlexr is a local-first execution environment and terminal multiplexer for
-parallel coding agents. It combines persistent terminal sessions with an
-event-sourced graph of work, structured human attention, scoped control, and
-reviewable delivery evidence.
+Yes. SuperPlexr's primary interface is a native Rust and GPUI desktop app for
+macOS and Linux. The repository also includes CLI, TUI, MCP, browser-observer,
+and remote clients for the same durable runtime.
+
+### What does the SuperPlexr GUI show?
+
+The GUI shows browser-style Mission tabs, a per-Mission Session and attention
+sidebar, a responsive waterfall of live terminal Surfaces, a command deck, Run
+details, graph inspection, verification state, Faults, and provider status.
 
 ### Is SuperPlexr a replacement for tmux or Zellij?
 
-It can cover durable terminal-session workflows, but its organizing model is
-different. Traditional multiplexers arrange streams. SuperPlexr coordinates the
-actors, dependencies, decisions, and artifacts behind those streams.
+It covers durable terminal-session workflows, but it organizes them around
+parallel agent work. Missions, Runs, structured attention, explicit Control, and
+verification records remain first-class instead of being inferred from panes.
 
-### Which coding agents does it support?
+### Does SuperPlexr require a cloud service?
 
-SuperPlexr uses command-based engine drivers, so it can launch any CLI agent that
-can be described with a program, structured arguments, environment changes, and
-an optional workspace-write sandbox. The runtime protocol is vendor-neutral.
+No. The desktop, runtime, PTYs, terminal journals, Mission events, and local
+control socket run on your machine. Remote and shared access are opt-in.
 
-### Does SuperPlexr send terminal data to a cloud service?
+### Is SuperPlexr production-ready?
 
-No cloud service is required. The default runtime, terminal journals, Mission
-events, and control socket stay on the machine where SuperPlexr runs. Remote and
-shared access must be enabled explicitly.
-
-### Is it production-ready?
-
-Not yet. Version `0.1.0` is an early source release for contributors and
-technical evaluators. The repository keeps unpassed release gates visible rather
-than turning planned work into marketing claims.
+Not yet. Version `0.1.0` is an early source release. The repository keeps
+unpassed release gates visible instead of presenting planned work as shipped.
 
 ## Contributing
 
-Contributions are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the build,
-test, design, and pull-request workflow. Security issues should follow
-[SECURITY.md](SECURITY.md).
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for the build, test, design, and
+pull-request workflow. Report security issues through [SECURITY.md](SECURITY.md).
 
 SuperPlexr is available under the [MIT License](LICENSE).
