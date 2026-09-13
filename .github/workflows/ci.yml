@@ -10,11 +10,11 @@ permissions:
 jobs:
   macos:
     runs-on: macos-14
-    env:
-      GHOSTTY_SOURCE_DIR: ${{ runner.temp }}/ghostty-source
     steps:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Configure build paths
+        run: echo "GHOSTTY_SOURCE_DIR=$RUNNER_TEMP/ghostty-source" >> "$GITHUB_ENV"
       - name: Install pinned Zig
         uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
