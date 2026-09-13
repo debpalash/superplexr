@@ -1320,7 +1320,6 @@ async fn handle_connection_over(
     let snapshots_supported = true;
     let write = Arc::new(Mutex::new(write));
     let mut connection = share_request::ConnectionTasks::new(Arc::clone(&state));
-    let mut connection_client = None;
     let mut next_stream_id = 1_u32;
     let mut searches = search_stream::Jobs::default();
     let mut waits = wait_tasks::Jobs::new(shutdown.clone());
@@ -1338,29 +1337,16 @@ async fn handle_connection_over(
                     std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
                 ) =>
             {
-                // A dead connection holds no control: release every terminal
-                // this client held, whatever share admitted it.
-                if let Some(client_id) = connection_client
-                    && let Ok(terminals) = state.terminals.read()
-                {
-                    for record in terminals.values() {
-                        if let Ok(mut projection) = record.projection.write()
-                            && projection.summary.controller_client_id == Some(client_id)
-                        {
-                            projection.summary.controller_client_id = None;
-                            projection.summary.controller_surface_id = None;
-                            projection.summary.controller_share_id = None;
-                            projection.summary.control_epoch =
-                                next_control_epoch(projection.summary.control_epoch);
-                            publish_terminal(&state, &projection.summary);
-                        }
-                    }
-                }
+                // `ConnectionTasks` releases only leases held by this exact
+                // authenticated client and Share scope when it drops.
                 return Ok(());
             }
             Err(error) => return Err(error.into()),
         };
-        if connection_client.is_some_and(|client_id| client_id != request.client_id) {
+        if connection
+            .client_id
+            .is_some_and(|client_id| client_id != request.client_id)
+        {
             let response = ServerResponse::error(
                 request.request_id,
                 "client_identity_changed",
@@ -1369,7 +1355,7 @@ async fn handle_connection_over(
             write_connection_response(&write, &response).await?;
             continue;
         }
-        connection_client = Some(request.client_id);
+        connection.client_id = Some(request.client_id);
         // Revocation takes effect at the device's next request, not its next
         // connection.
         if let Admission::Device(device_id) = admission
