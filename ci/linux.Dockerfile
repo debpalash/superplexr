@@ -128,6 +128,11 @@ RUN curl --fail --location --proto '=https' --tlsv1.2 \
 
 ENV PATH="/opt/zig:${PATH}"
 ENV CARGO_BUILD_JOBS=2
+# GitHub-hosted runners have limited disk. Debug symbols and incremental state
+# for the full workspace test graph can otherwise exhaust it before linking.
+ENV CARGO_INCREMENTAL=0
+ENV CARGO_PROFILE_DEV_DEBUG=0
+ENV CARGO_PROFILE_TEST_DEBUG=0
 ENV GHOSTTY_SOURCE_DIR=/opt/ghostty-source
 
 RUN rustup component add clippy rustfmt
