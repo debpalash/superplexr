@@ -29,6 +29,7 @@ RUN apt-get update \
         ncurses-bin \
         pkg-config \
         python3 \
+        vim-tiny \
         weston \
         xauth \
         xvfb \
@@ -147,6 +148,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cargo --version \
     && zig version \
     && node --version \
+    && command -v vi \
     && cargo fmt --all --check \
     && node --test crates/superplexr-observer/web/*_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs \
     && python3 -m unittest discover -s ci -p '*_tests.py' \
