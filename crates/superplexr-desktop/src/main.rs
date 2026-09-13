@@ -273,6 +273,7 @@ actions!(
         RenameWorkspace,
         DuplicateWorkspace,
         ToggleCommandDeck,
+        OpenNextAttention,
         NewSession,
         NewTerminal,
         NextSession,
@@ -4671,7 +4672,10 @@ impl SuperplexrDesktop {
 
     fn execute_command_query(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let query = self.command_query.trim().to_lowercase();
-        if query.contains("interrupt") || query == "ctrl-c" {
+        if query.contains("attention") || query.contains("approval") || query.contains("blocked") {
+            #[cfg(not(test))]
+            self.open_next_attention(window, cx);
+        } else if query.contains("interrupt") || query == "ctrl-c" {
             if let Some(surface) = self
                 .active_surface
                 .and_then(|index| self.surfaces.get(index))
@@ -4716,6 +4720,41 @@ impl SuperplexrDesktop {
             self.add_session(window, cx);
         }
         self.command_query.clear();
+    }
+
+    #[cfg(not(test))]
+    fn open_next_attention(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let active = self.workspaces.active_id();
+        let target = self
+            .workspaces
+            .tabs()
+            .iter()
+            .filter(|tab| tab.id() == active)
+            .chain(
+                self.workspaces
+                    .tabs()
+                    .iter()
+                    .filter(|tab| tab.id() != active),
+            )
+            .find_map(|tab| {
+                let mission = tab.content().mission.as_ref()?;
+                let item = mission.attention_queue().into_iter().next()?;
+                let session_id = mission
+                    .runs
+                    .get(&item.run_id)
+                    .and_then(|run| run.primary_session);
+                Some((tab.id(), item.signal_id, session_id))
+            });
+        if let Some((workspace_id, signal_id, session_id)) = target {
+            if workspace_id != active {
+                self.select_workspace(workspace_id, window, cx);
+            }
+            self.open_attention(signal_id, session_id, window, cx);
+        } else {
+            self.command_deck_open = false;
+            self.focus_active_terminal(window, cx);
+            cx.notify();
+        }
     }
 
     fn request_session_termination(&mut self, cx: &mut Context<Self>) {
@@ -7199,6 +7238,12 @@ impl SuperplexrDesktop {
 
     fn command_deck(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active_pinned = self.workspaces.active().pinned();
+        let attention_count: usize = self
+            .workspaces
+            .tabs()
+            .iter()
+            .map(|tab| tab.content().attention_count())
+            .sum();
         div()
             .absolute()
             .inset_0()
@@ -7276,6 +7321,38 @@ impl SuperplexrDesktop {
                                 ),
                         )
                     })
+                    .child(
+                        div()
+                            .id("deck-next-attention")
+                            .h(ui_size(34.0))
+                            .flex()
+                            .items_center()
+                            .px_3()
+                            .cursor_pointer()
+                            .on_click(cx.listener(|desktop, _, window, cx| {
+                                #[cfg(not(test))]
+                                desktop.open_next_attention(window, cx);
+                                #[cfg(test)]
+                                let _ = (desktop, window, cx);
+                            }))
+                            .child(if attention_count == 0 {
+                                "Attention inbox clear".to_owned()
+                            } else {
+                                "Open next attention".to_owned()
+                            })
+                            .child(
+                                div()
+                                    .ml_auto()
+                                    .font_family(UI_FONT)
+                                    .text_xs()
+                                    .text_color(rgb(if attention_count == 0 {
+                                        TRACE
+                                    } else {
+                                        SIGNAL
+                                    }))
+                                    .child(attention_count.to_string()),
+                            ),
+                    )
                     .when(!self.shared_mode, |deck| {
                         deck.child(
                             div()
@@ -7526,6 +7603,12 @@ impl Render for SuperplexrDesktop {
             }))
             .on_action(cx.listener(|desktop, _: &ToggleCommandDeck, window, cx| {
                 desktop.toggle_command_deck(window, cx);
+            }))
+            .on_action(cx.listener(|desktop, _: &OpenNextAttention, window, cx| {
+                #[cfg(not(test))]
+                desktop.open_next_attention(window, cx);
+                #[cfg(test)]
+                let _ = (desktop, window, cx);
             }))
             .on_action(cx.listener(|desktop, _: &NewSession, window, cx| {
                 desktop.add_session(window, cx);
@@ -7931,6 +8014,7 @@ fn main() {
                 KeyBinding::new("ctrl-shift-tab", PreviousWorkspace, Some("Workspace")),
                 KeyBinding::new("cmd-shift-p", ToggleWorkspacePin, Some("Workspace")),
                 KeyBinding::new("cmd-k", ToggleCommandDeck, Some("Workspace")),
+                KeyBinding::new("cmd-shift-a", OpenNextAttention, Some("Workspace")),
                 KeyBinding::new("cmd-n", NewSession, Some("Workspace")),
                 KeyBinding::new("cmd-d", NewTerminal, Some("Workspace")),
                 KeyBinding::new("alt-down", NextSession, Some("Workspace")),
@@ -7974,6 +8058,7 @@ fn main() {
                 KeyBinding::new("ctrl-shift-tab", PreviousWorkspace, Some("Workspace")),
                 KeyBinding::new("ctrl-shift-p", ToggleWorkspacePin, Some("Workspace")),
                 KeyBinding::new("ctrl-k", ToggleCommandDeck, Some("Workspace")),
+                KeyBinding::new("ctrl-shift-a", OpenNextAttention, Some("Workspace")),
                 KeyBinding::new("ctrl-shift-n", NewSession, Some("Workspace")),
                 KeyBinding::new("ctrl-shift-d", NewTerminal, Some("Workspace")),
                 KeyBinding::new("alt-down", NextSession, Some("Workspace")),

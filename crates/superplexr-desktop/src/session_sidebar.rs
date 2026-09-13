@@ -331,7 +331,7 @@ impl SuperplexrDesktop {
     }
 
     #[cfg(not(test))]
-    fn open_attention(
+    pub(crate) fn open_attention(
         &mut self,
         signal_id: SignalId,
         session_id: Option<SessionId>,

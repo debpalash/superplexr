@@ -1,4 +1,5 @@
 mod attach;
+mod cache_doctor;
 mod device_credentials;
 mod shell_init;
 mod ssh_tunnel;
@@ -71,6 +72,43 @@ struct Args {
 
 #[derive(Debug, Subcommand)]
 enum CliCommand {
+    /// Create a Mission, plan explicit Runs, and launch their configured agents.
+    Launch {
+        /// Mission intent. Used as the Run objective when no --task is supplied.
+        intent: String,
+        /// Explicit agent objective. Repeat to launch several independent Runs.
+        #[arg(long = "task")]
+        tasks: Vec<String>,
+        #[arg(long, default_value = "codex")]
+        engine: String,
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        /// Prepare an isolated git worktree for each Run.
+        #[arg(long)]
+        checkout: bool,
+        #[arg(long, default_value = "HEAD")]
+        base_ref: String,
+        #[arg(long, default_value_t = 120)]
+        columns: u16,
+        #[arg(long, default_value_t = 36)]
+        rows: u16,
+    },
+    /// Print unresolved requests across active Missions in compact priority order.
+    Attention {
+        /// Limit the inbox to one Mission.
+        mission_id: Option<MissionId>,
+    },
+    /// Report bounded cache usage; optionally clean only this workspace's build cache.
+    Doctor {
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        #[arg(long, default_value_os_t = superplexr_protocol::default_state_dir())]
+        state_dir: PathBuf,
+        #[arg(long, default_value_t = 1_000_000)]
+        entry_limit: usize,
+        #[arg(long)]
+        clean_build_cache: bool,
+    },
     /// List one bounded page of verifier Runs in a Mission; read-only.
     VerificationList {
         mission_id: MissionId,
@@ -1475,6 +1513,82 @@ async fn main() -> Result<(), CliError> {
             | CliCommand::TerminalWaitExit { compact: true, .. }
     );
     let command = match command {
+        CliCommand::Doctor {
+            workspace,
+            state_dir,
+            entry_limit,
+            clean_build_cache,
+        } => {
+            if share_token.is_some()
+                || expected_version.is_some()
+                || idempotency_key.is_some()
+                || force_control
+            {
+                return Err(CliError::Usage(
+                    "doctor is local-only and accepts no connection or mutation overrides".into(),
+                ));
+            }
+            let workspace = workspace
+                .map(Ok)
+                .unwrap_or_else(|| std::env::current_dir().map_err(CliError::CurrentDirectory))?;
+            if entry_limit == 0 {
+                return Err(CliError::Usage("--entry-limit must be at least 1".into()));
+            }
+            cache_doctor::run(workspace, state_dir, entry_limit, clean_build_cache)
+                .map_err(CliError::Usage)?;
+            return Ok(());
+        }
+        CliCommand::Attention { mission_id } => {
+            if expected_version.is_some() || idempotency_key.is_some() || force_control {
+                return Err(CliError::Usage(
+                    "attention is read-only and accepts no mutation overrides".into(),
+                ));
+            }
+            tokio::task::spawn_blocking(move || {
+                print_attention_inbox(&socket, share_token, mission_id)
+            })
+            .await
+            .map_err(|error| CliError::Usage(error.to_string()))??;
+            return Ok(());
+        }
+        CliCommand::Launch {
+            intent,
+            tasks,
+            engine,
+            cwd,
+            checkout,
+            base_ref,
+            columns,
+            rows,
+        } => {
+            if share_token.is_some()
+                || expected_version.is_some()
+                || idempotency_key.is_some()
+                || force_control
+            {
+                return Err(CliError::Usage(
+                    "launch requires an owner connection and accepts no mutation overrides".into(),
+                ));
+            }
+            let cwd = cwd
+                .map(Ok)
+                .unwrap_or_else(|| std::env::current_dir().map_err(CliError::CurrentDirectory))?;
+            tokio::task::spawn_blocking(move || {
+                launch_mission(
+                    &socket,
+                    intent,
+                    tasks,
+                    engine,
+                    cwd,
+                    checkout,
+                    base_ref,
+                    GridSize::new(columns, rows)?,
+                )
+            })
+            .await
+            .map_err(|error| CliError::Usage(error.to_string()))??;
+            return Ok(());
+        }
         CliCommand::TerminalSearchPages {
             session_id,
             query,
@@ -2441,6 +2555,168 @@ async fn launch_scheduled_runs(
             "failures": failures,
         }))?
     );
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn launch_mission(
+    socket: &Path,
+    intent: String,
+    tasks: Vec<String>,
+    engine: String,
+    cwd: PathBuf,
+    checkout: bool,
+    base_ref: String,
+    grid: GridSize,
+) -> Result<(), CliError> {
+    let intent = intent.trim().to_owned();
+    if intent.is_empty() {
+        return Err(CliError::Usage("mission intent cannot be empty".into()));
+    }
+    let tasks = if tasks.is_empty() {
+        vec![intent.clone()]
+    } else {
+        tasks
+            .into_iter()
+            .map(|task| task.trim().to_owned())
+            .collect::<Vec<_>>()
+    };
+    if tasks.iter().any(String::is_empty) {
+        return Err(CliError::Usage("--task cannot be empty".into()));
+    }
+    if engine.trim().is_empty() {
+        return Err(CliError::Usage("--engine cannot be empty".into()));
+    }
+    let cwd = cwd.canonicalize().map_err(|error| {
+        CliError::Usage(format!("could not resolve {}: {error}", cwd.display()))
+    })?;
+    let client = ControlClient::connect(socket)?;
+    let mission_id = MissionId::new();
+    let mut mission = client.create_mission(mission_id, &intent, Actor::human("you")?)?;
+
+    println!(
+        "MISSION {mission_id} | {} agent{} | {}",
+        tasks.len(),
+        if tasks.len() == 1 { "" } else { "s" },
+        cwd.display()
+    );
+    for (index, objective) in tasks.into_iter().enumerate() {
+        let run_id = RunId::new();
+        let session_id = SessionId::new();
+        let actor_name = format!("agent-{}", index + 1);
+        client.dispatch_at(
+            mission_id,
+            Some(mission.version),
+            Command::PlanRun {
+                run_id,
+                parent: None,
+                dependencies: Vec::new(),
+                retry_of: None,
+                actor: Actor::agent(&actor_name, &engine)?,
+                objective: objective.clone(),
+                priority: RunPriority::Normal,
+            },
+        )?;
+
+        if checkout
+            && let Err(error) =
+                client.prepare_run_checkout(mission_id, run_id, cwd.clone(), base_ref.clone())
+        {
+            return Err(CliError::Usage(format!(
+                "Mission {mission_id} and Run {run_id} were created, but checkout preparation failed: {error}. Inspect this Run before retrying"
+            )));
+        }
+
+        let session_name = format!("{actor_name}-{engine}");
+        let launched = if checkout {
+            client.launch_configured_agent_run_in_checkout(
+                mission_id,
+                run_id,
+                session_id,
+                &session_name,
+                grid,
+            )
+        } else {
+            client.launch_configured_agent_run(
+                mission_id,
+                run_id,
+                session_id,
+                &session_name,
+                cwd.clone(),
+                grid,
+            )
+        };
+        match launched {
+            Ok((_, updated, terminal)) => {
+                mission = updated;
+                println!(
+                    "RUN {run_id} SESSION {} {actor_name}/{engine} | {}",
+                    terminal.session_id,
+                    one_line(&objective)
+                );
+            }
+            Err(error) => {
+                return Err(CliError::Usage(format!(
+                    "Mission {mission_id} and Run {run_id} were created, but agent launch failed: {error}. Inspect this Run before retrying"
+                )));
+            }
+        }
+    }
+    println!("READY mission-brief {mission_id}");
+    Ok(())
+}
+
+fn attention_kind_label(kind: superplexr_core::AttentionKind) -> &'static str {
+    use superplexr_core::AttentionKind;
+    match kind {
+        AttentionKind::HighRiskApproval => "HIGH_RISK",
+        AttentionKind::Escalation => "ESCALATION",
+        AttentionKind::Blocked => "BLOCKED",
+        AttentionKind::Approval => "APPROVAL",
+        AttentionKind::Input => "INPUT",
+    }
+}
+
+fn print_attention_inbox(
+    socket: &Path,
+    share_token: Option<String>,
+    mission_id: Option<MissionId>,
+) -> Result<(), CliError> {
+    let client = match share_token {
+        Some(token) => ControlClient::connect_with_share(socket, token)?,
+        None => ControlClient::connect(socket)?,
+    };
+    let missions = match mission_id {
+        Some(mission_id) => vec![client.get_mission(mission_id)?],
+        None => client
+            .list_missions()?
+            .into_iter()
+            .filter(|summary| summary.attention_count > 0)
+            .map(|summary| client.get_mission(summary.id))
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+    let mut items = missions
+        .into_iter()
+        .flat_map(|mission| {
+            mission
+                .attention_queue()
+                .into_iter()
+                .map(move |item| (mission.id, item))
+        })
+        .collect::<Vec<_>>();
+    items.sort_by_key(|(mission_id, item)| (item.kind, *mission_id, item.signal_id));
+    println!("ATTENTION {}", items.len());
+    for (mission_id, item) in items {
+        println!(
+            "{} mission={} run={} signal={} actor={} | {}",
+            attention_kind_label(item.kind),
+            mission_id,
+            item.run_id,
+            item.signal_id,
+            item.actor.id,
+            one_line(&item.summary)
+        );
+    }
     Ok(())
 }
 
@@ -3938,6 +4214,9 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
         CliCommand::ShareRevoke { share_id } => Request::RevokeShare { share_id },
         CliCommand::ScheduleLaunch { .. } => {
             unreachable!("scheduled launches are executed as a multi-request CLI operation")
+        }
+        CliCommand::Launch { .. } | CliCommand::Attention { .. } | CliCommand::Doctor { .. } => {
+            unreachable!("workflow commands are handled before one-shot protocol conversion")
         }
         CliCommand::RemoteForward { .. } => {
             unreachable!("remote forwarding is executed before protocol connection")

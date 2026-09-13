@@ -77,6 +77,7 @@ Sessions when reopened.
 | Action | macOS | Linux |
 |---|---|---|
 | Command deck | <kbd>Cmd</kbd>+<kbd>K</kbd> | <kbd>Ctrl</kbd>+<kbd>K</kbd> |
+| Next attention | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>A</kbd> |
 | New Mission | <kbd>Cmd</kbd>+<kbd>T</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> |
 | New Session | <kbd>Cmd</kbd>+<kbd>N</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> |
 | Focus mode | <kbd>Cmd</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd> | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Enter</kbd> |
@@ -98,16 +99,18 @@ agent work. CLI, TUI, MCP, browser observer, and remote clients use the same run
 ```sh
 cargo run -p superplexr-cli -- list
 cargo run -p superplexr-cli -- status
+cargo run -p superplexr-cli -- launch "Ship the release" \
+  --task "Fix the failing tests" --task "Review the README" --checkout
+cargo run -p superplexr-cli -- attention
 cargo run -p superplexr-cli -- terminal-text "$SESSION_ID"
 cargo run -p superplexr-cli -- terminal-wait-exit "$SESSION_ID" --compact
 cargo run -p superplexr-cli -- mission-brief "$MISSION_ID"
+cargo run -p superplexr-cli -- doctor
 ```
 
-`terminal-text` emits only meaningful visible rows, so agents can inspect a Session
-without consuming tokens on terminal cell metadata or empty grid space. `mission-brief`
-similarly emits stable plain text for a Mission and one concise line per Run and Session,
-without verbose verification harness data or empty maps. Terminal wait commands accept
-`--compact` to avoid returning a full cell frame when a wait completes.
+`launch` creates a Mission and starts each explicit task through its configured engine.
+`attention`, `terminal-text`, compact waits, and `mission-brief` keep agent reads short.
+`doctor` reports bounded cache usage and cleans only the workspace build cache when asked.
 
 <details>
 <summary>Browser observer preview</summary>
