@@ -20,9 +20,9 @@ use superplexr_client::ControlClient;
 use superplexr_core::{
     Actor, ActorId, ArtifactId, ChangeClaim, ChangeClaimKey, ChangeIntentSpec, ChangeOperation,
     ChangeScope, Command, DomainError, EvaluationCheck, EvaluationReceipt, EvaluationVerdict,
-    FaultId, FinishOutcome, GrantEnforcement, GrantId, HandoffArtifact, MissionId, PauseReason,
-    Risk, RunCandidate, RunId, RunPriority, SessionId, SignalId, SignalKind, VerificationPolicy,
-    VerifiedDeliveryCommand,
+    FaultId, FinishOutcome, GrantEnforcement, GrantId, HandoffArtifact, Mission, MissionId,
+    MissionStatus, PauseReason, Risk, RunCandidate, RunId, RunPriority, RunStatus, SessionId,
+    SessionStatus, SignalId, SignalKind, VerificationPolicy, VerifiedDeliveryCommand,
 };
 use superplexr_protocol::{
     ChangeRequestEvidenceState, CheckEvidenceState, ClientRequest, FaultInput, FaultKind,
@@ -1074,6 +1074,10 @@ enum CliCommand {
     Show {
         mission_id: MissionId,
     },
+    /// Print a compact, stable plain-text overview of a Mission, its Runs, and Sessions.
+    MissionBrief {
+        mission_id: MissionId,
+    },
     /// Read the latest durable Mission events with correlation metadata.
     History {
         mission_id: MissionId,
@@ -1454,6 +1458,7 @@ async fn main() -> Result<(), CliError> {
     // next actor can read it (or paste it) without parsing.
     let render_handoff = matches!(command, CliCommand::FaultHandoff { .. });
     let render_terminal_text = matches!(command, CliCommand::TerminalText { .. });
+    let render_mission_brief = matches!(command, CliCommand::MissionBrief { .. });
     let command = match command {
         CliCommand::TerminalSearchPages {
             session_id,
@@ -1903,6 +1908,10 @@ async fn main() -> Result<(), CliError> {
             print!("{text}");
             return Ok(());
         }
+        if render_mission_brief && let Some(text) = mission_brief(&body) {
+            print!("{text}");
+            return Ok(());
+        }
         println!("{}", serde_json::to_string_pretty(&body)?);
         return Ok(());
     }
@@ -1951,6 +1960,10 @@ async fn main() -> Result<(), CliError> {
         print!("{text}");
         return Ok(());
     }
+    if render_mission_brief && let Some(text) = mission_brief(&body) {
+        print!("{text}");
+        return Ok(());
+    }
     println!("{}", serde_json::to_string_pretty(&body)?);
     Ok(())
 }
@@ -1975,6 +1988,83 @@ fn terminal_frame_text(frame: &superplexr_terminal::FullFrame) -> String {
         }
     }
     text
+}
+
+/// Render the Mission's operational outline without evidence maps or harness details.
+fn mission_brief(body: &ResponseBody) -> Option<String> {
+    let ResponseBody::Mission { mission } = body else {
+        return None;
+    };
+    Some(mission_brief_text(mission))
+}
+
+fn mission_brief_text(mission: &Mission) -> String {
+    use std::fmt::Write as _;
+
+    let mut brief = String::new();
+    let _ = writeln!(brief, "MISSION {}", mission.id);
+    let _ = writeln!(brief, "intent: {}", one_line(&mission.intent));
+    let _ = writeln!(brief, "status: {}", mission_status_text(mission.status));
+    let _ = writeln!(brief, "version: {}", mission.version);
+
+    let mut runs = mission.runs.values().collect::<Vec<_>>();
+    runs.sort_unstable_by_key(|run| run.id);
+    for run in runs {
+        let _ = writeln!(
+            brief,
+            "RUN {} | {} | {} | {}",
+            run.id,
+            run_status_text(run.status),
+            run.actor.id,
+            one_line(&run.objective)
+        );
+    }
+
+    let mut sessions = mission.sessions.values().collect::<Vec<_>>();
+    sessions.sort_unstable_by_key(|session| session.id);
+    for session in sessions {
+        let _ = writeln!(
+            brief,
+            "SESSION {} | {} | {} | controller {}",
+            session.id,
+            session_status_text(session.status),
+            one_line(&session.name),
+            session.controller.id
+        );
+    }
+    brief
+}
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+const fn mission_status_text(status: MissionStatus) -> &'static str {
+    match status {
+        MissionStatus::Active => "active",
+        MissionStatus::Completed => "completed",
+        MissionStatus::Abandoned => "abandoned",
+    }
+}
+
+const fn run_status_text(status: RunStatus) -> &'static str {
+    match status {
+        RunStatus::Pending => "pending",
+        RunStatus::Running => "running",
+        RunStatus::AwaitingAttention => "awaiting_attention",
+        RunStatus::Paused => "paused",
+        RunStatus::Succeeded => "succeeded",
+        RunStatus::Failed => "failed",
+        RunStatus::Cancelled => "cancelled",
+    }
+}
+
+fn session_status_text(status: SessionStatus) -> String {
+    match status {
+        SessionStatus::Running => "running".to_owned(),
+        SessionStatus::Exited { code: Some(code) } => format!("exited({code})"),
+        SessionStatus::Exited { code: None } => "exited".to_owned(),
+    }
 }
 
 /// Render a Fault as a compact brief for the next actor, human or agent.
@@ -3712,7 +3802,9 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
             mission_id,
             command: Command::AbandonMission,
         },
-        CliCommand::Show { mission_id } => Request::GetMission { mission_id },
+        CliCommand::Show { mission_id } | CliCommand::MissionBrief { mission_id } => {
+            Request::GetMission { mission_id }
+        }
         CliCommand::History {
             mission_id,
             before_sequence,
@@ -3910,6 +4002,112 @@ fn signal_request(mission_id: MissionId, run_id: RunId, kind: SignalKind) -> Req
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mission_brief_uses_the_show_request() {
+        let mission_id = MissionId::new();
+        let show = into_request(CliCommand::Show { mission_id }).expect("show request");
+        let brief = into_request(CliCommand::MissionBrief { mission_id }).expect("brief request");
+
+        assert_eq!(brief, show);
+        assert_eq!(brief, Request::GetMission { mission_id });
+    }
+
+    #[test]
+    fn mission_brief_is_stable_compact_and_single_line_per_item() {
+        use std::collections::HashMap;
+
+        use superplexr_core::{
+            Run, RunDisposition, RunPhase, RunPriority, Session, VerifiedDelivery,
+        };
+
+        let mission_id = MissionId::from_uuid(Uuid::from_u128(1));
+        let first_run_id = RunId::from_uuid(Uuid::from_u128(2));
+        let second_run_id = RunId::from_uuid(Uuid::from_u128(3));
+        let first_session_id = SessionId::from_uuid(Uuid::from_u128(4));
+        let second_session_id = SessionId::from_uuid(Uuid::from_u128(5));
+        let agent = Actor::agent("agent-1", "codex").expect("agent actor");
+        let human = Actor::human("alice").expect("human actor");
+        let run = |id, status, objective: &str| Run {
+            id,
+            parent: None,
+            dependencies: Vec::new(),
+            retry_of: None,
+            priority: RunPriority::Normal,
+            phase: RunPhase::Running,
+            outcome: None,
+            disposition: RunDisposition::None,
+            pause_reason: None,
+            actor: agent.clone(),
+            planned_at_unix_micros: None,
+            finished_at_unix_micros: None,
+            driver_snapshot: None,
+            primary_session: None,
+            objective: objective.to_owned(),
+            status,
+            summary: None,
+            settlement: None,
+        };
+        let mission = Mission {
+            id: mission_id,
+            intent: "Ship a compact\n mission view".to_owned(),
+            created_by: human.clone(),
+            status: MissionStatus::Active,
+            version: 7,
+            runs: HashMap::from([
+                (
+                    second_run_id,
+                    run(second_run_id, RunStatus::Succeeded, "Write focused tests"),
+                ),
+                (
+                    first_run_id,
+                    run(first_run_id, RunStatus::Running, "Render\tplain text"),
+                ),
+            ]),
+            sessions: HashMap::from([
+                (
+                    second_session_id,
+                    Session {
+                        id: second_session_id,
+                        name: "test runner".to_owned(),
+                        started_by: agent.clone(),
+                        controller: human.clone(),
+                        status: SessionStatus::Exited { code: Some(0) },
+                        run_history: vec![second_run_id],
+                    },
+                ),
+                (
+                    first_session_id,
+                    Session {
+                        id: first_session_id,
+                        name: "agent\n terminal".to_owned(),
+                        started_by: human.clone(),
+                        controller: agent,
+                        status: SessionStatus::Running,
+                        run_history: vec![first_run_id],
+                    },
+                ),
+            ]),
+            signals: HashMap::new(),
+            grants: HashMap::new(),
+            artifacts: HashMap::new(),
+            verified_delivery: VerifiedDelivery::default(),
+        };
+
+        assert_eq!(
+            mission_brief_text(&mission),
+            concat!(
+                "MISSION 00000000-0000-0000-0000-000000000001\n",
+                "intent: Ship a compact mission view\n",
+                "status: active\n",
+                "version: 7\n",
+                "RUN 00000000-0000-0000-0000-000000000002 | running | agent-1 | Render plain text\n",
+                "RUN 00000000-0000-0000-0000-000000000003 | succeeded | agent-1 | Write focused tests\n",
+                "SESSION 00000000-0000-0000-0000-000000000004 | running | agent terminal | controller agent-1\n",
+                "SESSION 00000000-0000-0000-0000-000000000005 | exited(0) | test runner | controller alice\n",
+            )
+        );
+    }
 
     #[test]
     fn ssh_destinations_accept_hosts_and_reject_option_or_command_injection() {
