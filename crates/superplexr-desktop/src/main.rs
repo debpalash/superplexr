@@ -495,6 +495,8 @@ struct SuperplexrDesktop {
     sidebar_custom_width: Option<f32>,
     app_zoom: AppZoom,
     pane_layouts: PaneLayoutStore,
+    /// Finished Runs open on their result card; people may reveal raw terminal history per Run.
+    finished_history_open: std::collections::HashSet<superplexr_core::RunId>,
     /// Developer telemetry rail; hidden by default outside tests.
     status_bar_visible: bool,
     /// Faults known to this desktop, newest first.
@@ -725,6 +727,56 @@ fn run_depth(mission: &Mission, run_id: RunId) -> usize {
 #[cfg(not(test))]
 fn short_id(id: impl ToString) -> String {
     id.to_string().chars().take(8).collect()
+}
+
+fn parse_token_usage(text: &str) -> Option<u64> {
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        if line.trim().eq_ignore_ascii_case("tokens used") {
+            return lines
+                .next()
+                .map(str::trim)
+                .map(|value| value.replace(',', ""))
+                .and_then(|value| value.parse().ok());
+        }
+    }
+    None
+}
+
+#[cfg(not(test))]
+fn format_token_count(tokens: u64) -> String {
+    if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
+    }
+}
+
+#[cfg(not(test))]
+fn result_metric(label: &str, value: &str, color: ColorToken) -> AnyElement {
+    div()
+        .p_2()
+        .rounded(ui_size(4.0))
+        .bg(rgb(DECK))
+        .child(
+            div()
+                .mb_1()
+                .font_family(UI_FONT)
+                .text_xs()
+                .text_color(rgb(TRACE))
+                .child(label.to_owned()),
+        )
+        .child(
+            div()
+                .font_family(PRODUCT_FONT)
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(color))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .child(value.to_owned()),
+        )
+        .into_any_element()
 }
 
 #[cfg(not(test))]
@@ -1110,6 +1162,7 @@ impl SuperplexrDesktop {
             sidebar_custom_width: None,
             app_zoom: AppZoom::default(),
             pane_layouts: PaneLayoutStore::default(),
+            finished_history_open: Default::default(),
             status_bar_visible: cfg!(test),
             faults: Vec::new(),
             fault_panel_open: false,
@@ -1549,6 +1602,7 @@ impl SuperplexrDesktop {
             sidebar_custom_width,
             app_zoom: AppZoom::default(),
             pane_layouts: PaneLayoutStore::default(),
+            finished_history_open: Default::default(),
             status_bar_visible: false,
             faults: Vec::new(),
             fault_panel_open: false,
@@ -6490,6 +6544,243 @@ impl SuperplexrDesktop {
         cx.notify();
     }
 
+    #[cfg(not(test))]
+    fn finished_run_for_terminal(&self, terminal: usize) -> Option<superplexr_core::Run> {
+        let run_id = self.surface_runs.get(terminal).copied().flatten()?;
+        self.workspace()
+            .mission
+            .as_ref()?
+            .runs
+            .get(&run_id)
+            .filter(|run| {
+                matches!(
+                    run.status,
+                    superplexr_core::RunStatus::Succeeded
+                        | superplexr_core::RunStatus::Failed
+                        | superplexr_core::RunStatus::Cancelled
+                )
+            })
+            .cloned()
+    }
+
+    #[cfg(not(test))]
+    fn finished_run_result(
+        &self,
+        terminal: usize,
+        run: &superplexr_core::Run,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let succeeded = run.status == superplexr_core::RunStatus::Succeeded;
+        let outcome = if succeeded {
+            "Succeeded"
+        } else if run.status == superplexr_core::RunStatus::Cancelled {
+            "Cancelled"
+        } else {
+            "Failed"
+        };
+        let review = match run.disposition {
+            superplexr_core::RunDisposition::Accepted => "Accepted",
+            superplexr_core::RunDisposition::Rejected => "Changes requested",
+            superplexr_core::RunDisposition::AwaitingReview => "Ready for review",
+            superplexr_core::RunDisposition::None => "Unreviewed",
+        };
+        let engine = match &run.actor.kind {
+            superplexr_core::ActorKind::Agent { engine } => engine.as_str(),
+            superplexr_core::ActorKind::Human => "human",
+        };
+        let tokens = self
+            .surfaces
+            .get(terminal)
+            .and_then(|surface| parse_token_usage(&surface.read(cx).visible_text()));
+        let token_text = tokens.map_or_else(|| "Not reported".to_owned(), format_token_count);
+        let token_color = if tokens.is_some_and(|tokens| tokens > 40_000) {
+            SIGNAL
+        } else {
+            TRACE
+        };
+        let evidence = run
+            .settlement
+            .as_ref()
+            .map(|settlement| settlement.note.clone())
+            .or_else(|| run.summary.clone())
+            .unwrap_or_else(|| "No result summary was recorded.".to_owned());
+        let title = self
+            .workspace()
+            .mission
+            .as_ref()
+            .map(|mission| mission.intent.clone())
+            .unwrap_or_else(|| run.objective.clone());
+        let project = self
+            .surfaces
+            .get(terminal)
+            .and_then(|surface| surface.read(cx).current_directory())
+            .and_then(|directory| std::path::Path::new(directory).file_name())
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap_or("Project")
+            .to_owned();
+        let run_id = run.id;
+
+        div()
+            .id(("finished-run-result", terminal))
+            .debug_selector(|| "finished-run-result".to_owned())
+            .size_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .p(ui_size(32.0))
+            .bg(rgb(DECK))
+            .child(
+                div()
+                    .w_full()
+                    .max_w(ui_size(760.0))
+                    .rounded(ui_size(6.0))
+                    .border_1()
+                    .border_color(rgb(if succeeded { RELAY } else { FAULT }))
+                    .bg(rgb(PANEL))
+                    .shadow_lg()
+                    .child(
+                        div()
+                            .h(ui_size(4.0))
+                            .bg(rgb(if succeeded { SUCCESS } else { FAULT })),
+                    )
+                    .child(
+                        div()
+                            .p(ui_size(24.0))
+                            .flex()
+                            .flex_col()
+                            .gap(ui_size(18.0))
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .font_family(UI_FONT)
+                                            .text_xs()
+                                            .text_color(rgb(if succeeded {
+                                                SUCCESS
+                                            } else {
+                                                FAULT
+                                            }))
+                                            .child(if succeeded {
+                                                "RUN COMPLETE"
+                                            } else {
+                                                "RUN ENDED"
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .ml_auto()
+                                            .px_2()
+                                            .py_1()
+                                            .rounded(ui_size(12.0))
+                                            .bg(rgb(ACTIVE))
+                                            .font_family(UI_FONT)
+                                            .text_xs()
+                                            .text_color(rgb(CHALK))
+                                            .child(review),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .font_family(PRODUCT_FONT)
+                                    .text_size(ui_size(22.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .text_color(rgb(CHALK))
+                                    .whitespace_normal()
+                                    .child(title),
+                            )
+                            .child(
+                                div()
+                                    .grid()
+                                    .grid_cols(4)
+                                    .gap_3()
+                                    .child(result_metric(
+                                        "Outcome",
+                                        outcome,
+                                        if succeeded { SUCCESS } else { FAULT },
+                                    ))
+                                    .child(result_metric("Agent", engine, RELAY))
+                                    .child(result_metric("Token use", &token_text, token_color))
+                                    .child(result_metric("Project", &project, TRACE)),
+                            )
+                            .child(
+                                div()
+                                    .p_3()
+                                    .rounded(ui_size(4.0))
+                                    .bg(rgb(DECK))
+                                    .border_1()
+                                    .border_color(rgb(HAIRLINE))
+                                    .child(
+                                        div()
+                                            .mb_1()
+                                            .font_family(UI_FONT)
+                                            .text_xs()
+                                            .text_color(rgb(TRACE))
+                                            .child("REVIEW EVIDENCE"),
+                                    )
+                                    .child(
+                                        div()
+                                            .font_family(PRODUCT_FONT)
+                                            .text_sm()
+                                            .text_color(rgb(CHALK))
+                                            .whitespace_normal()
+                                            .child(evidence),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .font_family(UI_FONT)
+                                            .text_xs()
+                                            .text_color(rgb(
+                                                if tokens.is_some_and(|value| value > 40_000) {
+                                                    SIGNAL
+                                                } else {
+                                                    TRACE
+                                                },
+                                            ))
+                                            .child(if tokens.is_some_and(|value| value > 40_000) {
+                                                format!(
+                                                    "△ Above 40k guide · Run {}",
+                                                    short_id(run.id)
+                                                )
+                                            } else {
+                                                format!(
+                                                    "Run {} · history retained",
+                                                    short_id(run.id)
+                                                )
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .id(("view-terminal-history", terminal))
+                                            .debug_selector(|| "view-terminal-history".to_owned())
+                                            .ml_auto()
+                                            .px_3()
+                                            .py_2()
+                                            .rounded(ui_size(4.0))
+                                            .cursor_pointer()
+                                            .bg(rgb(ACTIVE))
+                                            .font_family(UI_FONT)
+                                            .text_xs()
+                                            .text_color(rgb(RELAY))
+                                            .hover(|button| button.text_color(rgb(CHALK)))
+                                            .on_click(cx.listener(move |desktop, _, _, cx| {
+                                                desktop.finished_history_open.insert(run_id);
+                                                cx.notify();
+                                            }))
+                                            .child("View terminal history"),
+                                    ),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
     /// One terminal with its header: status dot, mark, title, directory, and
     /// the focus and close actions.
     fn terminal_pane(&self, terminal: usize, cx: &mut Context<Self>) -> AnyElement {
@@ -6511,6 +6802,14 @@ impl SuperplexrDesktop {
             .surfaces
             .get(terminal)
             .is_some_and(|surface| surface.read(cx).has_ended());
+        #[cfg(not(test))]
+        let finished_run = self.finished_run_for_terminal(terminal);
+        #[cfg(test)]
+        let finished_run: Option<superplexr_core::Run> = None;
+        let history_open = finished_run
+            .as_ref()
+            .is_some_and(|run| self.finished_history_open.contains(&run.id));
+        let show_result = ended && finished_run.is_some() && !history_open;
         let accessibility_label = format!("{title}, {}", status.label("agent"));
 
         div()
@@ -6598,6 +6897,30 @@ impl SuperplexrDesktop {
                         )
                     })
                     .child(div().flex_1())
+                    .when_some(
+                        finished_run.as_ref().filter(|_| history_open),
+                        |header, run| {
+                            let run_id = run.id;
+                            header.child(
+                                div()
+                                    .id(("pane-result", terminal))
+                                    .px_2()
+                                    .h(ui_size(18.0))
+                                    .flex()
+                                    .items_center()
+                                    .rounded(ui_size(3.0))
+                                    .cursor_pointer()
+                                    .bg(rgb(ACTIVE))
+                                    .text_color(rgb(RELAY))
+                                    .on_click(cx.listener(move |desktop, _, _, cx| {
+                                        cx.stop_propagation();
+                                        desktop.finished_history_open.remove(&run_id);
+                                        cx.notify();
+                                    }))
+                                    .child("Result"),
+                            )
+                        },
+                    )
                     .child(
                         div()
                             .id(("pane-focus", terminal))
@@ -6645,14 +6968,30 @@ impl SuperplexrDesktop {
                         )
                     }),
             )
-            .child(
+            .child(if show_result {
+                #[cfg(not(test))]
+                {
+                    self.finished_run_result(
+                        terminal,
+                        finished_run
+                            .as_ref()
+                            .expect("result requires a finished Run"),
+                        cx,
+                    )
+                }
+                #[cfg(test)]
+                {
+                    unreachable!("test fixtures have no durable Run binding")
+                }
+            } else {
                 div()
                     .flex()
                     .flex_1()
                     .min_h_0()
                     .min_w_0()
-                    .child(self.surfaces[terminal].clone()),
-            )
+                    .child(self.surfaces[terminal].clone())
+                    .into_any_element()
+            })
             .into_any_element()
     }
 
@@ -8181,6 +8520,13 @@ fn read_share_token(path: &Path) -> Result<String, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_agent_token_usage_is_extracted_from_terminal_summary() {
+        assert_eq!(parse_token_usage("tokens used\n58,969\n"), Some(58_969));
+        assert_eq!(parse_token_usage("TOKENS USED\n812\n"), Some(812));
+        assert_eq!(parse_token_usage("ordinary terminal output"), None);
+    }
 
     /// New tabs are numbered among the tabs that are open.
     #[test]

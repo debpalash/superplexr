@@ -164,6 +164,18 @@ impl TerminalSurface {
     }
 
     #[cfg(not(test))]
+    pub(crate) fn visible_text(&self) -> String {
+        self.frame
+            .rows
+            .iter()
+            .map(|row| row.text())
+            .collect::<Vec<_>>()
+            .join("\n")
+            .trim_end()
+            .to_owned()
+    }
+
+    #[cfg(not(test))]
     pub(crate) fn current_directory(&self) -> Option<&str> {
         self.search_live_frame
             .as_ref()
@@ -1515,7 +1527,7 @@ impl gpui::Render for TerminalSurface {
                         }),
                 )
             })
-            .when(!self.writable, |element| {
+            .when(!self.writable && self.ended.is_none(), |element| {
                 element.child(
                     div()
                         .h(ui_size(26.0))
@@ -1532,6 +1544,7 @@ impl gpui::Render for TerminalSurface {
                         .child(
                             div()
                                 .id("request-terminal-control")
+                                .debug_selector(|| "request-terminal-control".to_owned())
                                 .ml_auto()
                                 .h(ui_size(20.0))
                                 .px_2()
@@ -2284,6 +2297,28 @@ mod tests {
         assert!(
             node.value()
                 .is_some_and(|value| value.contains("ghostty  terminal state pinned"))
+        );
+    }
+
+    #[gpui::test]
+    fn exited_read_only_terminal_does_not_offer_live_control(cx: &mut TestAppContext) {
+        let (surface, cx) = cx.add_window_view(|window, cx| {
+            TerminalSurface::new(window, cx).expect("terminal fixture should initialize")
+        });
+        cx.update(|_, cx| {
+            surface.update(cx, |surface, cx| {
+                surface.writable = false;
+                surface.historical = true;
+                surface.ended = Some(true);
+                surface.last_encoded = "retained history".to_owned();
+                cx.notify();
+            });
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+
+        assert!(
+            cx.debug_bounds("request-terminal-control").is_none(),
+            "an exited terminal cannot grant control and must not offer the action"
         );
     }
 }
