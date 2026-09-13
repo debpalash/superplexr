@@ -99,13 +99,15 @@ agent work. CLI, TUI, MCP, browser observer, and remote clients use the same run
 cargo run -p superplexr-cli -- list
 cargo run -p superplexr-cli -- status
 cargo run -p superplexr-cli -- terminal-text "$SESSION_ID"
+cargo run -p superplexr-cli -- terminal-wait-exit "$SESSION_ID" --compact
 cargo run -p superplexr-cli -- mission-brief "$MISSION_ID"
 ```
 
 `terminal-text` emits only meaningful visible rows, so agents can inspect a Session
 without consuming tokens on terminal cell metadata or empty grid space. `mission-brief`
 similarly emits stable plain text for a Mission and one concise line per Run and Session,
-without verbose verification harness data or empty maps.
+without verbose verification harness data or empty maps. Terminal wait commands accept
+`--compact` to avoid returning a full cell frame when a wait completes.
 
 <details>
 <summary>Browser observer preview</summary>

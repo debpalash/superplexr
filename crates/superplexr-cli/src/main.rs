@@ -407,6 +407,9 @@ enum CliCommand {
         query: String,
         #[arg(long)]
         case_sensitive: bool,
+        /// Emit a compact plain-text result instead of the full terminal frame JSON.
+        #[arg(long)]
+        compact: bool,
         #[arg(long, default_value_t = 30_000)]
         timeout_millis: u64,
     },
@@ -415,12 +418,18 @@ enum CliCommand {
         session_id: SessionId,
         #[arg(long, default_value_t = 500)]
         quiet_millis: u64,
+        /// Emit a compact plain-text result instead of the full terminal frame JSON.
+        #[arg(long)]
+        compact: bool,
         #[arg(long, default_value_t = 30_000)]
         timeout_millis: u64,
     },
     /// Wait until the Session exits or fails.
     TerminalWaitExit {
         session_id: SessionId,
+        /// Emit a compact plain-text result instead of the full terminal frame JSON.
+        #[arg(long)]
+        compact: bool,
         #[arg(long, default_value_t = 300_000)]
         timeout_millis: u64,
     },
@@ -1459,6 +1468,12 @@ async fn main() -> Result<(), CliError> {
     let render_handoff = matches!(command, CliCommand::FaultHandoff { .. });
     let render_terminal_text = matches!(command, CliCommand::TerminalText { .. });
     let render_mission_brief = matches!(command, CliCommand::MissionBrief { .. });
+    let render_terminal_wait_compact = matches!(
+        command,
+        CliCommand::TerminalWaitText { compact: true, .. }
+            | CliCommand::TerminalWaitQuiet { compact: true, .. }
+            | CliCommand::TerminalWaitExit { compact: true, .. }
+    );
     let command = match command {
         CliCommand::TerminalSearchPages {
             session_id,
@@ -1912,6 +1927,10 @@ async fn main() -> Result<(), CliError> {
             print!("{text}");
             return Ok(());
         }
+        if render_terminal_wait_compact && let Some(text) = terminal_wait_compact(&body) {
+            print!("{text}");
+            return Ok(());
+        }
         println!("{}", serde_json::to_string_pretty(&body)?);
         return Ok(());
     }
@@ -1964,6 +1983,10 @@ async fn main() -> Result<(), CliError> {
         print!("{text}");
         return Ok(());
     }
+    if render_terminal_wait_compact && let Some(text) = terminal_wait_compact(&body) {
+        print!("{text}");
+        return Ok(());
+    }
     println!("{}", serde_json::to_string_pretty(&body)?);
     Ok(())
 }
@@ -1988,6 +2011,33 @@ fn terminal_frame_text(frame: &superplexr_terminal::FullFrame) -> String {
         }
     }
     text
+}
+
+fn terminal_wait_compact(body: &ResponseBody) -> Option<String> {
+    use std::fmt::Write as _;
+
+    let ResponseBody::TerminalWaitSatisfied {
+        condition,
+        elapsed_millis,
+        capture,
+    } = body
+    else {
+        return None;
+    };
+    let condition = match condition {
+        TerminalWaitCondition::Text { .. } => "text",
+        TerminalWaitCondition::Quiet { .. } => "quiet",
+        TerminalWaitCondition::Exit => "exit",
+    };
+    let status = match capture.terminal.status {
+        superplexr_protocol::TerminalSessionStatus::Running => "running",
+        superplexr_protocol::TerminalSessionStatus::Exited => "exited",
+        superplexr_protocol::TerminalSessionStatus::Failed => "failed",
+    };
+    let mut result = String::new();
+    let _ = writeln!(result, "WAIT {condition} | {status} | {elapsed_millis}ms");
+    result.push_str(&terminal_frame_text(&capture.frame));
+    Some(result)
 }
 
 /// Render the Mission's operational outline without evidence maps or harness details.
@@ -3009,6 +3059,7 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
             session_id,
             query,
             case_sensitive,
+            compact: _,
             timeout_millis,
         } => Request::TerminalWait {
             session_id,
@@ -3021,6 +3072,7 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
         CliCommand::TerminalWaitQuiet {
             session_id,
             quiet_millis,
+            compact: _,
             timeout_millis,
         } => Request::TerminalWait {
             session_id,
@@ -3029,6 +3081,7 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
         },
         CliCommand::TerminalWaitExit {
             session_id,
+            compact: _,
             timeout_millis,
         } => Request::TerminalWait {
             session_id,
