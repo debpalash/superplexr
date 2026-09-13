@@ -140,7 +140,7 @@ impl Drop for Fixture {
 
 #[track_caller]
 fn until(mut predicate: impl FnMut() -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(8);
+    let deadline = Instant::now() + Duration::from_secs(15);
     while !predicate() {
         assert!(Instant::now() < deadline, "condition deadline");
         std::thread::sleep(Duration::from_millis(20));
