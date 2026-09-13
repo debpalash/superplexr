@@ -13,7 +13,7 @@ Release status: pre-release, version 0.1.0
 
 The SuperPlexr GUI is the primary operator interface. It presents browser-like Mission tabs, a per-Mission Session and attention sidebar, a responsive waterfall of terminal Surfaces, a command deck, Run graph inspection, verification state, Faults, and provider status. SuperPlexr keeps terminal processes in a durable local runtime and models work as an event-sourced graph of Missions, Runs, Sessions, Signals, Interventions, and Artifacts. Closing the desktop does not end the underlying work.
 
-SuperPlexr supports dependency-aware agent scheduling, structured progress and human-attention Signals, explicit terminal Control leases, scoped Observer and Controller Shares, retained terminal history and replay, remote owner attachment, Run-scoped agent access, and candidate verification with recorded evidence.
+SuperPlexr supports dependency-aware agent scheduling, structured progress and human-attention Signals, explicit terminal Control leases, scoped Observer and Controller Shares, retained terminal history and replay, remote owner attachment, Run-scoped agent access, and candidate verification with recorded evidence. Its `terminal-text` command renders the meaningful terminal viewport as compact plain text for token-efficient agent inspection.
 
 SuperPlexr is vendor-neutral. Engine drivers launch command-line coding agents through structured process specifications rather than a provider-specific API.
 

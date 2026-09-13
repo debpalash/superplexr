@@ -343,6 +343,10 @@ enum CliCommand {
     TerminalCapture {
         session_id: SessionId,
     },
+    /// Print the visible terminal as compact plain text for humans and agents.
+    TerminalText {
+        session_id: SessionId,
+    },
     /// Fetch a viewport from durable scrollback, addressed in rows before the bottom.
     TerminalHistory {
         session_id: SessionId,
@@ -1449,6 +1453,7 @@ async fn main() -> Result<(), CliError> {
     // A hand-off renders the same record as a brief instead of JSON, so the
     // next actor can read it (or paste it) without parsing.
     let render_handoff = matches!(command, CliCommand::FaultHandoff { .. });
+    let render_terminal_text = matches!(command, CliCommand::TerminalText { .. });
     let command = match command {
         CliCommand::TerminalSearchPages {
             session_id,
@@ -1894,6 +1899,10 @@ async fn main() -> Result<(), CliError> {
             println!("{}", fault_brief(fault));
             return Ok(());
         }
+        if render_terminal_text && let Some(text) = terminal_text(&body) {
+            print!("{text}");
+            return Ok(());
+        }
         println!("{}", serde_json::to_string_pretty(&body)?);
         return Ok(());
     }
@@ -1938,8 +1947,34 @@ async fn main() -> Result<(), CliError> {
         println!("{}", fault_brief(fault));
         return Ok(());
     }
+    if render_terminal_text && let Some(text) = terminal_text(&body) {
+        print!("{text}");
+        return Ok(());
+    }
     println!("{}", serde_json::to_string_pretty(&body)?);
     Ok(())
+}
+
+/// Render only meaningful visible rows, joining soft-wrapped lines.
+fn terminal_text(body: &ResponseBody) -> Option<String> {
+    let ResponseBody::TerminalCaptured { capture } = body else {
+        return None;
+    };
+    Some(terminal_frame_text(&capture.frame))
+}
+
+fn terminal_frame_text(frame: &superplexr_terminal::FullFrame) -> String {
+    let Some(last) = frame.rows.iter().rposition(|row| !row.text().is_empty()) else {
+        return String::new();
+    };
+    let mut text = String::new();
+    for (index, row) in frame.rows[..=last].iter().enumerate() {
+        text.push_str(&row.text());
+        if !row.wrapped || index == last {
+            text.push('\n');
+        }
+    }
+    text
 }
 
 /// Render a Fault as a compact brief for the next actor, human or agent.
@@ -2815,7 +2850,9 @@ fn into_request(command: CliCommand) -> Result<Request, CliError> {
             expected_version: expected_group_version,
         },
         CliCommand::TerminalSnapshot { session_id } => Request::TerminalSnapshot { session_id },
-        CliCommand::TerminalCapture { session_id } => Request::TerminalCapture { session_id },
+        CliCommand::TerminalCapture { session_id } | CliCommand::TerminalText { session_id } => {
+            Request::TerminalCapture { session_id }
+        }
         CliCommand::TerminalWrite { session_id, text } => Request::TerminalPaste {
             session_id,
             bytes: text.into_bytes(),
@@ -3927,6 +3964,20 @@ mod tests {
         let wide = short_command(&"é".repeat(60));
         assert!(wide.len() <= 44, "{}", wide.len());
         assert!(wide.ends_with('…'));
+    }
+
+    #[test]
+    fn terminal_text_is_compact_and_drops_unused_grid_rows() {
+        use superplexr_terminal::{TerminalAction, TerminalModel};
+
+        let mut model =
+            TerminalModel::new(GridSize::new(8, 4).expect("valid grid")).expect("terminal model");
+        model
+            .advance(TerminalAction::Output(b"one\r\ntwo"))
+            .expect("terminal output");
+        let frame = model.frame().expect("terminal frame");
+
+        assert_eq!(terminal_frame_text(&frame), "one\ntwo\n");
     }
 
     #[test]

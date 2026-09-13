@@ -98,7 +98,11 @@ agent work. CLI, TUI, MCP, browser observer, and remote clients use the same run
 ```sh
 cargo run -p superplexr-cli -- list
 cargo run -p superplexr-cli -- status
+cargo run -p superplexr-cli -- terminal-text "$SESSION_ID"
 ```
+
+`terminal-text` emits only meaningful visible rows, so agents can inspect a Session
+without consuming tokens on terminal cell metadata or empty grid space.
 
 <details>
 <summary>Browser observer preview</summary>
