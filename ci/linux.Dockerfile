@@ -143,7 +143,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && zig version \
     && node --version \
     && cargo fmt --all --check \
-    && node --test crates/ultraplexr-observer/web/*_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs \
+    && node --test crates/superplexr-observer/web/*_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs \
     && python3 -m unittest discover -s ci -p '*_tests.py' \
     && ./ci/audit-normal-licenses.sh . \
     && cargo test --workspace --locked \
@@ -157,12 +157,12 @@ RUN --network=none \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/workspace/target \
     cargo build --workspace --release --locked --offline \
-    && ULTRAPLEXR_USE_PREGENERATED_METADATA=1 \
-        ULTRAPLEXR_APPIMAGETOOL=/opt/appimagetool/squashfs-root/AppRun \
-        ULTRAPLEXR_APPIMAGE_RUNTIME=/opt/appimage-runtime \
-        ULTRAPLEXR_LINUXDEPLOY=/opt/linuxdeploy/squashfs-root/AppRun \
+    && SUPERPLEXR_USE_PREGENERATED_METADATA=1 \
+        SUPERPLEXR_APPIMAGETOOL=/opt/appimagetool/squashfs-root/AppRun \
+        SUPERPLEXR_APPIMAGE_RUNTIME=/opt/appimage-runtime \
+        SUPERPLEXR_LINUXDEPLOY=/opt/linuxdeploy/squashfs-root/AppRun \
         ./ci/package-smoke.sh . \
-    && ULTRAPLEXR_SOAK_SECONDS=5 ULTRAPLEXR_SOAK_SESSIONS=12 ./ci/runtime-soak.sh . \
-    && ./ci/linux-window-smoke.sh target/release/ultraplexr-desktop \
+    && SUPERPLEXR_SOAK_SECONDS=5 SUPERPLEXR_SOAK_SESSIONS=12 ./ci/runtime-soak.sh . \
+    && ./ci/linux-window-smoke.sh target/release/superplexr-desktop \
     && APPIMAGE_EXTRACT_AND_RUN=1 \
-        ./ci/linux-window-smoke.sh "dist/ultraplexr-linux-$(uname -m).AppImage"
+        ./ci/linux-window-smoke.sh "dist/superplexr-linux-$(uname -m).AppImage"

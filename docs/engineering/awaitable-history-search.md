@@ -61,8 +61,8 @@ included server modules), and diff whitespace checks passed. The existing
 cargo test --workspace --release --locked -j 2
 cargo clippy --workspace --release --all-targets --all-features --locked -j 2 -- -D warnings
 cargo fmt --all --check
-rustfmt --edition 2024 --check crates/ultraplexr-server/src/history_search.rs
-node --test crates/ultraplexr-observer/web/control_tests.mjs crates/ultraplexr-observer/web/stream_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
+rustfmt --edition 2024 --check crates/superplexr-server/src/history_search.rs
+node --test crates/superplexr-observer/web/control_tests.mjs crates/superplexr-observer/web/stream_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
 ```
 
 All five release executables (server, CLI, observer gateway, TUI and desktop)

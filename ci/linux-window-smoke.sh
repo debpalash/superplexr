@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 
-binary=${1:-target/release/ultraplexr-desktop}
+binary=${1:-target/release/superplexr-desktop}
 test -x "$binary"
-runtime_dir=$(mktemp -d "${TMPDIR:-/tmp}/ultraplexr-wayland.XXXXXX")
+runtime_dir=$(mktemp -d "${TMPDIR:-/tmp}/superplexr-wayland.XXXXXX")
 weston_log="$runtime_dir/weston.log"
 app_log="$runtime_dir/app.log"
 weston_pid=
@@ -50,13 +50,13 @@ echo "X11 virtual-window smoke PASS"
 
 DISPLAY=:99 XDG_RUNTIME_DIR="$runtime_dir" weston \
     --backend=x11-backend.so \
-    --socket=wayland-ultraplexr \
+    --socket=wayland-superplexr \
     --idle-time=0 \
     --log="$weston_log" &
 weston_pid=$!
 
 attempt=0
-while ! test -S "$runtime_dir/wayland-ultraplexr"; do
+while ! test -S "$runtime_dir/wayland-superplexr"; do
     attempt=$((attempt + 1))
     if test "$attempt" -gt 50; then
         echo "Wayland compositor did not create its socket" >&2
@@ -68,7 +68,7 @@ done
 
 set +e
 XDG_RUNTIME_DIR="$runtime_dir" \
-WAYLAND_DISPLAY=wayland-ultraplexr \
+WAYLAND_DISPLAY=wayland-superplexr \
 XDG_SESSION_TYPE=wayland \
 timeout 6 "$binary" >"$app_log" 2>&1
 wayland_status=$?

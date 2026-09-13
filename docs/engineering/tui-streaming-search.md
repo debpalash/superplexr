@@ -30,7 +30,7 @@ excludes object overhead, frames, native queues and in-flight wire pages.
 ## Scheduling and lifetime
 
 The subsequent [desktop search milestone](desktop-streaming-search.md) moves
-this worker into `ultraplexr-client::history_worker`. The TUI reuses that shared
+this worker into `superplexr-client::history_worker`. The TUI reuses that shared
 implementation with the same default 1000-match limit and cancellation semantics.
 
 The TUI lazily creates one search/history I/O worker and one cancellation writer,
@@ -70,7 +70,7 @@ workspace formatting and diff-whitespace checks passed. The pre-existing
 `block v0.1.6` future-incompatibility notice remains.
 The four new real-runtime search tests passed three further consecutive runs.
 All five release executables (server, CLI, observer gateway, TUI and desktop)
-rebuilt successfully; `ultraplexr-tui --help` also exited successfully. Existing
+rebuilt successfully; `superplexr-tui --help` also exited successfully. Existing
 user desktop/runtime processes were not restarted or upgraded.
 
 Seven new tests cover:
@@ -92,7 +92,7 @@ Seven new tests cover:
 cargo test --workspace --release --locked -j 2 --quiet
 cargo clippy --workspace --release --all-targets --all-features --locked -j 2 -- -D warnings
 cargo fmt --all --check
-node --test crates/ultraplexr-observer/web/control_tests.mjs crates/ultraplexr-observer/web/stream_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
+node --test crates/superplexr-observer/web/control_tests.mjs crates/superplexr-observer/web/stream_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
 ```
 
 Tests use private runtimes and real outer PTYs, not the user's active desktop or

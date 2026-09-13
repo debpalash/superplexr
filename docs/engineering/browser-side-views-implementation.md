@@ -24,7 +24,7 @@ full desktop workspace parity or arbitrary nested split layouts.
 
 ## Authority and lifetime
 
-- Side feeds send `X-Ultraplexr-View: observe`. The gateway honors this as a
+- Side feeds send `X-Superplexr-View: observe`. The gateway honors this as a
   per-attachment reduction of authority: it creates no browser input Surface,
   issues no Control nonce, and requires no input heartbeat for that attachment,
   even when the gateway itself accepts a Controller Share.

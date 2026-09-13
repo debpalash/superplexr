@@ -47,7 +47,7 @@ dimensions. The old zoom test checked the rem value, not layout containment.
 
 ## Regression coverage
 
-`cargo test -p ultraplexr-desktop --release --all-features --locked --offline zoom`
+`cargo test -p superplexr-desktop --release --all-features --locked --offline zoom`
 exercises the root-relative metrics at every zoom stop, actual sidebar row/name/
 detail containment, nested terminal row heights, collapsed dimensions, reset,
 small-window menu bounds and unsqueezed action rows, rename/termination bounds,

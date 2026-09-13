@@ -1,7 +1,7 @@
 // The service worker: the shell's files offline, and notifications from the
 // runtime shown even when no tab is open. Nothing here talks to the wire.
 const SHELL = ["/", "/style.css", "/app.js", "/wire.js", "/frames.js", "/render.js", "/icon.svg", "/manifest.webmanifest"];
-const CACHE = "ultraplexr-shell-v1";
+const CACHE = "superplexr-shell-v1";
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -26,7 +26,7 @@ self.addEventListener("fetch", (event) => {
 });
 
 self.addEventListener("push", (event) => {
-  let notice = { title: "ultraplexr", body: "", url: "/", tag: "" };
+  let notice = { title: "superplexr", body: "", url: "/", tag: "" };
   try { notice = { ...notice, ...event.data.json() }; } catch {}
   event.waitUntil(self.registration.showNotification(notice.title, {
     body: notice.body,

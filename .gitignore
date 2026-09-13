@@ -1,11 +1,15 @@
 /target/
 /dist/
+/.superplexr/
+/.superplexr-dev/
+# Existing installations remain in place during the rename.
 /.ultraplexr/
 /.ultraplexr-dev/
-# Existing installations remain in place during the rename.
 /.termi9ne/
 /.termi9ne-dev/
 /.DS_Store
 *.swp
 *.swo
 *.profraw
+__pycache__/
+*.py[cod]

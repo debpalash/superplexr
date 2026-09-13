@@ -1,0 +1,51 @@
+name: Bug report
+description: Report reproducible behavior that does not match SuperPlexr's contract.
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to make SuperPlexr better. Remove secrets, Share tokens, and private terminal output from reports.
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Give the smallest reliable sequence of commands or UI actions.
+      placeholder: |
+        1. Start SuperPlexr with …
+        2. Open …
+        3. Observe …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: 0.1.0 or git commit
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS
+        - Linux — Wayland
+        - Linux — X11
+        - Headless runtime
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted diagnostics
+      description: Include relevant logs or `superplexr status` output after removing sensitive data.
+      render: shell

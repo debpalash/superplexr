@@ -7,7 +7,7 @@ It is progress toward T-HISTORY-001, not completion of that contract.
 
 ## Implementation boundary
 
-`ultraplexr-terminal::HistorySearch` is an opaque, actor-local continuation over
+`superplexr-terminal::HistorySearch` is an opaque, actor-local continuation over
 the canonical Ghostty screen. Each `search_step` attempts at most 32 physical
 rows, uses a reusable 64 KiB formatting buffer, and returns at most 64 matches.
 Capacity failures yield before retrying a smaller range. A single row exceeding
@@ -72,7 +72,7 @@ Reproduction from the repository root:
 cargo test --workspace --release --locked -j 2
 cargo clippy --workspace --release --all-targets --all-features --locked -j 2 -- -D warnings
 cargo fmt --all --check
-node --test crates/ultraplexr-observer/web/control_tests.mjs crates/ultraplexr-observer/web/stream_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
+node --test crates/superplexr-observer/web/control_tests.mjs crates/superplexr-observer/web/stream_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
 ```
 
 All five release executables rebuilt successfully. The unchanged version-2

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SuperPlexr · Observer</title><link rel="stylesheet" href="/observer.css"><script type="module" src="/observer.js"></script></head>
+<body><header><h1>SuperPlexr <span id="mode">Observer</span></h1><span class="scope" id="scope">Read-only · input disabled</span></header>
+<form id="connect"><label for="key">Browser access key</label><input id="key" type="password" autocomplete="off" required><button>Connect</button></form>
+<p id="connection" role="status">Open the private URL printed by the observer, or enter its access key.</p>
+<details id="workflow" hidden><summary>Verification <span>Read-only inspection</span></summary>
+<form autocomplete="off"><label>Mission ID <input name="mission" maxlength="36" required spellcheck="false"></label><button type="button" class="workflow-discover">List verifiers</button><label>Verifier Run ID <input name="verifier" maxlength="36" spellcheck="false"></label><button type="submit">Inspect status</button></form>
+<p role="status" aria-live="polite"></p><div class="workflow-page" hidden><p class="workflow-page-info"></p><ul class="workflow-verifiers" aria-label="Verifier Runs"></ul><button type="button" class="workflow-next" disabled>Next page</button></div><div class="workflow-result"></div></details>
+<main><aside aria-label="Sessions"><h2>Sessions</h2><nav id="sessions"></nav></aside>
+<div id="session-workspace"><section aria-label="Terminal feed"><div class="feed-heading"><div><h2 id="title">Choose a session</h2><p id="directory"></p></div><div class="controls"><button id="side-view" disabled>Open side view</button><button id="pause" disabled>Pause updates</button><button id="copy" disabled>Copy output</button></div></div>
+<p id="feed-status" role="status">The terminal stays on its host. This page only observes.</p>
+<div class="controls"><button id="history" disabled>Earlier output</button><button id="live" hidden>Back to live</button><button id="reattach" hidden>Reattach safely</button></div>
+<div id="history-search" aria-label="Search retained history">
+<form id="search-form" role="search"><label for="search-query">Search history</label><input id="search-query" type="search" autocomplete="off" spellcheck="false" maxlength="1024" placeholder="Literal text, case-insensitive" disabled><button id="search-start" disabled>Search</button><button id="search-cancel" type="button" disabled>Cancel</button></form>
+<p id="search-status" role="status" aria-live="polite">Choose a session to search its retained history</p>
+<ol id="search-results" aria-label="History search results"></ol>
+</div>
+<div id="interactive" hidden>
+<div class="controls"><strong id="control-status" role="status">Observing · input disabled</strong><button id="claim" disabled>Take control</button><button id="release" disabled>Return control</button></div>
+<label for="terminal-input">Terminal input · Ctrl+] returns focus to controls</label><textarea id="terminal-input" rows="1" disabled spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" placeholder="Take control, then focus here to type into the terminal"></textarea>
+<div class="controls"><label>Columns <input id="columns" type="number" min="2" max="400" value="80"></label><label>Rows <input id="rows" type="number" min="1" max="200" value="24"></label><button id="resize" disabled>Resize terminal</button></div>
+<div id="paste-confirmation" hidden><p>Multiline or control-character paste may execute commands. Review before sending.</p><textarea id="paste-preview" rows="3" aria-label="Paste preview" readonly></textarea><button id="paste-confirm">Send this paste</button><button id="paste-cancel">Cancel paste</button></div>
+</div>
+<pre id="output" tabindex="0" aria-label="Terminal output"></pre></section><div id="side-views" hidden aria-label="Read-only session views"></div></div></main>
+<footer>Shared runtime · retained history · scoped access · no process creation or termination controls</footer></body></html>

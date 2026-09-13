@@ -32,7 +32,7 @@ class ProfileTests(unittest.TestCase):
                 packages = {command[index + 1] for index, item in enumerate(command) if item == "--package"}
                 self.assertEqual(packages, {BUILDER.EXECUTABLES[name] for name in names})
                 if profile in {"host", "terminal", "web", "automation"}:
-                    self.assertNotIn("ultraplexr-desktop", packages)
+                    self.assertNotIn("superplexr-desktop", packages)
 
     def test_explicit_cross_target_and_online_only_change_the_plan(self):
         with tempfile.TemporaryDirectory() as root:
@@ -63,12 +63,12 @@ class ProfileTests(unittest.TestCase):
             self.assertTrue(link.is_symlink())
 
     @staticmethod
-    def artifact(name="ultraplexr", **updates):
+    def artifact(name="superplexr", **updates):
         record = {
-            "reason": "compiler-artifact", "package_id": "path+file:///fixture#ultraplexr-cli@0.1.0",
+            "reason": "compiler-artifact", "package_id": "path+file:///fixture#superplexr-cli@0.1.0",
             "manifest_path": "/fixture/Cargo.toml", "features": ["one"],
             "target": {"name": name, "kind": ["bin"]},
-            "profile": {"test": False}, "executable": "/custom/target/ultraplexr", "fresh": True,
+            "profile": {"test": False}, "executable": "/custom/target/superplexr", "fresh": True,
         }
         record.update(updates)
         return record
@@ -83,26 +83,26 @@ class ProfileTests(unittest.TestCase):
 
     def test_only_emitted_non_test_executables_supply_paths_and_freshness(self):
         records = [self.artifact(profile={"test": True}, executable="/wrong/test"), self.artifact()]
-        artifacts, inputs = BUILDER.build(SCRIPT.parent, self.emit(records), ["ultraplexr"])
-        self.assertEqual(artifacts["ultraplexr"]["path"], Path("/custom/target/ultraplexr"))
-        self.assertTrue(artifacts["ultraplexr"]["fresh"])
+        artifacts, inputs = BUILDER.build(SCRIPT.parent, self.emit(records), ["superplexr"])
+        self.assertEqual(artifacts["superplexr"]["path"], Path("/custom/target/superplexr"))
+        self.assertTrue(artifacts["superplexr"]["fresh"])
         self.assertEqual(len(inputs), 1)
 
     def test_failed_build_never_admits_even_emitted_executables(self):
         with self.assertRaises(subprocess.CalledProcessError):
-            BUILDER.build(SCRIPT.parent, self.emit([self.artifact()], 1), ["ultraplexr"])
+            BUILDER.build(SCRIPT.parent, self.emit([self.artifact()], 1), ["superplexr"])
 
     def test_missing_executable_or_manifest_cannot_use_stale_guessed_paths(self):
         for records in [[], [self.artifact(profile={"test": True})], [self.artifact(manifest_path=None)]]:
             with self.subTest(records=records), self.assertRaises(RuntimeError):
-                BUILDER.build(SCRIPT.parent, self.emit(records), ["ultraplexr"])
+                BUILDER.build(SCRIPT.parent, self.emit(records), ["superplexr"])
 
     def test_input_features_and_targets_are_unioned_for_emitted_package(self):
         records = [self.artifact(), self.artifact(features=["two"], target={"name": "library", "kind": ["lib"]}, executable=None)]
-        _, inputs = BUILDER.build(SCRIPT.parent, self.emit(records), ["ultraplexr"])
+        _, inputs = BUILDER.build(SCRIPT.parent, self.emit(records), ["superplexr"])
         record = next(iter(inputs.values()))
         self.assertEqual(record["features"], {"one", "two"})
-        self.assertEqual(record["targets"], {("ultraplexr", ("bin",)), ("library", ("lib",))})
+        self.assertEqual(record["targets"], {("superplexr", ("bin",)), ("library", ("lib",))})
 
     def test_package_evidence_resolves_inherited_fields_without_full_metadata(self):
         with tempfile.TemporaryDirectory() as root:

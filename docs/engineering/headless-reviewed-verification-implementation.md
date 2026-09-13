@@ -4,7 +4,7 @@ Status: source implemented, unbuilt and untested. No verification checks,
 tests, builds, CLI/app runs, runtime mutations, or platform measurements were
 executed while implementing this command surface, per owner direction.
 
-Two CLI commands now expose the same `ultraplexr-verification::prepare` and
+Two CLI commands now expose the same `superplexr-verification::prepare` and
 `launch` workflow used by the desktop. They do not add another runner, engine
 configuration file, daemon, scheduler, or receipt format.
 

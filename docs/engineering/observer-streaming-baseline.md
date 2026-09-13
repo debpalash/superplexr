@@ -27,7 +27,7 @@ Names/pins were preseeded; this is not a native menu-click automation test.
 Reproduce from the repository root:
 
 ```sh
-cargo build -p ultraplexr-server -p ultraplexr-cli -p ultraplexr-observer
+cargo build -p superplexr-server -p superplexr-cli -p superplexr-observer
 node ci/observer-stream-benchmark.mjs
 ```
 

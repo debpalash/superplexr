@@ -41,7 +41,7 @@ jobs:
       - name: Verify workspace
         run: |
           cargo fmt --all --check
-          node --test crates/ultraplexr-observer/web/*_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
+          node --test crates/superplexr-observer/web/*_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
           python3 -m unittest discover -s ci -p '*_tests.py'
           ./ci/audit-normal-licenses.sh .
           cargo test --workspace --locked
@@ -56,4 +56,4 @@ jobs:
       - name: Check out source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Verify in pinned Linux image
-        run: docker build --file ci/linux.Dockerfile --tag ultraplexr-ci .
+        run: docker build --file ci/linux.Dockerfile --tag superplexr-ci .

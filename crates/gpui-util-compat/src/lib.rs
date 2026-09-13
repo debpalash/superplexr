@@ -1,7 +1,7 @@
 //! Independently implemented, permissively licensed utility seam for GPUI.
 //!
 //! This crate intentionally implements only general-purpose interfaces required
-//! by ultraplexr's pinned GPUI dependency closure.
+//! by superplexr's pinned GPUI dependency closure.
 
 use std::{
     ffi::OsStr,

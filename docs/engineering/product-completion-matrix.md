@@ -23,7 +23,7 @@ It explicitly describes a proposal, with no requirement IDs for several new
 capabilities. Those rows name their exact proposal sections and existing related
 requirements; they do not invent normative IDs or silently rewrite the v1 scope.
 
-The [unified roadmap](../ultraplexr-unified-roadmap.md) remains the capability
+The [unified roadmap](../superplexr-unified-roadmap.md) remains the capability
 ledger. Its aggregate completion percentages and older capability descriptions
 are not acceptance evidence. More recent implementation notes qualify older
 statements that browser styling, embedding, or verification commands are absent.

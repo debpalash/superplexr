@@ -38,8 +38,8 @@ Defaults:
 - arguments start an ordinary interactive shell, not a login shell;
 - grid is 100 columns by 30 rows;
 - `TERM=xterm-ghostty` with bundled terminfo;
-- `COLORTERM=truecolor`, `TERM_PROGRAM=ultraplexr`, and the product version;
-- UTF-8 locale is inherited; ultraplexr does not invent a locale.
+- `COLORTERM=truecolor`, `TERM_PROGRAM=superplexr`, and the product version;
+- UTF-8 locale is inherited; superplexr does not invent a locale.
 
 The child becomes a session leader, gains the slave as controlling terminal,
 duplicates it to stdin/stdout/stderr, and starts in its own process group. The
@@ -90,7 +90,7 @@ The implementation MUST consume the public `libghostty-vt` interface, preferably
 through an audited and pinned `libghostty-rs`. It MUST NOT embed Ghostty's private
 application surface or let Ghostty own the PTY or product window.
 
-`ultraplexr-terminal` owns all unsafe FFI, callback, allocator, render-state, and
+`superplexr-terminal` owns all unsafe FFI, callback, allocator, render-state, and
 version adaptation. Its public interface contains no raw pointer, borrowed
 Ghostty object, GPUI object, or upstream enum.
 

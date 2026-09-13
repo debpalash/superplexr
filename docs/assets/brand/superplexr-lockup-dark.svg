@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="320" viewBox="0 0 1200 320" role="img" aria-labelledby="title desc">
+  <title id="title">SuperPlexr</title>
+  <desc id="desc">SuperPlexr logo with the tagline Mission control for coding agents.</desc>
+  <rect width="1200" height="320" rx="28" fill="#10151B"/>
+  <g transform="translate(56 48) scale(.44)">
+    <g fill="none" stroke="#E8EDF2" stroke-width="36" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M94 112h120c52 0 59 66 112 94"/>
+      <path d="M94 208h132c40 0 54 25 100 31"/>
+      <path d="M94 304h132c40 0 54-25 100-31"/>
+      <path d="M94 400h120c52 0 59-66 112-94"/>
+      <path d="M360 256h70"/>
+    </g>
+    <rect x="316" y="180" width="58" height="152" rx="29" fill="#79A7D3"/>
+    <circle cx="72" cy="112" r="18" fill="#79A7D3"/>
+    <circle cx="72" cy="208" r="18" fill="#D8A85B"/>
+    <circle cx="72" cy="304" r="18" fill="#79A7D3"/>
+    <circle cx="72" cy="400" r="18" fill="#D7776B"/>
+    <circle cx="452" cy="256" r="24" fill="#10151B" stroke="#E8EDF2" stroke-width="14"/>
+  </g>
+  <text x="330" y="154" fill="#E8EDF2" font-family="Avenir Next, Avenir, Helvetica, Arial, sans-serif" font-size="88" font-weight="700" letter-spacing="-3">SuperPlexr</text>
+  <text x="336" y="208" fill="#79A7D3" font-family="Avenir Next, Avenir, Helvetica, Arial, sans-serif" font-size="25" font-weight="600" letter-spacing="3">MISSION CONTROL FOR CODING AGENTS</text>
+</svg>

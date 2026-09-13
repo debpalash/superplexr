@@ -34,7 +34,7 @@ new implementation without changing their return type.
 The CLI exposes incremental JSON lines:
 
 ```sh
-ultraplexr --socket /path/to/control.sock terminal-search-pages SESSION_ID QUERY --limit 1000
+superplexr --socket /path/to/control.sock terminal-search-pages SESSION_ID QUERY --limit 1000
 ```
 
 The existing `terminal-search` command retains its single-response format. The
@@ -118,8 +118,8 @@ rebuilt successfully after the fixes.
 cargo test --workspace --release --locked -j 2 --quiet
 cargo clippy --workspace --release --all-targets --all-features --locked -j 2 -- -D warnings
 cargo fmt --all --check
-rustfmt --edition 2024 --check crates/ultraplexr-server/src/search_stream.rs crates/ultraplexr-server/src/history_search.rs crates/ultraplexr-server/src/share_request.rs crates/ultraplexr-server/src/terminal_wait_tests.rs
-node --test crates/ultraplexr-observer/web/control_tests.mjs crates/ultraplexr-observer/web/stream_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
+rustfmt --edition 2024 --check crates/superplexr-server/src/search_stream.rs crates/superplexr-server/src/history_search.rs crates/superplexr-server/src/share_request.rs crates/superplexr-server/src/terminal_wait_tests.rs
+node --test crates/superplexr-observer/web/control_tests.mjs crates/superplexr-observer/web/stream_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
 ```
 
 ## Remaining work

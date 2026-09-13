@@ -21,8 +21,8 @@ Nothing else is stored; a replay is the journal and these two files.
 
 ## Playing
 
-`ultraplexr chapters <session>` lists the chapters with their offsets.
-`ultraplexr replay <session> [--speed 4] [--from-chapter N | --from-offset B]`
+`superplexr chapters <session>` lists the chapters with their offsets.
+`superplexr replay <session> [--speed 4] [--from-chapter N | --from-offset B]`
 plays into the current terminal: frames only, no keys go back, `q` or
 Ctrl-] stops, the end of the recording waits for a key. It works over
 `--gateway` like everything else.

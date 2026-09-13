@@ -10,7 +10,7 @@ then use the exact executable path reported by Cargo:
 
 ```sh
 visual_fixture_dir=$(mktemp -d /tmp/up-browser-workflow-visual.XXXXXX)
-ULTRAPLEXR_BROWSER_WORKFLOW_VISUAL_DIR="$visual_fixture_dir" /absolute/path/to/ultraplexr_desktop-test-binary \
+SUPERPLEXR_BROWSER_WORKFLOW_VISUAL_DIR="$visual_fixture_dir" /absolute/path/to/superplexr_desktop-test-binary \
   --exact workspace_lifecycle_tests::browser_control_tests::browser_workflow_tests::browser_workflow_visual_fixture \
   --ignored --nocapture
 ```
@@ -40,5 +40,5 @@ Screenshots may be retained separately from that metadata.
 DOM adapter checks remain available without a browser:
 
 ```sh
-node --test crates/ultraplexr-observer/web/*_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
+node --test crates/superplexr-observer/web/*_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
 ```

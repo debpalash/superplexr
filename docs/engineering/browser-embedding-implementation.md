@@ -9,7 +9,7 @@ establish general embedded-platform support or production readiness.
 The optional browser gateway accepts repeated `--embed-origin` arguments:
 
 ```sh
-ultraplexr-observer --socket /absolute/path/control.sock \
+superplexr-observer --socket /absolute/path/control.sock \
   --share-token-file observer.token --port 7800 \
   --embed-origin http://localhost:3000
 ```

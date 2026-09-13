@@ -1,13 +1,13 @@
 # MCP bridge access modes
 
-The optional `ultraplexr-mcp` executable connects to an existing runtime and
+The optional `superplexr-mcp` executable connects to an existing runtime and
 exposes Fault operations over stdio. It does not start the runtime or a network
 listener. Configure a separate bridge process for each integration.
 
 ## Read-only inspection
 
 ```sh
-ultraplexr-mcp --socket /path/to/control.sock --read-only
+superplexr-mcp --socket /path/to/control.sock --read-only
 ```
 
 This process advertises only `fault_list` and `fault_show`. It also rejects

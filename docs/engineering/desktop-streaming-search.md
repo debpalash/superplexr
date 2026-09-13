@@ -2,7 +2,7 @@
 
 This follows [acknowledged search streams](acknowledged-search-streams.md) and
 [TUI search](tui-streaming-search.md). Desktop and TUI now share the same bounded
-background search/history worker in `ultraplexr-client::history_worker`, without
+background search/history worker in `superplexr-client::history_worker`, without
 a desktop dependency on the TUI or another session/index database.
 
 ## Interaction and scheduling
@@ -107,7 +107,7 @@ layout assertions use the project's existing debug-selector mechanism.
 cargo test --workspace --release --locked -j 2 --quiet
 cargo clippy --workspace --release --all-targets --all-features --locked -j 2 -- -D warnings
 cargo fmt --all --check
-node --test crates/ultraplexr-observer/web/control_tests.mjs crates/ultraplexr-observer/web/stream_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
+node --test crates/superplexr-observer/web/control_tests.mjs crates/superplexr-observer/web/stream_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
 ```
 
 Tests use isolated fixture runtimes and GPUI's test context; existing TUI

@@ -3,7 +3,7 @@
 Updated: 2026-09-05.
 
 For the combined product, research, and release roadmap, see
-[ultraplexr-unified-roadmap.md](ultraplexr-unified-roadmap.md).
+[superplexr-unified-roadmap.md](superplexr-unified-roadmap.md).
 
 The research review and multiplexer survey identify the same product gap: a
 fast terminal workspace is useful, but an agentic workspace becomes distinct

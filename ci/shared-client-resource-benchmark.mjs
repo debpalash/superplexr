@@ -11,7 +11,7 @@ import {parseArgs} from "node:util";
 import {fileURLToPath} from "node:url";
 import os from "node:os";
 import {performance} from "node:perf_hooks";
-import {readEvents} from "../crates/ultraplexr-observer/web/stream.mjs";
+import {readEvents} from "../crates/superplexr-observer/web/stream.mjs";
 import {parseSamples, summarize} from "./resource-samples.mjs";
 
 const {values: options} = parseArgs({options:{
@@ -28,8 +28,8 @@ if (!Number.isInteger(duration) || duration < 1 || duration > 3600
   || !Number.isInteger(interval) || interval < 1 || interval > 30
   || !Number.isInteger(history) || history < 0 || history > 100000) throw new Error("Invalid bounded benchmark options");
 if (!['darwin','linux'].includes(os.platform())) throw new Error("This benchmark requires Unix ps/PTYs");
-const names = ["ultraplexr-server","ultraplexr","ultraplexr-observer","ultraplexr-tui"];
-if (!options["without-desktop"]) names.push("ultraplexr-desktop");
+const names = ["superplexr-server","superplexr","superplexr-observer","superplexr-tui"];
+if (!options["without-desktop"]) names.push("superplexr-desktop");
 const binaryMetadata = {};
 for (const name of names) {
   const path = join(binaries,name);
@@ -44,7 +44,7 @@ const socket = join(root,"s"), children = [], sessions = [];
 let abort, streamTask, metadataTask, streamError, metadataError, tui, tuiPid;
 const progress = text => process.stderr.write(text+"\n");
 async function cli(...args) {
-  const {stdout} = await exec(join(binaries,"ultraplexr"),["--socket",socket,...args],{timeout:30000,maxBuffer:2*1024*1024});
+  const {stdout} = await exec(join(binaries,"superplexr"),["--socket",socket,...args],{timeout:30000,maxBuffer:2*1024*1024});
   return JSON.parse(stdout);
 }
 function start(name,args,executable=join(binaries,name)) {
@@ -57,7 +57,7 @@ function start(name,args,executable=join(binaries,name)) {
   for (const pipe of [child.stdout,child.stderr]) pipe.on("data",bytes=>{
     record.bytes += bytes.length;
     const text=record.text+bytes.toString();
-    record.ptyPid ||= Number(text.match(/^ULTRAPLEXR_PTY_PID (\d+)\n/m)?.[1])||null;
+    record.ptyPid ||= Number(text.match(/^SUPERPLEXR_PTY_PID (\d+)\n/m)?.[1])||null;
     record.text = text.slice(-32768);
   });
   child.stdin.on("error",()=>{}); // An exiting PTY may close before detach arrives.
@@ -95,7 +95,7 @@ async function stop(record) {
 let result;
 try {
   progress("Starting isolated runtime and 12 history-loaded Sessions");
-  const runtime=start("ultraplexr-server",["--socket",socket,"--state-dir",join(root,"state")]);
+  const runtime=start("superplexr-server",["--socket",socket,"--state-dir",join(root,"state")]);
   await until(()=>{if(runtime.ended)throw new Error("Fixture runtime exited");return runtime.text.includes("runtime listening");});
   // Exactly 100000 scrollback rows plus the live viewport. Lines are short ASCII,
   // not images/wide-cell worst cases; report this workload rather than generalize.
@@ -123,7 +123,7 @@ try {
   const share=await cli("share-create","resource-fixture","--role","observer",...sessions.flatMap(s=>["--session",s.id]),"--expires-in-seconds",String(duration+300));
   const token=join(root,"observer.token");
   await writeFile(token,share.token+"\n",{mode:0o600});
-  const gateway=start("ultraplexr-observer",["--socket",socket,"--share-token-file",token]);
+  const gateway=start("superplexr-observer",["--socket",socket,"--share-token-file",token]);
   await until(()=>{if(gateway.ended)throw new Error("Fixture gateway exited");return gateway.text.includes("http://");});
   const url=new URL(gateway.text.match(/http:\/\/\S+/)[0]);
   const secret=new URLSearchParams(url.hash.slice(1)).get("access");
@@ -143,14 +143,14 @@ try {
       await response.json();
     }
   })().catch(error=>{if(!abort.signal.aborted)metadataError=error;});
-  const tuiArgs=[join(binaries,"ultraplexr-tui"),"--socket",socket,sessions[0].id];
+  const tuiArgs=[join(binaries,"superplexr-tui"),"--socket",socket,sessions[0].id];
   tui=start("tui-pty",[fileURLToPath(new URL("./pty-host.py",import.meta.url)),...tuiArgs],"python3");
   await until(()=>{if(tui.ended)throw new Error("TUI PTY exited: "+JSON.stringify(tui.text));tuiPid=tui.ptyPid;return tuiPid&&tui.text.includes("OBSERVE");});
   const measured={runtime:runtime.child.pid,gateway:gateway.child.pid,tui:tuiPid};
   if(!options["without-desktop"]){
     // Owner clients acquire Control and resize to window geometry. A real
     // Observer Share keeps the fixed reference grid authoritative in the runtime.
-    const desktop=start("ultraplexr-desktop",["--connect-only","--socket",socket,"--state-dir",join(root,"state"),"--share-token-file",token,"--runtime-label","RESOURCE QA"]);
+    const desktop=start("superplexr-desktop",["--connect-only","--socket",socket,"--state-dir",join(root,"state"),"--share-token-file",token,"--runtime-label","RESOURCE QA"]);
     measured.desktop=desktop.child.pid;
     await until(async()=>{
       if(desktop.ended)throw new Error("Fixture desktop exited");

@@ -15,7 +15,7 @@ Open the Mission graph and select a completed producer with a Candidate awaiting
 review, or an already-created pending verifier. In **Project checks**:
 
 1. Choose an owner-private JSON plan (0600), an existing private evidence folder
-   (0700), and the Ultraplexr CLI executable. Keep plan and evidence outside the
+   (0700), and the SuperPlexr CLI executable. Keep plan and evidence outside the
    source repository. The desktop does not change permissions for you.
 2. Select **Review check plan**. All six commands, arguments, time/output limits,
    and the SHA-256 of the exact plan bytes appear without executing anything.
@@ -33,7 +33,7 @@ default to no setup. A failed preparation retains its verifier identity so a
 pending Run can be launched after correcting the setup; a started/finished
 verifier cannot be relaunched. No engine configuration file is rewritten.
 
-Desktop and CLI use `ultraplexr-verification`, not separate execution or receipt
+Desktop and CLI use `superplexr-verification`, not separate execution or receipt
 implementations. The CLI worker's optional `--plan-sha256` argument is supplied
 by the desktop launch path. Async results update only matching Mission views
 and never replace a newer projection with an older one.
@@ -57,7 +57,7 @@ Windows implementation, or browser configuration surface.
 
 ## Configure a project
 
-Build `cargo build -p ultraplexr-cli`. Create a private evidence directory and
+Build `cargo build -p superplexr-cli`. Create a private evidence directory and
 an owner-reviewed plan (directory mode 0700, plan mode 0600). The version-1 plan
 must define exactly these six checks, each with explicit arguments, timeout and
 per-stream output limit. For example, for a Rust project:
@@ -91,7 +91,7 @@ preserving its other entries:
   "version": 1,
   "drivers": {
     "bounded-checks": {
-      "program": "/absolute/to/ultraplexr",
+      "program": "/absolute/to/superplexr",
       "args": [
         "verification-execute",
         "--plan", "/absolute/private/project-checks.json",
@@ -109,7 +109,7 @@ now avoids manual engine configuration for this path. It is unbuilt and
 untested. The examples below describe future use; they were not run:
 
 ```sh
-ultraplexr verification-prepare \
+superplexr verification-prepare \
   --plan /absolute/private/project-checks.json \
   --evidence-root /absolute/private/verification-evidence
 ```
@@ -117,7 +117,7 @@ ultraplexr verification-prepare \
 Review its commands, paths and limits, then use the returned SHA-256:
 
 ```sh
-ultraplexr --socket /absolute/control.sock verification-launch MISSION \
+superplexr --socket /absolute/control.sock verification-launch MISSION \
   --subject SUBJECT_RUN --plan-sha256 REVIEWED_SHA256 \
   --plan /absolute/private/project-checks.json \
   --evidence-root /absolute/private/verification-evidence
@@ -133,9 +133,9 @@ The existing lower-level configured-engine sequence remains available:
 For an existing successfully finished producer with a frozen Candidate:
 
 ```sh
-ultraplexr --socket /absolute/control.sock verifier-create MISSION SUBJECT_RUN --engine bounded-checks
-ultraplexr --socket /absolute/control.sock run-checkout-new MISSION VERIFIER_RUN --repository /absolute/repository --base-ref CANDIDATE_REVISION
-ultraplexr --socket /absolute/control.sock run-engine MISSION VERIFIER_RUN --checkout
+superplexr --socket /absolute/control.sock verifier-create MISSION SUBJECT_RUN --engine bounded-checks
+superplexr --socket /absolute/control.sock run-checkout-new MISSION VERIFIER_RUN --repository /absolute/repository --base-ref CANDIDATE_REVISION
+superplexr --socket /absolute/control.sock run-engine MISSION VERIFIER_RUN --checkout
 ```
 
 Use the verifier Run ID returned by the first command. The runtime supplies the
@@ -151,13 +151,13 @@ untested. Successful command exit indicates a successful read, not passing
 verification:
 
 ```sh
-ultraplexr --socket /absolute/control.sock verification-status MISSION VERIFIER_RUN
+superplexr --socket /absolute/control.sock verification-status MISSION VERIFIER_RUN
 ```
 
 Collect evidence separately:
 
 ```sh
-ultraplexr --socket /absolute/control.sock verification-collect MISSION VERIFIER_RUN --evidence-root /absolute/private/verification-evidence
+superplexr --socket /absolute/control.sock verification-collect MISSION VERIFIER_RUN --evidence-root /absolute/private/verification-evidence
 ```
 
 Collection validates the finished Run, frozen Candidate, retained normalized
@@ -205,8 +205,8 @@ owner acceptance can settle the Candidate. Neither command accepts or merges it.
 ## Verification
 
 ```sh
-cargo test -p ultraplexr-verification --locked
-cargo test -p ultraplexr-cli --test verification_runner_tests --locked
+cargo test -p superplexr-verification --locked
+cargo test -p superplexr-cli --test verification_runner_tests --locked
 ```
 
 Five module tests cover real process exits, separate output, flood/timeout bounds,

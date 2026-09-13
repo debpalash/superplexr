@@ -3,15 +3,17 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDisplayName</key>
-  <string>Ultraplexr</string>
+  <string>SuperPlexr</string>
   <key>CFBundleExecutable</key>
-  <string>ultraplexr</string>
+  <string>superplexr</string>
   <key>CFBundleIdentifier</key>
-  <string>com.ultraplexr.desktop</string>
+  <string>com.superplexr.desktop</string>
+  <key>CFBundleIconFile</key>
+  <string>SuperPlexr.icns</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Ultraplexr</string>
+  <string>SuperPlexr</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

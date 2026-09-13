@@ -1,0 +1,21 @@
+[package]
+name = "superplexr-mcp"
+description = "MCP bridge for superplexr Faults and opt-in scoped terminal inspection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "superplexr-mcp"
+path = "src/main.rs"
+
+[dependencies]
+sha2.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+superplexr-client = { path = "../superplexr-client" }
+superplexr-core = { path = "../superplexr-core" }
+superplexr-protocol = { path = "../superplexr-protocol" }

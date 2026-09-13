@@ -1,9 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=Ultraplexr
-Comment=Agent-native terminal multiplexer
-Exec=ultraplexr-desktop
-Icon=ultraplexr
-Terminal=false
-Categories=Development;System;TerminalEmulator;
-StartupNotify=true

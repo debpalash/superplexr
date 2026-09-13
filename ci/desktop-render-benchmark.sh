@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-minimum_fps="${ULTRAPLEXR_DESKTOP_MIN_FPS:-60}"
-maximum_p95_ms="${ULTRAPLEXR_DESKTOP_MAX_P95_MS:-16.7}"
-benchmark_root="$(mktemp -d "${TMPDIR:-/tmp}/ultraplexr-render-bench.XXXXXX")"
+minimum_fps="${SUPERPLEXR_DESKTOP_MIN_FPS:-60}"
+maximum_p95_ms="${SUPERPLEXR_DESKTOP_MAX_P95_MS:-16.7}"
+benchmark_root="$(mktemp -d "${TMPDIR:-/tmp}/superplexr-render-bench.XXXXXX")"
 socket_path="$benchmark_root/control.sock"
 state_path="$benchmark_root/state"
 server_pid=""
@@ -13,14 +13,14 @@ cleanup() {
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
   fi
-  if [[ "$benchmark_root" == "${TMPDIR:-/tmp}"/ultraplexr-render-bench.* ]]; then
+  if [[ "$benchmark_root" == "${TMPDIR:-/tmp}"/superplexr-render-bench.* ]]; then
     find "$benchmark_root" -depth -delete 2>/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
 
-cargo build -p ultraplexr-server -p ultraplexr-cli -p ultraplexr-desktop
-target/debug/ultraplexr-server --socket "$socket_path" --state-dir "$state_path" &
+cargo build -p superplexr-server -p superplexr-cli -p superplexr-desktop
+target/debug/superplexr-server --socket "$socket_path" --state-dir "$state_path" &
 server_pid="$!"
 
 for _ in {1..100}; do
@@ -31,14 +31,14 @@ done
 
 group_arguments=()
 for _ in {1..6}; do
-  response="$(target/debug/ultraplexr --socket "$socket_path" terminal-new --program /bin/sh)"
+  response="$(target/debug/superplexr --socket "$socket_path" terminal-new --program /bin/sh)"
   session_id="$(sed -n 's/.*"session_id": "\([^"]*\)".*/\1/p' <<<"$response" | head -n 1)"
   [[ -n "$session_id" ]] || { echo "renderer benchmark terminal did not start" >&2; exit 1; }
   group_arguments+=(--session "$session_id")
 done
-target/debug/ultraplexr --socket "$socket_path" session-group-create perf-grid "${group_arguments[@]}" >/dev/null
+target/debug/superplexr --socket "$socket_path" session-group-create perf-grid "${group_arguments[@]}" >/dev/null
 
-result="$(target/debug/ultraplexr-desktop \
+result="$(target/debug/superplexr-desktop \
   --connect-only \
   --socket "$socket_path" \
   --state-dir "$state_path" \

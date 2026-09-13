@@ -1,7 +1,7 @@
-Process:         ultraplexr-server [50057]
-Path:            /Users/USER/Desktop/*/ultraplexr-server
+Process:         superplexr-server [50057]
+Path:            /Users/USER/Desktop/*/superplexr-server
 Load Address:    0x1026c4000
-Identifier:      ultraplexr-server
+Identifier:      superplexr-server
 Version:         0
 Code Type:       ARM64
 Platform:        macOS

@@ -23,7 +23,7 @@ def main():
     if child == 0:
         fcntl.ioctl(0, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 120, 0, 0))
         os.execv(sys.argv[1], sys.argv[1:])
-    print(f"ULTRAPLEXR_PTY_PID {child}", flush=True)
+    print(f"SUPERPLEXR_PTY_PID {child}", flush=True)
     stopping = False
     sent_stop = None
     status = None

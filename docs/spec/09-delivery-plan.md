@@ -46,14 +46,14 @@ Exit gate:
 
 If GPUI fails keyboard, accessibility, or Linux presentation criteria, stop UI
 feature work and replace ADR-0006. If `libghostty-rs` fails the safety/build audit,
-implement the minimal generated raw bindings plus a ultraplexr-owned safe wrapper;
+implement the minimal generated raw bindings plus a superplexr-owned safe wrapper;
 do not use Ghostty's private application surface.
 
 ## M2 — One durable terminal vertical slice (weeks 2–3) — DEL-M2
 
 Deliver:
 
-- `ultraplexr-terminal`, real POSIX PTY Session actor, raw journal, checkpoint;
+- `superplexr-terminal`, real POSIX PTY Session actor, raw journal, checkpoint;
 - v3 handshake/framing and one Session subscription;
 - FullFrame, FrameDelta, input, resize, acknowledgement, and resync;
 - one GPUI SessionProjection and TerminalElement;

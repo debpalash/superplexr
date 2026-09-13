@@ -18,20 +18,20 @@ import tomllib
 
 
 EXECUTABLES = {
-    "ultraplexr": "ultraplexr-cli",
-    "ultraplexr-server": "ultraplexr-server",
-    "ultraplexr-desktop": "ultraplexr-desktop",
-    "ultraplexr-tui": "ultraplexr-tui",
-    "ultraplexr-observer": "ultraplexr-observer",
-    "ultraplexr-mcp": "ultraplexr-mcp",
-    "ultraplexr-agent-status-plugin": "ultraplexr-plugin",
+    "superplexr": "superplexr-cli",
+    "superplexr-server": "superplexr-server",
+    "superplexr-desktop": "superplexr-desktop",
+    "superplexr-tui": "superplexr-tui",
+    "superplexr-observer": "superplexr-observer",
+    "superplexr-mcp": "superplexr-mcp",
+    "superplexr-agent-status-plugin": "superplexr-plugin",
 }
 PROFILES = {
-    "host": ["ultraplexr", "ultraplexr-server"],
-    "terminal": ["ultraplexr", "ultraplexr-tui"],
-    "web": ["ultraplexr", "ultraplexr-observer"],
-    "desktop": ["ultraplexr", "ultraplexr-server", "ultraplexr-desktop"],
-    "automation": ["ultraplexr", "ultraplexr-server", "ultraplexr-mcp", "ultraplexr-agent-status-plugin"],
+    "host": ["superplexr", "superplexr-server"],
+    "terminal": ["superplexr", "superplexr-tui"],
+    "web": ["superplexr", "superplexr-observer"],
+    "desktop": ["superplexr", "superplexr-server", "superplexr-desktop"],
+    "automation": ["superplexr", "superplexr-server", "superplexr-mcp", "superplexr-agent-status-plugin"],
     "all": list(EXECUTABLES),
 }
 
@@ -159,17 +159,17 @@ def write_dependency_metadata(workspace, output, inputs, artifacts, profile, tar
     }
     scope = {"profile": profile, "target": target, "lock": lock_digest, "packages": packages}
     scope_digest = hashlib.sha256(json.dumps(scope, sort_keys=True).encode("utf-8")).hexdigest()
-    spec = importlib.util.spec_from_file_location("ultraplexr_release_metadata", workspace / "ci" / "release-metadata.py")
+    spec = importlib.util.spec_from_file_location("superplexr_release_metadata", workspace / "ci" / "release-metadata.py")
     if spec is None or spec.loader is None:
         raise RuntimeError("Cannot load the dependency metadata generator")
     generator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(generator)
-    generator.generate_from_metadata(workspace, output, metadata, f"ultraplexr-{profile}-build-inputs", scope_digest)
+    generator.generate_from_metadata(workspace, output, metadata, f"superplexr-{profile}-build-inputs", scope_digest)
     with (output / "build-inputs.json").open("x", encoding="utf-8") as destination:
         json.dump(scope, destination, indent=2)
         destination.write("\n")
     return [{"path": name, "bytes": (output / name).stat().st_size, "sha256": digest(output / name)}
-            for name in ("ultraplexr.spdx.json", "THIRD_PARTY_NOTICES.txt", "build-inputs.json")]
+            for name in ("superplexr.spdx.json", "THIRD_PARTY_NOTICES.txt", "build-inputs.json")]
 
 
 def main():

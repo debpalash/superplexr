@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">SuperPlexr monochrome mark</title>
+  <desc id="desc">Four parallel work streams converge through one control rail into a decision point.</desc>
+  <g fill="none" stroke="currentColor" stroke-width="36" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M72 112h142c52 0 59 66 112 94"/>
+    <path d="M72 208h154c40 0 54 25 100 31"/>
+    <path d="M72 304h154c40 0 54-25 100-31"/>
+    <path d="M72 400h142c52 0 59-66 112-94"/>
+    <path d="M360 256h70"/>
+  </g>
+  <rect x="316" y="180" width="58" height="152" rx="29" fill="currentColor"/>
+  <circle cx="452" cy="256" r="24" fill="none" stroke="currentColor" stroke-width="14"/>
+</svg>

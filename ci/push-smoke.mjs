@@ -81,7 +81,7 @@ const service = createServer({ cert: readFileSync(certPem), key: readFileSync(ke
   });
 });
 await new Promise((r) => service.listen(Number(pushPort), "127.0.0.1", r));
-const sent = await owner.request({ type: "test_push", title: "Fault opened", body: "cargo test exited 101 in ~/src/ultraplexr" });
+const sent = await owner.request({ type: "test_push", title: "Fault opened", body: "cargo test exited 101 in ~/src/superplexr" });
 await new Promise((r) => setTimeout(r, 300));
 console.log(`   runtime saw status ${sent.outcomes.map((o) => o[1]).join(",")} · service: ${received ? JSON.stringify({ verified: received.verified, aud: received.aud, enc: received.contentEncoding, rs: received.rs, delimiter: received.delimiter, sameKey: received.sameKey, error: received.error }) : "nothing"}`);
 if (!received || received.error) fail(received?.error ?? "no push arrived");

@@ -49,7 +49,7 @@ source revision/dirty state, lock digest, command, selected feature sets and eac
 executable's size/SHA-256. These are artifact measurements, not runtime footprint
 or latency measurements. Dirty source is recorded, not claimed reproducible.
 
-Each profile also generates `build-inputs.json`, `ultraplexr.spdx.json` and
+Each profile also generates `build-inputs.json`, `superplexr.spdx.json` and
 `THIRD_PARTY_NOTICES.txt` from the package artifacts observed in that Cargo
 invocation. These include build scripts/procedural macros, not unselected workspace
 packages. Cached artifacts count when Cargo reports them for the current build.

@@ -1,0 +1,228 @@
+syntax = "proto3";
+
+package superplexr.terminal.v1;
+
+// Normative terminal data-plane schema for local protocol v3. UUID byte fields
+// MUST contain exactly 16 RFC 4122 network-order bytes. All sequence and offset
+// values are unsigned and monotonically increasing as specified in section 04.
+
+message GridSize {
+  uint32 columns = 1;
+  uint32 rows = 2;
+}
+
+message Viewport {
+  sint64 absolute_top = 1;
+  uint32 visible_rows = 2;
+  uint64 history_epoch = 3;
+}
+
+message Color {
+  oneof value {
+    bool default_color = 1;
+    uint32 palette_index = 2;
+    uint32 srgb = 3; // 0xRRGGBB; high eight bits MUST be zero.
+  }
+}
+
+enum UnderlineStyle {
+  UNDERLINE_STYLE_NONE = 0;
+  UNDERLINE_STYLE_SINGLE = 1;
+  UNDERLINE_STYLE_DOUBLE = 2;
+  UNDERLINE_STYLE_CURLY = 3;
+  UNDERLINE_STYLE_DOTTED = 4;
+  UNDERLINE_STYLE_DASHED = 5;
+}
+
+message CellStyle {
+  Color foreground = 1;
+  Color background = 2;
+  Color underline_color = 3;
+  bool bold = 4;
+  bool faint = 5;
+  bool italic = 6;
+  UnderlineStyle underline = 7;
+  bool strikethrough = 8;
+  bool inverse = 9;
+  bool invisible = 10;
+  bool blink = 11;
+  bool overline = 12;
+}
+
+message Hyperlink {
+  string uri = 1;
+  string id = 2;
+}
+
+message Cell {
+  string grapheme = 1;
+  uint32 display_width = 2; // MUST be 0, 1, or 2.
+  uint32 style_index = 3;
+  uint32 hyperlink_index = 4; // Zero means none; otherwise one-based.
+  uint32 flags = 5;
+}
+
+message Row {
+  sint64 absolute_line = 1;
+  bool wrapped = 2;
+  repeated Cell cells = 3;
+}
+
+enum CursorShape {
+  CURSOR_SHAPE_BLOCK = 0;
+  CURSOR_SHAPE_BEAM = 1;
+  CURSOR_SHAPE_UNDERLINE = 2;
+}
+
+message Cursor {
+  uint32 row = 1;
+  uint32 column = 2;
+  CursorShape shape = 3;
+  bool visible = 4;
+  bool blinking = 5;
+}
+
+enum MouseMode {
+  MOUSE_MODE_NONE = 0;
+  MOUSE_MODE_X10 = 1;
+  MOUSE_MODE_NORMAL = 2;
+  MOUSE_MODE_BUTTON = 3;
+  MOUSE_MODE_ANY = 4;
+}
+
+message TerminalModes {
+  bool alternate_screen = 1;
+  MouseMode mouse = 2;
+  bool focus_reporting = 3;
+  bool bracketed_paste = 4;
+  uint32 kitty_keyboard_flags = 5;
+  bool application_cursor_keys = 6;
+  bool application_keypad = 7;
+}
+
+message Palette {
+  repeated Color colors = 1; // At most 256 entries.
+  Color default_foreground = 2;
+  Color default_background = 3;
+  Color cursor = 4;
+}
+
+message FullFrameV1 {
+  bytes session_id = 1;
+  uint64 frame_sequence = 2;
+  uint64 output_offset = 3;
+  GridSize grid = 4;
+  Viewport viewport = 5;
+  repeated Row rows = 6;
+  Cursor cursor = 7;
+  TerminalModes modes = 8;
+  string title = 9;
+  string icon = 10;
+  Palette palette = 11;
+  repeated CellStyle styles = 12;
+  repeated Hyperlink hyperlinks = 13;
+  uint64 control_epoch = 14;
+  optional string current_directory = 15; // Bounded OSC 7/9/1337 value.
+}
+
+message RowReplacement {
+  uint32 visible_index = 1;
+  // The replaced cells. With `span` set they cover start_column.. rather
+  // than the whole row; `wrapped` on the row still applies to the whole row.
+  Row row = 2;
+  uint32 start_column = 3;
+  bool span = 4;
+}
+
+message FrameDeltaV1 {
+  bytes session_id = 1;
+  uint64 base_sequence = 2;
+  uint64 frame_sequence = 3;
+  uint64 output_offset = 4;
+  repeated RowReplacement changed_rows = 5;
+  optional GridSize grid = 6;
+  optional Viewport viewport = 7;
+  optional Cursor cursor = 8;
+  optional TerminalModes modes = 9;
+  optional string title = 10;
+  optional string icon = 11;
+  optional Palette palette = 12;
+  repeated CellStyle styles = 13;
+  repeated Hyperlink hyperlinks = 14;
+  optional uint64 control_epoch = 15;
+  optional string current_directory = 16;
+}
+
+enum ResyncReason {
+  RESYNC_REASON_UNSPECIFIED = 0;
+  RESYNC_REASON_LAGGED = 1;
+  RESYNC_REASON_SEQUENCE_GAP = 2;
+  RESYNC_REASON_HISTORY_EPOCH = 3;
+  RESYNC_REASON_INVALID_FRAME = 4;
+  RESYNC_REASON_SERVER_RESET = 5;
+}
+
+message ResyncRequiredV1 {
+  bytes session_id = 1;
+  ResyncReason reason = 2;
+  uint64 latest_sequence = 3;
+}
+
+message HistoryPageV1 {
+  bytes session_id = 1;
+  uint64 history_epoch = 2;
+  repeated Row rows = 3;
+  optional sint64 before = 4;
+  optional sint64 after = 5;
+  bool truncated = 6;
+  bool complete = 7;
+}
+
+message SearchMatch {
+  sint64 absolute_line = 1;
+  uint32 start_column = 2;
+  uint32 end_column = 3;
+  string preview = 4;
+}
+
+message SearchPageV1 {
+  bytes session_id = 1;
+  bytes query_id = 2;
+  repeated SearchMatch matches = 3;
+  bool complete = 4;
+  bool truncated = 5;
+}
+
+enum LifecycleState {
+  LIFECYCLE_STATE_UNSPECIFIED = 0;
+  LIFECYCLE_STATE_CREATING = 1;
+  LIFECYCLE_STATE_RUNNING = 2;
+  LIFECYCLE_STATE_EXITED = 3;
+  LIFECYCLE_STATE_LOST = 4;
+}
+
+message ExitStatus {
+  oneof value {
+    int32 code = 1;
+    int32 signal = 2;
+    bool unknown = 3;
+  }
+}
+
+message TerminalLifecycleV1 {
+  bytes session_id = 1;
+  LifecycleState state = 2;
+  optional ExitStatus exit_status = 3;
+  optional string reason = 4;
+  uint64 final_frame_sequence = 5;
+  uint64 final_output_offset = 6;
+}
+
+message PastePayloadV1 {
+  bytes session_id = 1;
+  bytes request_id = 2;
+  uint64 control_epoch = 3;
+  uint64 client_sequence = 4;
+  bytes content = 5;
+  bool unsafe_paste_confirmed = 6;
+}

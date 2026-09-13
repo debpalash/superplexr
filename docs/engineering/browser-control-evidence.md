@@ -18,8 +18,8 @@ automatically. No browser process-creation, termination, or owner fallback exist
 
 ```sh
 cargo test --workspace --locked --quiet -- --test-threads=1
-node --test crates/ultraplexr-observer/web/control_tests.mjs crates/ultraplexr-observer/web/stream_tests.mjs
-cargo clippy -p ultraplexr-observer -p ultraplexr-desktop --all-targets --all-features -- -D warnings
+node --test crates/superplexr-observer/web/control_tests.mjs crates/superplexr-observer/web/stream_tests.mjs
+cargo clippy -p superplexr-observer -p superplexr-desktop --all-targets --all-features -- -D warnings
 cargo fmt --all -- --check
 git diff --check
 ```

@@ -80,7 +80,7 @@ macOS CI verification step alongside existing browser/harness tests.
 cargo test --workspace --release --locked -j 2 --quiet
 cargo clippy --workspace --release --all-targets --all-features --locked -j 2 -- -D warnings
 cargo fmt --all --check
-node --test crates/ultraplexr-observer/web/*_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
+node --test crates/superplexr-observer/web/*_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
 ```
 
 Rendered acceptance can use `node ci/browser-search-fixture.mjs` after building

@@ -1,9 +1,9 @@
-# ultraplexr's packaged Ghostty-compatible terminal description.
+# superplexr's packaged Ghostty-compatible terminal description.
 #
 # The base capabilities are resolved by `tic` at package time, producing a
 # self-contained compiled entry. Extended capabilities cover the features the
 # libghostty-vt adapter and input encoder expose to modern applications.
-xterm-ghostty|ghostty|Ghostty-compatible terminal for ultraplexr,
+xterm-ghostty|ghostty|Ghostty-compatible terminal for superplexr,
 	AX,
 	Su,
 	Tc,

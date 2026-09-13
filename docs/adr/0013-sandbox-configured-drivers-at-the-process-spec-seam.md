@@ -7,7 +7,7 @@ the desktop never branch on macOS versus Linux.
 
 The first profile is `workspace_write`. It canonicalizes both workspace and
 runtime-state paths, permits host reads and workspace writes, and re-protects the
-runtime state even when `.ultraplexr` is under the workspace. macOS uses
+runtime state even when `.superplexr` is under the workspace. macOS uses
 `sandbox-exec`; Linux uses Bubblewrap with a read-only root and writable bind.
 Backend absence is a hard resolution failure—there is no silent cooperative
 fallback.

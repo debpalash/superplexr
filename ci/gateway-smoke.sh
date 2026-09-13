@@ -2,8 +2,8 @@
 # End-to-end: a runtime with the TLS gateway on, pairing, requests over TLS,
 # refusal of the unpaired, revocation, and attach over the gateway under a pty.
 set -u
-REPO="${1:-$(cd "$(dirname "$0")/.." && pwd)}"; BIN="$REPO/target/debug/ultraplexr"; DAEMON="$REPO/target/debug/ultraplexr-desktop"
-ROOT=/tmp/spxgw; rm -rf "$ROOT" "$ROOT.sock" "$HOME/.ultraplexr/devices/127.0.0.1_17373.json"; mkdir -p "$ROOT/work"
+REPO="${1:-$(cd "$(dirname "$0")/.." && pwd)}"; BIN="$REPO/target/debug/superplexr"; DAEMON="$REPO/target/debug/superplexr-desktop"
+ROOT=/tmp/spxgw; rm -rf "$ROOT" "$ROOT.sock" "$HOME/.superplexr/devices/127.0.0.1_17373.json"; mkdir -p "$ROOT/work"
 "$DAEMON" --internal-daemon --socket "$ROOT.sock" --state-dir "$ROOT" --gateway 127.0.0.1:17373 > "$ROOT.log" 2>&1 &
 echo $! > "$ROOT.pid"
 for i in $(seq 1 200); do [ -S "$ROOT.sock" ] && break; sleep 0.05; done
@@ -18,7 +18,7 @@ CODE=$(echo "$PAIR" | python3 -c "import sys,json; print(json.load(sys.stdin)['c
 FP=$(echo "$PAIR" | python3 -c "import sys,json; print(json.load(sys.stdin)['fingerprint'])")
 echo "   code=$CODE fingerprint=${FP:0:20}…"
 "$BIN" pair --gateway 127.0.0.1:17373 --fingerprint "$FP" "$CODE" 2>&1 | tail -1 | cut -c1-120
-ls -la "$HOME/.ultraplexr/devices/" | awk 'NR>1{print "   creds:", $1, $NF}'
+ls -la "$HOME/.superplexr/devices/" | awk 'NR>1{print "   creds:", $1, $NF}'
 
 echo "▸ 3. a request over TLS with the stored token"
 "$BIN" --gateway 127.0.0.1:17373 terminal-list 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); print('   terminal-list over tls: ok,', len(d['terminals']), 'terminals')" 2>&1 | tail -1

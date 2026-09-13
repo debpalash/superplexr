@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd agent for a headless superplexr runtime on a Mac that stays on.
+     cp com.superplexr.daemon.plist ~/Library/LaunchAgents/
+     launchctl load -w ~/Library/LaunchAgents/com.superplexr.daemon.plist -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.superplexr.daemon</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/superplexr-daemon</string>
+    <string>--socket</string><string>/tmp/superplexr/control.sock</string>
+    <string>--state-dir</string><string>/Users/USERNAME/Library/Application Support/superplexr</string>
+    <string>--gateway</string><string>0.0.0.0:7373</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardOutPath</key><string>/tmp/superplexr/daemon.log</string>
+  <key>StandardErrorPath</key><string>/tmp/superplexr/daemon.log</string>
+</dict>
+</plist>

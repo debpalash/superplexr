@@ -2,7 +2,7 @@ use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-mod ultraplexr_patches;
+mod superplexr_patches;
 
 /// Pinned ghostty commit. Update this to pull a newer version.
 const GHOSTTY_REPO: &str = "https://github.com/ghostty-org/ghostty.git";
@@ -89,10 +89,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=DEBUG");
     println!("cargo:rerun-if-env-changed=OPT_LEVEL");
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=ultraplexr_patches.rs");
+    println!("cargo:rerun-if-changed=superplexr_patches.rs");
     println!("cargo:rerun-if-changed=../../patches/ghostty/mem.zig");
 
-    // Ultraplexr always builds reviewed native sources. Installed libraries
+    // Superplexr always builds reviewed native sources. Installed libraries
     // cannot certify the pinned ABI or our memory-reclamation patch.
     build_vendored(link_mode, &target);
 }
@@ -113,13 +113,13 @@ fn build_vendored(link_mode: LinkMode, target: &str) {
                 p.display()
             );
             println!("cargo:rerun-if-changed={}", p.display());
-            ultraplexr_patches::prepare_override(&p, &out_dir)
+            superplexr_patches::prepare_override(&p, &out_dir)
                 .unwrap_or_else(|error| panic!("cannot prepare owned Ghostty sources: {error}"))
         }
         Err(_) => fetch_ghostty(&out_dir),
     };
 
-    ultraplexr_patches::apply_native_patch(&ghostty_dir)
+    superplexr_patches::apply_native_patch(&ghostty_dir)
         .unwrap_or_else(|error| panic!("pinned Ghostty patch refused: {error}"));
 
     // Build libghostty-vt via zig.

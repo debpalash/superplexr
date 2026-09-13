@@ -26,7 +26,7 @@ shell on the thing itself.
 subscription to the runtime, which keeps it under `push/` in the state
 dir, owner-only, beside the application server key it made once. A push
 service that answers 404 or 410 has dropped the subscription and it is
-forgotten. `ultraplexr push-test` sends one to prove the path. Viewer links
+forgotten. `superplexr push-test` sends one to prove the path. Viewer links
 cannot subscribe; notifications are the owner's.
 
 `ci/push-smoke.sh` proves the cryptography against an independent

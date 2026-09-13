@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=SuperPlexr
+Comment=Agent-native terminal multiplexer
+Exec=superplexr-desktop
+Icon=superplexr
+Terminal=false
+Categories=Development;System;TerminalEmulator;
+Keywords=terminal;multiplexer;coding agent;AI agent;developer tools;
+StartupNotify=true

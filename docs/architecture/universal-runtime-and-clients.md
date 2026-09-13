@@ -1,8 +1,8 @@
-# Ultraplexr: universal runtime and clients
+# SuperPlexr: universal runtime and clients
 
 Date: 2026-09-05  
 Status: architecture proposal and implementation sequence  
-Scope: the broader Ultraplexr product direction; repository packages currently use `ultraplexr`.
+Scope: the broader SuperPlexr product direction; repository packages currently use `superplexr`.
 
 ## Goal and relationship to v1
 
@@ -19,7 +19,7 @@ This proposal records the product direction discussed with the owner. It does
 not claim these capabilities are shipped or silently expand the current
 [macOS/Linux v1 contract](../spec/README.md). Platform and protocol changes need
 corresponding specification updates and acceptance evidence as they are
-implemented. The [unified roadmap](../ultraplexr-unified-roadmap.md) remains the
+implemented. The [unified roadmap](../superplexr-unified-roadmap.md) remains the
 status ledger. Existing ADRs govern implemented behavior until explicitly
 superseded.
 
@@ -43,12 +43,12 @@ not another Mission or a second workflow system.
   Share authorization, and subscriptions stay common. The built-in adapter is
   Unix sockets; a real-daemon integration test also uses a loopback byte relay.
   This is not a Windows/WASM port or an authenticated TCP server.
-- The optional `ultraplexr-observer` executable serves a localhost-only browser
+- The optional `superplexr-observer` executable serves a localhost-only browser
   observer with scoped terminal listing, selectable/copyable text, pause/resume
   of local updates, retained history, and event-driven SSE snapshots with scoped
   reconnect. It uses no frontend framework or build
   pipeline. See [the observer guide](../design/browser-observer-prototype.md).
-- The optional `ultraplexr-tui` attaches to one existing Session using the same
+- The optional `superplexr-tui` attaches to one existing Session using the same
   client. It renders styled canonical cells, supports non-forced Control,
   guarded paste, controlled resize, local pause/history and explicit clipboard
   export. Real-PTY tests exercise shell/vi, detach, cleanup and Share revocation;
@@ -160,7 +160,7 @@ a desktop or browser to be installed on the execution host.
 
 Herdr's documented workflow validates this use case: project organization,
 agent state, mouse/keyboard navigation, and detach/reattach from a terminal.
-Use that as an interaction benchmark, while preserving Ultraplexr's Mission,
+Use that as an interaction benchmark, while preserving SuperPlexr's Mission,
 Run, Session, and evidence model. [Herdr quick start](https://herdr.dev/docs/quick-start/).
 
 The TUI should be an optional client of the same runtime. It should not own a
@@ -283,7 +283,7 @@ size, startup time, idle CPU/RSS, incremental memory per Session/viewer, termina
 throughput, input-to-display latency, reconnect time, wire bandwidth, and retained
 history growth. Report workload, hardware, percentile, and direct/relay path.
 Count browser, gateway, and companion-process costs explicitly; report agent
-subprocess consumption separately from Ultraplexr overhead.
+subprocess consumption separately from SuperPlexr overhead.
 
 The current [idle benchmark](../../ci/desktop-idle-benchmark.sh) allows 600 MiB
 combined desktop/runtime RSS. That is a configured ceiling, not a measurement

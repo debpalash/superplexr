@@ -11,7 +11,7 @@ subscriptions, frame repair, Mission history, and Control epochs cross the same
 socket seam without remote branches in domain or PTY modules. The remote sshd
 process connects as the owning OS user, so the runtime's kernel peer-UID check
 still applies. The forwarded local socket is created with umask `0177` in a real
-owner-only directory, and ultraplexr never enables unlinking an arbitrary
+owner-only directory, and superplexr never enables unlinking an arbitrary
 pre-existing path.
 
 The tunnel supervisor owns one exact absent socket path, removes only an

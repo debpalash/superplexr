@@ -1,20 +1,20 @@
 #!/usr/bin/env node
 // Reproducible local HTTP-delivery baseline; does not measure browser paint.
-// Run after cargo build -p ultraplexr-server -p ultraplexr-cli -p ultraplexr-observer.
+// Run after cargo build -p superplexr-server -p superplexr-cli -p superplexr-observer.
 import {spawn, execFile} from "node:child_process";
 import {promisify} from "node:util";
 import {mkdtemp, writeFile, rm} from "node:fs/promises";
 import {join, resolve} from "node:path";
 import os from "node:os";
 import {performance} from "node:perf_hooks";
-import {readEvents} from "../crates/ultraplexr-observer/web/stream.mjs";
+import {readEvents} from "../crates/superplexr-observer/web/stream.mjs";
 const exec = promisify(execFile), sleep = ms => new Promise(r=>setTimeout(r,ms));
-const binaries = resolve(process.env.ULTRAPLEXR_BINARY_DIR || "target/debug");
+const binaries = resolve(process.env.SUPERPLEXR_BINARY_DIR || "target/debug");
 const root = await mkdtemp("/tmp/up-stream-bench-");
 const socket = join(root,"s"), children = [];
 let controller, streamTask, metadataTimer, metadataError;
 async function cli(...args) {
-  const {stdout} = await exec(join(binaries,"ultraplexr"), ["--socket",socket,...args], {timeout:10000});
+  const {stdout} = await exec(join(binaries,"superplexr"), ["--socket",socket,...args], {timeout:10000});
   return JSON.parse(stdout);
 }
 function start(name,args) {
@@ -36,14 +36,14 @@ async function sample(pid) {
   return {rss_mib:Number(rss)/1024,cpu_seconds:cpuSeconds(time)};
 }
 try {
-  const runtime=start("ultraplexr-server",["--socket",socket,"--state-dir",join(root,"state")]);
+  const runtime=start("superplexr-server",["--socket",socket,"--state-dir",join(root,"state")]);
   await until(()=>runtime.output().includes("runtime listening"));
   const terminal=await cli("terminal-new","--program","/bin/cat","--columns","80","--rows","24");
   const id=terminal.terminal.session_id;
   const share=await cli("share-create","benchmark","--role","observer","--session",id,"--expires-in-seconds","120");
   const tokenFile=join(root,"observer.token");
   await writeFile(tokenFile,share.token+"\n",{mode:0o600});
-  const observer=start("ultraplexr-observer",["--socket",socket,"--share-token-file",tokenFile]);
+  const observer=start("superplexr-observer",["--socket",socket,"--share-token-file",tokenFile]);
   await until(()=>observer.output().includes("http://"));
   const url=new URL(observer.output().match(/http:\/\/\S+/)[0]);
   const key=new URLSearchParams(url.hash.slice(1)).get("access");

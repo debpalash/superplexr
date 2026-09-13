@@ -2,7 +2,7 @@
 
 Status: opt-in local Unix recipe for Cargo binary projects. Automated acceptance
 uses a real dependency-free Cargo project on macOS arm64. This is not evidence
-that Ultraplexr itself, arbitrary large projects, or Linux releases have passed
+that SuperPlexr itself, arbitrary large projects, or Linux releases have passed
 the recipe.
 
 The recipe generates a normal [bounded verification plan](bounded-verification-runner.md).
@@ -36,7 +36,7 @@ stdout bytes are supported; the embedded recipe must fit the plan's 4096-byte
 argument bound.
 
 ```sh
-ultraplexr verification-plan-rust \
+superplexr verification-plan-rust \
   --recipe /absolute/private-checks/rust-recipe.json \
   --output /absolute/private-checks/rust-plan.json
 ```
@@ -106,7 +106,7 @@ never cleanup targets.
 ## Executed acceptance
 
 ```sh
-cargo test -p ultraplexr-cli --test verification_runner_tests \
+cargo test -p superplexr-cli --test verification_runner_tests \
   rust_project_recipe_tests --locked -- --nocapture --test-threads=1
 ```
 

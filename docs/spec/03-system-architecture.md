@@ -2,7 +2,7 @@
 
 ## 1. System shape — A-SYS-000
 
-ultraplexr has one durable local runtime and any number of transient clients.
+superplexr has one durable local runtime and any number of transient clients.
 
 ```text
 ┌──────────────────── desktop process ─────────────────────┐
@@ -16,7 +16,7 @@ ultraplexr has one durable local runtime and any number of transient clients.
 ┌──────── agent process ────┤ restricted capability channel
 └───────────────────────────┤
                             ▼
-┌──────────────────── ultraplexrd runtime ────────────────────┐
+┌──────────────────── superplexrd runtime ────────────────────┐
 │ MissionEngine · Scheduler · AttentionProjection           │
 │ RunExecutor · AgentDriver adapters                         │
 │ SessionSupervisor                                         │
@@ -39,7 +39,7 @@ device replies, output parsing, persistence, scheduling, or process continuity.
 ### A-SYS-003
 
 V1 runs as one OS user on one authoritative host. Runtime endpoints remain local
-Unix-domain sockets and no ultraplexr TCP listener is permitted by default. An
+Unix-domain sockets and no superplexr TCP listener is permitted by default. An
 opt-in owner Remote attachment MAY ask OpenSSH to forward an owner-only local
 Unix socket to the authoritative control socket; SSH owns network
 authentication/encryption and the runtime retains its peer-UID check.
@@ -83,23 +83,23 @@ incrementally, but the seams are normative.
 
 | Crate/module | Responsibility | Types it may expose |
 |---|---|---|
-| `ultraplexr-core` | domain decisions and projections | domain types only |
-| `ultraplexr-store` | atomic Mission event storage and snapshots | store records/errors |
-| `ultraplexr-terminal` | safe Ghostty adaptation and backend-neutral frames | terminal-domain types only |
-| `ultraplexr-session` | PTY/process supervision and Session actor | session commands/events |
-| `ultraplexr-agent` | Run execution, child setup, agent-driver adapters | Run launch types |
-| `ultraplexr-server::share_store` | bounded Share capability lifecycle and durable digest metadata | Share summaries/authentication result |
-| `ultraplexr-server::provider_status` | bounded expiring provider facts and explainable Run Activity projection | provider facts and derived activity only |
-| `ultraplexr-protocol` | v3 framing, control types, terminal messages | transport types |
-| `ultraplexr-server` | composition root, scheduler, protocol hub | standalone executable plus path-scoped embedded runtime entry point |
-| `ultraplexr-plugin` | executable-plugin discovery, bounded protocol, supervision, SDK seam | semantic plugin events, manifests, health snapshots |
-| `ultraplexr-desktop` | GPUI shell, projections, terminal painting | executable; GPUI-local types |
-| `ultraplexr-cli` | human/script control client | executable |
+| `superplexr-core` | domain decisions and projections | domain types only |
+| `superplexr-store` | atomic Mission event storage and snapshots | store records/errors |
+| `superplexr-terminal` | safe Ghostty adaptation and backend-neutral frames | terminal-domain types only |
+| `superplexr-session` | PTY/process supervision and Session actor | session commands/events |
+| `superplexr-agent` | Run execution, child setup, agent-driver adapters | Run launch types |
+| `superplexr-server::share_store` | bounded Share capability lifecycle and durable digest metadata | Share summaries/authentication result |
+| `superplexr-server::provider_status` | bounded expiring provider facts and explainable Run Activity projection | provider facts and derived activity only |
+| `superplexr-protocol` | v3 framing, control types, terminal messages | transport types |
+| `superplexr-server` | composition root, scheduler, protocol hub | standalone executable plus path-scoped embedded runtime entry point |
+| `superplexr-plugin` | executable-plugin discovery, bounded protocol, supervision, SDK seam | semantic plugin events, manifests, health snapshots |
+| `superplexr-desktop` | GPUI shell, projections, terminal painting | executable; GPUI-local types |
+| `superplexr-cli` | human/script control client | executable |
 
-`ultraplexr-core`, `ultraplexr-store`, `ultraplexr-terminal`, `ultraplexr-session`, and
-`ultraplexr-agent` MUST NOT depend on GPUI. Only `ultraplexr-terminal` may depend on
+`superplexr-core`, `superplexr-store`, `superplexr-terminal`, `superplexr-session`, and
+`superplexr-agent` MUST NOT depend on GPUI. Only `superplexr-terminal` may depend on
 the safe libghostty wrapper; raw FFI is private to that wrapper or its `-sys`
-crate. Only `ultraplexr-desktop` may expose GPUI types.
+crate. Only `superplexr-desktop` may expose GPUI types.
 
 ## 4. Deep module interfaces — A-INTERFACE-001
 
@@ -285,9 +285,9 @@ logs/
   runtime.jsonl
 ```
 
-On Linux, `run/` uses `$XDG_RUNTIME_DIR/ultraplexr` and state uses
-`$XDG_STATE_HOME/ultraplexr` with standards-compliant fallbacks. On macOS, state
-uses `~/Library/Application Support/ultraplexr` and the socket uses a private
+On Linux, `run/` uses `$XDG_RUNTIME_DIR/superplexr` and state uses
+`$XDG_STATE_HOME/superplexr` with standards-compliant fallbacks. On macOS, state
+uses `~/Library/Application Support/superplexr` and the socket uses a private
 per-user runtime directory whose path length fits Unix-socket limits.
 
 Every directory MUST be mode `0700`; state files MUST be `0600`. Session output

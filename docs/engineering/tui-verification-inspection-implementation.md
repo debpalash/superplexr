@@ -1,11 +1,11 @@
 # Optional TUI verification inspection
 
-Status: `cargo test -p ultraplexr-tui --release --all-features --locked --offline`
+Status: `cargo test -p superplexr-tui --release --all-features --locked --offline`
 passes: 14 unit tests and 16 integration tests, with the isolated daemon helper
-ignored as intended. `cargo fmt -p ultraplexr-tui` completed. Integration tests
+ignored as intended. `cargo fmt -p superplexr-tui` completed. Integration tests
 use isolated runtimes and outer PTYs; the owner's application was not touched.
 
-`ultraplexr-tui --workflow-read` adds `w` to the existing navigator. Select a
+`superplexr-tui --workflow-read` adds `w` to the existing navigator. Select a
 Mission row, or enter a Mission's Sessions, then press `w` for a bounded live
 page of up to 64 verifiers. Enter on a verifier reads its compact recorded
 status. `n` or Enter on the next-page row reads the next page; `0` reads the first

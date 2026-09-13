@@ -1,0 +1,24 @@
+[package]
+name = "superplexr-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+clap.workspace = true
+crossterm = "0.29"
+signal-hook = "0.3"
+thiserror.workspace = true
+unicode-width = "0.2"
+base64 = "0.22"
+superplexr-client = { path = "../superplexr-client" }
+superplexr-core = { path = "../superplexr-core" }
+superplexr-protocol = { path = "../superplexr-protocol" }
+superplexr-terminal = { path = "../superplexr-terminal" }
+
+[dev-dependencies]
+superplexr-server = { path = "../superplexr-server" }
+portable-pty.workspace = true
+uuid.workspace = true
+

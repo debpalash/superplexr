@@ -12,9 +12,9 @@ all Session IDs and PTY PIDs.
 Run from the repository root on an otherwise quiet supported Unix host:
 
 ```sh
-cargo build --release --locked -j 2 -p ultraplexr-server -p ultraplexr-cli -p ultraplexr-observer -p ultraplexr-tui -p ultraplexr-desktop
+cargo build --release --locked -j 2 -p superplexr-server -p superplexr-cli -p superplexr-observer -p superplexr-tui -p superplexr-desktop
 node --test ci/resource-samples-tests.mjs ci/pty-host-tests.mjs
-node ci/shared-client-resource-benchmark.mjs --output /tmp/ultraplexr-shared-release-resources.json
+node ci/shared-client-resource-benchmark.mjs --output /tmp/superplexr-shared-release-resources.json
 ```
 
 The output path must not exist. The benchmark creates its own private temporary
@@ -51,7 +51,7 @@ The real 100,000-row test exposed two independent problems:
   intended workload: 100,000 history rows plus 24 live rows. Verification now
   requires the very first marker (`H000000`), not a later approximate marker.
 
-`crates/ultraplexr-terminal/tests/history_budget_tests.rs` exercises both one
+`crates/superplexr-terminal/tests/history_budget_tests.rs` exercises both one
 large output batch and 4 KiB PTY-style chunks. It checks all 100,024 marked rows,
 the oldest row through independent viewport navigation, and bounded page pruning
 after exceeding the row allowance. Both tests passed locally. Removing the byte

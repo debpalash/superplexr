@@ -25,10 +25,10 @@ implementation:
 
 ```sh
 # Owner-connected reads: Fault inspection plus terminal inspection.
-ultraplexr-mcp --socket /absolute/path/control.sock --read-only --terminal-read
+superplexr-mcp --socket /absolute/path/control.sock --read-only --terminal-read
 
 # Share-scoped terminal inspection only; Observer Shares are preferred.
-ultraplexr-mcp --socket /absolute/path/control.sock --terminal-read \
+superplexr-mcp --socket /absolute/path/control.sock --terminal-read \
   --share-token-file /absolute/path/observer.token
 ```
 

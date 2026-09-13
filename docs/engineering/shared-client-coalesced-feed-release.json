@@ -8,28 +8,28 @@
   "logical_cpus": 8,
   "host_memory_mib": 16384,
   "binaries": {
-    "ultraplexr-server": {
-      "path": "/Users/USER/Desktop/ultraplexr/target/release/ultraplexr-server",
+    "superplexr-server": {
+      "path": "/Users/USER/Desktop/superplexr/target/release/superplexr-server",
       "bytes": 10391232,
       "sha256": "e0c8913b29e23c5700bc96a63b074194cfe089d5405021e9806bb77607f4c1b2"
     },
-    "ultraplexr": {
-      "path": "/Users/USER/Desktop/ultraplexr/target/release/ultraplexr",
+    "superplexr": {
+      "path": "/Users/USER/Desktop/superplexr/target/release/superplexr",
       "bytes": 9034512,
       "sha256": "10008146fd177f408c3779c30edf1ca3f6a833f0cb724e9be93872b76510e781"
     },
-    "ultraplexr-observer": {
-      "path": "/Users/USER/Desktop/ultraplexr/target/release/ultraplexr-observer",
+    "superplexr-observer": {
+      "path": "/Users/USER/Desktop/superplexr/target/release/superplexr-observer",
       "bytes": 7171904,
       "sha256": "098558413b738292010149f38735ad286b9f5264b28152986e49aa5cae51065f"
     },
-    "ultraplexr-tui": {
-      "path": "/Users/USER/Desktop/ultraplexr/target/release/ultraplexr-tui",
+    "superplexr-tui": {
+      "path": "/Users/USER/Desktop/superplexr/target/release/superplexr-tui",
       "bytes": 5294896,
       "sha256": "f68e5983bb6588ac94a297cdf0c9a0ae7aa04706fe66652f19cef598b2297b06"
     },
-    "ultraplexr-desktop": {
-      "path": "/Users/USER/Desktop/ultraplexr/target/release/ultraplexr-desktop",
+    "superplexr-desktop": {
+      "path": "/Users/USER/Desktop/superplexr/target/release/superplexr-desktop",
       "bytes": 26418944,
       "sha256": "1a5980a6414055f600d580e0e7fcc9be1b55769597a337c9008b2be546aeabb7"
     }

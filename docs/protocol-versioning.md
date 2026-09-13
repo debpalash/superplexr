@@ -1,6 +1,6 @@
 # Protocol versioning
 
-The daemon and every client speak `ultraplexr-protocol`. `PROTOCOL_VERSION`
+The daemon and every client speak `superplexr-protocol`. `PROTOCOL_VERSION`
 is a single integer, and it is the whole policy: two sides with different
 numbers do not talk. There are no minor versions and no feature flags on the
 wire, because a client that half-understands a frame renders it wrong, and a
@@ -11,7 +11,7 @@ wrong screen is worse than a refused connection.
 Anything that changes what bytes mean once they have left the daemon:
 
 - a field added, removed or retyped in a request, response or event;
-- a change to the terminal data plane (`proto/ultraplexr/terminal/v1.proto`
+- a change to the terminal data plane (`proto/superplexr/terminal/v1.proto`
   and the checked-in `terminal_proto.rs`), including a new field that an old
   decoder would silently ignore;
 - a change to how a delta is applied, even if the encoding is unchanged.
@@ -30,8 +30,8 @@ error, and "works until you press that button" is not compatibility.
 
 ## What a bump costs, and what it must not cost
 
-The state directory is named by version (`.ultraplexr-dev/v26`,
-`.ultraplexr/v26`) so an old runtime can run beside a new one. A bump must
+The state directory is named by version (`.superplexr-dev/v26`,
+`.superplexr/v26`) so an old runtime can run beside a new one. A bump must
 never cost a person their sessions, Faults, workspaces or shares: on first
 start into a new version's directory, the daemon copies the previous
 version's state forward (`carry_forward_state`), leaving the old directory

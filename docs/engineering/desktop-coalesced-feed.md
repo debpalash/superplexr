@@ -96,7 +96,7 @@ rebuilt. The existing `block v0.1.6` future-incompatibility notice remains.
 cargo test --workspace --release --locked -j 2 --quiet
 cargo clippy --workspace --release --all-targets --all-features --locked -j 2 -- -D warnings
 cargo fmt --all --check
-node --test crates/ultraplexr-observer/web/*_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
+node --test crates/superplexr-observer/web/*_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
 ```
 
 These tests do not provide physical native-window QA or Linux/Windows acceptance.

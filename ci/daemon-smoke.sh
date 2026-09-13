@@ -3,8 +3,8 @@
 # then the same three shells the gate names — TUI (attach under a pty), web
 # (the browser smoke), and a viewer link — against it. No desktop anywhere.
 set -u
-REPO="${1:-$(cd "$(dirname "$0")/.." && pwd)}"; BIN="$REPO/target/debug/ultraplexr"; DAEMON="$REPO/target/debug/ultraplexr-daemon"
-PORT=17379; ROOT=/tmp/spxhost; rm -rf "$ROOT" "$ROOT.sock" "$HOME/.ultraplexr/devices/127.0.0.1_$PORT.json"; mkdir -p "$ROOT"
+REPO="${1:-$(cd "$(dirname "$0")/.." && pwd)}"; BIN="$REPO/target/debug/superplexr"; DAEMON="$REPO/target/debug/superplexr-daemon"
+PORT=17379; ROOT=/tmp/spxhost; rm -rf "$ROOT" "$ROOT.sock" "$HOME/.superplexr/devices/127.0.0.1_$PORT.json"; mkdir -p "$ROOT"
 "$DAEMON" --socket "$ROOT.sock" --state-dir "$ROOT/state" --gateway 127.0.0.1:$PORT > "$ROOT.log" 2>&1 &
 echo $! > "$ROOT.pid"
 for i in $(seq 1 200); do [ -S "$ROOT.sock" ] && break; sleep 0.05; done
@@ -28,6 +28,6 @@ echo "▸ 5. a viewer link for the host's session"
 LINK=$("$BIN" --socket "$ROOT.sock" stream "$SID" --label onlooker 2>&1 | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['url'])")
 echo "   $(echo "$LINK" | sed 's/#share=.*/#share=…/')"
 STATUS=0; grep -q 'host echoed: from the tui' "$OUT" || STATUS=1
-kill $(cat "$ROOT.pid") 2>/dev/null; rm -rf "$ROOT" "$ROOT.sock" "$ROOT.pid" "$ROOT.log" "$OUT" "$HOME/.ultraplexr/devices/127.0.0.1_$PORT.json"
+kill $(cat "$ROOT.pid") 2>/dev/null; rm -rf "$ROOT" "$ROOT.sock" "$ROOT.pid" "$ROOT.log" "$OUT" "$HOME/.superplexr/devices/127.0.0.1_$PORT.json"
 [ $STATUS -eq 0 ] && echo "all hosted steps pass"
 exit $STATUS

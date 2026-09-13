@@ -6,31 +6,31 @@ Nothing in the engine changes. The gateway already speaks to it.
 
 ## The binary
 
-`ultraplexr-daemon` is the runtime alone — no desktop linked in — with
+`superplexr-daemon` is the runtime alone — no desktop linked in — with
 three flags: `--socket`, `--state-dir`, `--gateway`. It is what the
 desktop starts for itself, packaged for a host with no screen.
 
 ```
-ultraplexr-daemon --socket /tmp/ultraplexr/control.sock \
-    --state-dir /var/lib/ultraplexr --gateway 0.0.0.0:7373
+superplexr-daemon --socket /tmp/superplexr/control.sock \
+    --state-dir /var/lib/superplexr --gateway 0.0.0.0:7373
 ```
 
 ## Hosting it
 
-- **Linux, systemd:** `packaging/linux/ultraplexr-daemon.service` runs it
+- **Linux, systemd:** `packaging/linux/superplexr-daemon.service` runs it
   as its own user with a private state directory, restarts it, and locks
   the filesystem down. Pair from the host as that user:
-  `ultraplexr --socket /run/ultraplexr/control.sock device-pair --label laptop`.
-- **A Mac that stays on:** `packaging/macos/com.ultraplexr.daemon.plist`
+  `superplexr --socket /run/superplexr/control.sock device-pair --label laptop`.
+- **A Mac that stays on:** `packaging/macos/com.superplexr.daemon.plist`
   for launchd.
 - **A container:** `ci/daemon.Dockerfile` builds the daemon and the CLI
   with the same toolchain CI uses and runs them as an unprivileged user
   with the state on a volume. `docker exec` into it to pair.
 
-Then, from anywhere that can reach port 7373: `ultraplexr pair`, and the
+Then, from anywhere that can reach port 7373: `superplexr pair`, and the
 TUI (`attach --gateway`), the web shell (`https://host:7373/`) and a phone
 with the shell installed all work as they do against a laptop. Viewer
-links (`ultraplexr stream`) carry the host's address.
+links (`superplexr stream`) carry the host's address.
 
 ## What the host must know
 

@@ -44,7 +44,7 @@ This does not add Mission discovery, agent creation, browser workflow editing,
 or live workflow streaming. The owner must provide the Mission ID. Status is a
 point-in-time record, not proof of current artifact contents or platform readiness.
 
-`node --test crates/ultraplexr-observer/web/workflow_tests.mjs` exercises manual
+`node --test crates/superplexr-observer/web/workflow_tests.mjs` exercises manual
 discovery and direct-ID form submission, page replacement and selection,
 malformed/inconsistent JSON, DOM and byte limits, streamed-body cancellation,
 ten-second timeouts, late responses, HTTP failures, feature disable, and

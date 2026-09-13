@@ -62,7 +62,7 @@ without a specification change.
 - Domain command/event examples and generated command sequences prove every
   D-INV requirement.
 - Cycle detection generates lineage forests and dependency DAG mutations.
-- Terminal translation tests use upstream and ultraplexr golden VT fixtures.
+- Terminal translation tests use upstream and superplexr golden VT fixtures.
 - Protocol codecs round-trip valid values and reject every invalid bound.
 - Layout property tests preserve stable order, valid spans, and one settled
   resize across arbitrary window sequences.
@@ -239,7 +239,7 @@ install terminfo without overwriting another package, and work under Wayland and
 X11 without root at runtime.
 
 Package install/uninstall MUST distinguish executables from user state. Uninstall
-preserves Missions by default. `Delete all ultraplexr data` is a separate explicit
+preserves Missions by default. `Delete all superplexr data` is a separate explicit
 action with path preview.
 
 Updates are atomic. A runtime binary is never replaced underneath active PTYs.

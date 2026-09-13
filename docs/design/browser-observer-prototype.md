@@ -9,15 +9,15 @@ build and uses no third-party scripts, fonts, analytics, or assets.
 
 ## Run
 
-Build with `cargo build -p ultraplexr-observer -p ultraplexr-cli`. Obtain an existing
+Build with `cargo build -p superplexr-observer -p superplexr-cli`. Obtain an existing
 Observer Share token in an owner-only file, or mint one for explicit Sessions:
 
 ```sh
-(umask 077; target/debug/ultraplexr --socket /absolute/path/control.sock \
+(umask 077; target/debug/superplexr --socket /absolute/path/control.sock \
   share-create browser --role observer --session SESSION_ID \
   --expires-in-seconds 3600 | jq -r .token > observer.token)
 
-target/debug/ultraplexr-observer --socket /absolute/path/control.sock \
+target/debug/superplexr-observer --socket /absolute/path/control.sock \
   --share-token-file observer.token
 ```
 
@@ -25,7 +25,7 @@ Open the private localhost URL printed by the command, select a Session, and
 observe its output. Pause updates before marking text if output is changing.
 Copy output copies the selected text, or the displayed frame if nothing is selected.
 Ctrl-C closes the observer and its feeds; it does not stop the runtime or Sessions.
-Revoke the Share with `ultraplexr share-revoke SHARE_ID` on the owner connection.
+Revoke the Share with `superplexr share-revoke SHARE_ID` on the owner connection.
 
 The default port is ephemeral; `--port` chooses a fixed local port. A browser
 reload clears the access key from memory, so reopen the private URL to reconnect.
@@ -51,10 +51,10 @@ Read-only remains the default. To permit input, mint a **Controller** Share
 scoped to the required Sessions and launch with `--allow-control`:
 
 ```sh
-(umask 077; target/debug/ultraplexr --socket /absolute/path/control.sock \
+(umask 077; target/debug/superplexr --socket /absolute/path/control.sock \
   share-create browser-control --role controller --session SESSION_ID \
   --expires-in-seconds 3600 | jq -r .token > controller.token)
-target/debug/ultraplexr-observer --socket /absolute/path/control.sock \
+target/debug/superplexr-observer --socket /absolute/path/control.sock \
   --share-token-file controller.token --allow-control
 ```
 
@@ -163,7 +163,7 @@ acceptance controls. It remains unbuilt and untested; see the
 
 ## Verification
 
-`cargo test -p ultraplexr-desktop workspace_lifecycle_tests` starts isolated real
+`cargo test -p superplexr-desktop workspace_lifecycle_tests` starts isolated real
 daemon processes and exercises two clients, duplicated views, dismissal reload,
 detach/reattach, archive/restore, alternate byte transport, HTTP scope checks,
 denied writes, and live-stream revocation. It never uses the person's daemon.
@@ -171,14 +171,14 @@ denied writes, and live-stream revocation. It never uses the person's daemon.
 The reconnect test forcibly disconnects the native byte relay, produces output
 during the outage, reattaches without changing Session ID or PTY PID, retrieves
 history, detaches/reattaches the HTTP feed, and verifies subsequent revocation.
-`node --test crates/ultraplexr-observer/web/stream_tests.mjs` covers SSE boundaries,
+`node --test crates/superplexr-observer/web/stream_tests.mjs` covers SSE boundaries,
 packet limits, browser retry identity/backoff, and permission failures.
 
-`cargo test -p ultraplexr-desktop browser_control_tests -- --test-threads=1`
+`cargo test -p superplexr-desktop browser_control_tests -- --test-threads=1`
 uses real PTYs to check two-browser contention, owner handoff, stale/duplicate
 input, paste confirmation, resize, origin/auth checks, scope, HTTP detach,
 forced native-link loss, and Share revocation. `node --test
-crates/ultraplexr-observer/web/control_tests.mjs` covers the ordered browser
+crates/superplexr-observer/web/control_tests.mjs` covers the ordered browser
 command lane, lost acknowledgements, retired attachments, queue bounds, keys,
 duplicate DOM input events, and IME/clipboard routing. Current automated and
 rendered-browser results are recorded in the
@@ -188,8 +188,8 @@ On macOS with a GUI login, build the desktop binary and run the explicit native
 restart test (it opens two short-lived real windows against an isolated daemon):
 
 ```sh
-cargo build -p ultraplexr-desktop
-cargo test -p ultraplexr-desktop \
+cargo build -p superplexr-desktop
+cargo test -p superplexr-desktop \
   workspace_lifecycle_tests::native_desktop_restart_preserves_personal_state_and_live_sessions \
   -- --ignored --nocapture
 ```

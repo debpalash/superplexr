@@ -10,7 +10,7 @@ const binaries = resolve("target/release"), socket = join(root,"s"), children = 
 let sessionId;
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 async function cli(...args) {
-  return JSON.parse((await exec(join(binaries,"ultraplexr"), ["--socket",socket,...args], {timeout:15000})).stdout);
+  return JSON.parse((await exec(join(binaries,"superplexr"), ["--socket",socket,...args], {timeout:15000})).stdout);
 }
 function start(name, args) {
   const child = spawn(join(binaries,name), args, {stdio:["ignore","pipe","pipe"]});
@@ -27,7 +27,7 @@ async function until(check) {
   while (!await check()) { if (Date.now() > deadline) throw new Error("Fixture startup timeout"); await sleep(50); }
 }
 try {
-  const runtime = start("ultraplexr-server", ["--socket",socket,"--state-dir",join(root,"state")]);
+  const runtime = start("superplexr-server", ["--socket",socket,"--state-dir",join(root,"state")]);
   await until(() => { if (runtime.ended) throw new Error(runtime.text); return runtime.text.includes("runtime listening"); });
   const {terminal} = await cli("terminal-new", "--program","/bin/sh","--cwd",root,"--columns","80","--rows","24","--","-c",
     "stty -echo; awk 'BEGIN { for(i=0;i<1200;i++) printf \"needle %04d\\n\",i; print \"needle <script>not executable</script> 界\"; print \"READY\" }'; exec cat");
@@ -36,7 +36,7 @@ try {
   const share = await cli("share-create","browser search QA","--role","controller","--session",terminal.session_id,"--expires-in-seconds","1800");
   const token = join(root,"share.token");
   await writeFile(token, share.token + "\n", {mode:0o600});
-  const gateway = start("ultraplexr-observer", ["--socket",socket,"--share-token-file",token,"--allow-control"]);
+  const gateway = start("superplexr-observer", ["--socket",socket,"--share-token-file",token,"--allow-control"]);
   await until(() => { if (gateway.ended) throw new Error(gateway.text); return gateway.text.includes("http://"); });
   process.stdout.write(JSON.stringify({url:gateway.text.match(/http:\/\/\S+/)[0], socket, session:terminal.session_id, share:share.share.share_id, runtime_pid:runtime.child.pid, gateway_pid:gateway.child.pid}) + "\n");
   // Enter, stdin closure or termination ends only this disposable fixture.

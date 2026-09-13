@@ -11,7 +11,7 @@ evidence, and durable Mission records. There are no mocked runtime responses,
 provider credentials, paid model calls, or user repositories.
 
 ```sh
-cargo test -p ultraplexr-server --test delivery_journey_tests --locked -- --nocapture
+cargo test -p superplexr-server --test delivery_journey_tests --locked -- --nocapture
 ```
 
 They also run under the existing `cargo test --workspace --locked` CI command;

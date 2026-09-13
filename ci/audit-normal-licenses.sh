@@ -2,7 +2,7 @@
 set -eu
 
 workspace=${1:-.}
-audit_dir=$(mktemp -d "${TMPDIR:-/tmp}/ultraplexr-license-audit.XXXXXX")
+audit_dir=$(mktemp -d "${TMPDIR:-/tmp}/superplexr-license-audit.XXXXXX")
 trap 'rm -rf "$audit_dir"' EXIT INT TERM
 
 cd "$workspace"
@@ -10,7 +10,7 @@ workspace_root=$(pwd -P)
 tree_file="$audit_dir/normal-build-tree.txt"
 
 cargo tree \
-    --package ultraplexr-desktop \
+    --package superplexr-desktop \
     --edges normal,build \
     --locked \
     --format '{p}|{l}' \
@@ -45,7 +45,7 @@ done <"$audit_dir/copyleft-candidates.txt"
 
 for package in gpui_shared_string gpui_util ztracing; do
     resolution=$(cargo tree \
-        --package ultraplexr-desktop \
+        --package superplexr-desktop \
         --edges normal,build \
         --invert "$package" \
         --depth 0 \
@@ -55,7 +55,7 @@ for package in gpui_shared_string gpui_util ztracing; do
     case "$resolution" in
         *"$workspace_root/crates/"*) ;;
         *)
-            echo "$package did not resolve to a ultraplexr compatibility crate" >&2
+            echo "$package did not resolve to a superplexr compatibility crate" >&2
             exit 1
             ;;
     esac
@@ -68,7 +68,7 @@ for package in gpui_shared_string gpui_util ztracing; do
     esac
 done
 
-resolution=$(cargo tree --package ultraplexr-desktop --edges normal,build \
+resolution=$(cargo tree --package superplexr-desktop --edges normal,build \
     --invert libghostty-vt-sys --depth 0 --locked --prefix none)
 case "$resolution" in
     *"$workspace_root/vendor/libghostty-vt-sys"*) ;;

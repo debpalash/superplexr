@@ -30,8 +30,8 @@ const el = {
 
 // ---- what this browser remembers -------------------------------------------
 
-const DEVICE_KEY = "ultraplexr.device";
-const LAST_SESSION_KEY = "ultraplexr.last-session";
+const DEVICE_KEY = "superplexr.device";
+const LAST_SESSION_KEY = "superplexr.last-session";
 
 /** A viewer link carries a Share token after the hash; it never touches storage. */
 function shareTokenFromLink() {

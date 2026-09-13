@@ -22,7 +22,7 @@ emulation.
 GPUI gives the ordinary browser chrome and responsive waterfall a declarative
 layout system while allowing the terminal renderer to take direct control of
 layout and painting. Its pre-1.0 churn is a real cost, so no core, protocol, PTY,
-or terminal-domain type may depend on GPUI. The `ultraplexr-desktop` crate is the
+or terminal-domain type may depend on GPUI. The `superplexr-desktop` crate is the
 only external seam. A macOS/Wayland/X11 spike must prove terminal input, IME,
 clipboard, accessibility, custom painting, and packaging before the rest of the
 desktop is built.

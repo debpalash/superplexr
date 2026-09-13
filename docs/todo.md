@@ -1,7 +1,7 @@
 # TODO
 
 Updated: 2026-09-03. Companion to
-[ultraplexr-unified-roadmap.md](ultraplexr-unified-roadmap.md), which stays the
+[superplexr-unified-roadmap.md](superplexr-unified-roadmap.md), which stays the
 authoritative capability catalog. This file is the short, ordered list.
 
 Legend: `[x]` done and verified · `[~]` partial · `[ ]` not started
@@ -10,7 +10,7 @@ Legend: `[x]` done and verified · `[~]` partial · `[ ]` not started
 
 ## 1. Fault / debugging loop
 
-The differentiator: agents write code, ultraplexr owns what happens when it
+The differentiator: agents write code, superplexr owns what happens when it
 breaks. A Fault closes only when a replay actually passes.
 
 - [x] `FaultId`, protocol types, 6 requests
@@ -21,7 +21,7 @@ breaks. A Fault closes only when a replay actually passes.
 - [x] Auto-detect: per-command via OSC 133 marks
 - [x] CLI: `report list show repro resolve dismiss handoff`
 - [x] Desktop: sidebar `△ Broken` card + panel (⌘⇧F)
-- [x] MCP bridge (`ultraplexr-mcp`), Fault tools only
+- [x] MCP bridge (`superplexr-mcp`), Fault tools only
 - [x] Live end-to-end proof on a real daemon and PTY
 
 Remaining:
@@ -38,7 +38,7 @@ Remaining:
 - [x] **Regression guard** — `fault guard` re-replays resolved Faults and
       reopens any that fail again, keeping the replay that closed them so the
       regression can be read against it; verified end to end on a real daemon
-- [x] Shell integration installer (`ultraplexr shell-init`) for zsh, bash and
+- [x] Shell integration installer (`superplexr shell-init`) for zsh, bash and
       fish; verified end to end against a real interactive zsh
 - [ ] Mobile/web triage surface: read a Fault, replay, hand off. No terminal.
 
@@ -83,7 +83,7 @@ not independently verified here.
 
 ## 3b. Wire cost of a terminal subscription (measured 2026-09-03/04)
 
-`crates/ultraplexr-client/examples/delta_bandwidth` against a live daemon, on
+`crates/superplexr-client/examples/delta_bandwidth` against a live daemon, on
 the protobuf data plane the desktop actually uses. Before: a repainting agent
 screen was **2.27 MB/s** at ~117 deltas/s (~20 KB each), scrolling build
 output **0.97 MB/s**, one full 120×36 frame **21 KB** (~5 B/cell).
@@ -133,7 +133,7 @@ scoped access uses share tokens over the same listener.
 
 - [x] One port: the gateway listener sniffs wire magic vs HTTP and serves
       the page, its scripts and `wss://…/ws` beside the native wire
-- [x] WebSocket hand-rolled in `crates/ultraplexr-server/src/web.rs` (RFC
+- [x] WebSocket hand-rolled in `crates/superplexr-server/src/web.rs` (RFC
       6455 framing, masking, origin check; unit tests against the RFC's own
       vectors) — no web framework, no new crates beyond `ring` for SHA-1
 - [x] Browser client in `web/` as plain ES modules: wire_v3 header and JSON
@@ -155,7 +155,7 @@ scoped access uses share tokens over the same listener.
 
 ## 3e. Rooms and streams (platform plan, phase 5 — streams built 2026-09-04)
 
-- [x] Streams: `ultraplexr stream <session>` mints a Share link; the gateway
+- [x] Streams: `superplexr stream <session>` mints a Share link; the gateway
       admits a Share token at the handshake and binds the connection to it
       (every request must carry the same token → `share_token_required`)
 - [x] Presence: subscriptions register on their terminal record for their
@@ -192,7 +192,7 @@ scoped access uses share tokens over the same listener.
 
 ## 3g. A daemon that never sleeps (platform plan, phase 7 — built 2026-09-04, see docs/cloud.md)
 
-- [x] `ultraplexr-daemon`: the runtime alone (`--socket`, `--state-dir`,
+- [x] `superplexr-daemon`: the runtime alone (`--socket`, `--state-dir`,
       `--gateway`), no desktop linked in
 - [x] Packaging: systemd unit (own user, locked-down filesystem), launchd
       agent, `ci/daemon.Dockerfile` (unprivileged, state on a volume)
@@ -223,7 +223,7 @@ scoped access uses share tokens over the same listener.
       holds, no daemon request, so it works on agent-owned, observed and
       finished terminals; Shift bypasses an app's mouse reporting, ⌥ drags a
       rectangle, a plain click clears
-- [x] TUI shell: `ultraplexr attach <session>` paints frames into any
+- [x] TUI shell: `superplexr attach <session>` paints frames into any
       terminal and forwards keys (Ctrl-] detaches, `--observe`, `--take`,
       `--max-hz`); no VT parsing client-side; verified under a real pty
 - [ ] OSC 133 command blocks in the UI: jump, search, copy, rerun
@@ -270,7 +270,7 @@ finishes in 0.2s. See "parser build mode" below.
   This is what "the app doesn't run" was on 2026-09-03, after two rounds of
   real fixes to the app itself. The grant is per folder and a dismissed
   prompt means denied, so it flips mid-session. Do not keep the repo under
-  `~/Desktop`, `~/Documents` or `~/Downloads`; `~/src/ultraplexr` never hits
+  `~/Desktop`, `~/Documents` or `~/Downloads`; `~/src/superplexr` never hits
   this. If the Desktop copy must be used: System Settings → Privacy &
   Security → Files and Folders → Ghostty → Desktop Folder, then restart
   Ghostty.
@@ -283,7 +283,7 @@ finishes in 0.2s. See "parser build mode" below.
   whenever cargo sets `DEBUG=true`, so every `cargo run` and `cargo test` got
   an unoptimized VT parser at well under 1 MiB/s instead of over 400 MiB/s.
   `.cargo/config.toml` pins `LIBGHOSTTY_VT_SYS_OPTIMIZE=ReleaseFast`, and
-  `crates/ultraplexr-terminal/tests/parser_throughput.rs` fails if that is lost.
+  `crates/superplexr-terminal/tests/parser_throughput.rs` fails if that is lost.
 - Long-running dev sessions leave orphaned `--internal-daemon` processes and
   their state directories behind. Each retains terminal journals, so
-  `.ultraplexr-dev/` grows without anything reclaiming it.
+  `.superplexr-dev/` grows without anything reclaiming it.

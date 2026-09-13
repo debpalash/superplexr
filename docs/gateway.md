@@ -33,20 +33,20 @@ that model.
 On the runtime's host:
 
 ```
-ultraplexr device-pair --label phone
+superplexr device-pair --label phone
 { "code": "K7PM2XQ4", "fingerprint": "sha256:…", "gateway": "0.0.0.0:7373", … }
 ```
 
 On the device, within five minutes:
 
 ```
-ultraplexr pair --gateway host:7373 --fingerprint sha256:… K7PM2XQ4
+superplexr pair --gateway host:7373 --fingerprint sha256:… K7PM2XQ4
 ```
 
-The token lands in `~/.ultraplexr/devices/host_7373.json` (owner-only). From
+The token lands in `~/.superplexr/devices/host_7373.json` (owner-only). From
 then on any command reaches the runtime with `--gateway host:7373`, and
-`ultraplexr attach --gateway host:7373 <session>` is the TUI shell over TLS.
-`ultraplexr forget --gateway host:7373` drops the stored token on the
+`superplexr attach --gateway host:7373 <session>` is the TUI shell over TLS.
+`superplexr forget --gateway host:7373` drops the stored token on the
 device; the runtime keeps the device listed until `device-revoke`.
 
 ## The browser
@@ -78,7 +78,7 @@ off-host origin refused.
 
 ## Streams
 
-A stream is a Share with a link. `ultraplexr stream <session>` mints an
+A stream is a Share with a link. `superplexr stream <session>` mints an
 Observer Share scoped to that one session (`--controller` for one that may
 claim control when nobody holds it) and prints
 `https://host:7373/#share=<token>`; the token lives after the hash, so it

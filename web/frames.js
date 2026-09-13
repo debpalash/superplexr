@@ -1,5 +1,5 @@
 // The terminal data plane, decoded by hand: the protobuf messages in
-// proto/ultraplexr/terminal/v1.proto are few and flat, so a small reader is
+// proto/superplexr/terminal/v1.proto are few and flat, so a small reader is
 // less to ship than a protobuf runtime. Frames come out in the same shape as
 // the JSON `FullFrame` a snapshot returns, so the renderer sees one model.
 

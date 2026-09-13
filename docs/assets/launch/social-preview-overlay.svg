@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="SuperPlexr — mission control for coding agents">
+  <defs>
+    <linearGradient id="shade" x1="0" x2="1">
+      <stop offset="0" stop-color="#10151B" stop-opacity="0.98"/>
+      <stop offset="0.55" stop-color="#10151B" stop-opacity="0.36"/>
+      <stop offset="1" stop-color="#10151B" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="640" fill="url(#shade)"/>
+  <g transform="translate(72 72) scale(.105)">
+    <g fill="none" stroke="#E8EDF2" stroke-width="36" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M94 112h120c52 0 59 66 112 94"/>
+      <path d="M94 208h132c40 0 54 25 100 31"/>
+      <path d="M94 304h132c40 0 54-25 100-31"/>
+      <path d="M94 400h120c52 0 59-66 112-94"/>
+      <path d="M360 256h70"/>
+    </g>
+    <rect x="316" y="180" width="58" height="152" rx="29" fill="#79A7D3"/>
+    <circle cx="72" cy="112" r="18" fill="#79A7D3"/>
+    <circle cx="72" cy="208" r="18" fill="#D8A85B"/>
+    <circle cx="72" cy="304" r="18" fill="#79A7D3"/>
+    <circle cx="72" cy="400" r="18" fill="#D7776B"/>
+    <circle cx="452" cy="256" r="24" fill="#10151B" stroke="#E8EDF2" stroke-width="14"/>
+  </g>
+  <text x="72" y="218" fill="#E8EDF2" font-family="Avenir Next, Avenir, Arial, sans-serif" font-size="82" font-weight="700" letter-spacing="-3">SuperPlexr</text>
+  <text x="76" y="282" fill="#79A7D3" font-family="Arial, Helvetica, sans-serif" font-size="25" font-weight="700" letter-spacing="2">MISSION CONTROL FOR CODING AGENTS</text>
+  <text x="76" y="354" fill="#C8D1DB" font-family="Arial, Helvetica, sans-serif" font-size="29">Run, observe, interrupt, delegate,</text>
+  <text x="76" y="394" fill="#C8D1DB" font-family="Arial, Helvetica, sans-serif" font-size="29">and review parallel work.</text>
+  <g transform="translate(76 496)" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">
+    <text fill="#8795A5">OPEN SOURCE</text>
+    <circle cx="142" cy="-6" r="3" fill="#D8A85B"/>
+    <text x="160" fill="#8795A5">MACOS + LINUX</text>
+    <circle cx="330" cy="-6" r="3" fill="#D7776B"/>
+    <text x="348" fill="#8795A5">RUST + GPUI</text>
+  </g>
+</svg>

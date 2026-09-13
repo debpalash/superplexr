@@ -10,14 +10,14 @@ Use an already running daemon and an existing Session. The TUI never starts a
 daemon, launches a terminal, restores archived processes, or writes a session DB.
 
 ```sh
-cargo build -p ultraplexr-tui
-target/debug/ultraplexr-tui --socket /absolute/path/control.sock --list
-target/debug/ultraplexr-tui --socket /absolute/path/control.sock
-target/debug/ultraplexr-tui --socket /absolute/path/control.sock SESSION_ID
+cargo build -p superplexr-tui
+target/debug/superplexr-tui --socket /absolute/path/control.sock --list
+target/debug/superplexr-tui --socket /absolute/path/control.sock
+target/debug/superplexr-tui --socket /absolute/path/control.sock SESSION_ID
 ```
 
 Pass the socket of the runtime you intend to use, especially with the desktop's
-isolated `.ultraplexr-dev/v25` development state. Omitting `--socket` uses the native
+isolated `.superplexr-dev/v25` development state. Omitting `--socket` uses the native
 protocol's default socket, which need not be the debug desktop's socket.
 
 Observation is the default, even on an owner connection. `--control` explicitly
@@ -157,7 +157,7 @@ dragging, arbitrary split trees, split-ratio editing, or layout persistence yet.
   cells. RGB/basic attributes, wide-cell continuation, combining graphemes and
   cursor position are preserved. Unchanged rows are not repainted. Blink, exact
   underline/cursor shapes and hyperlink activation are not reproduced.
-- `FocusedSession` reuses `ultraplexr-client` for subscriptions, delta repair,
+- `FocusedSession` reuses `superplexr-client` for subscriptions, delta repair,
   history, Share checks, and per-Surface Control epochs. This client has a
   coalescing latest-frame mailbox rather than an unbounded display queue.
 - Frame updates are event-driven. A 40 ms local input poll lets one UI thread
@@ -199,8 +199,8 @@ no tests or builds were run at the owner's request. Prior evidence below does
 not certify these changes, stalled-transport responsiveness or cancellation.
 
 ```sh
-cargo test -p ultraplexr-tui
-cargo clippy -p ultraplexr-tui --all-targets --all-features -- -D warnings
+cargo test -p superplexr-tui
+cargo clippy -p superplexr-tui --all-targets --all-features -- -D warnings
 ```
 
 Ten unit tests cover search retention/routing/rendering, prefix/key translation, paste risk, safe rendering, row

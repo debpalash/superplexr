@@ -69,9 +69,9 @@ IME, accessibility or another operating system.
 cargo test --workspace --release --locked -j 2 --quiet
 cargo clippy --workspace --release --all-targets --all-features --locked -j 2 -- -D warnings
 cargo fmt --all --check
-node --test crates/ultraplexr-observer/web/*_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
-cargo build --release --locked -j 2 -p ultraplexr-server -p ultraplexr-cli -p ultraplexr-observer -p ultraplexr-tui -p ultraplexr-desktop
-ULTRAPLEXR_INPUT_SKIP_BUILD=1 ULTRAPLEXR_INPUT_BINARY_DIR="$PWD/target/release" bash ci/desktop-input-smoke.sh "$PWD"
+node --test crates/superplexr-observer/web/*_tests.mjs ci/pty-host-tests.mjs ci/resource-samples-tests.mjs
+cargo build --release --locked -j 2 -p superplexr-server -p superplexr-cli -p superplexr-observer -p superplexr-tui -p superplexr-desktop
+SUPERPLEXR_INPUT_SKIP_BUILD=1 SUPERPLEXR_INPUT_BINARY_DIR="$PWD/target/release" bash ci/desktop-input-smoke.sh "$PWD"
 ```
 
 The smoke's optional skip-build setting allows testing an already-built release

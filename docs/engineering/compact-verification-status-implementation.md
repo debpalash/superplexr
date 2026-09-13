@@ -3,7 +3,7 @@
 Status: source implemented, unbuilt and untested. No tests, builds, runtime
 requests, app runs, or resource measurements were performed, per owner direction.
 
-The status projection now lives in `ultraplexr-core` as the pure
+The status projection now lives in `superplexr-core` as the pure
 `Mission::verification_status` interface. CLI/shared verification inspection
 uses a new native `VerificationStatus` request rather than receiving a complete
 Mission and projecting locally. The store projects from its borrowed Mission:

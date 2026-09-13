@@ -4,7 +4,7 @@
 # refused unpaired, pairs, starts a shell, subscribes, types and reads the
 # echo out of the protobuf frames, and an off-host origin that is refused.
 set -u
-REPO="${1:-$(cd "$(dirname "$0")/.." && pwd)}"; BIN="$REPO/target/debug/ultraplexr"; DAEMON="$REPO/target/debug/ultraplexr-desktop"
+REPO="${1:-$(cd "$(dirname "$0")/.." && pwd)}"; BIN="$REPO/target/debug/superplexr"; DAEMON="$REPO/target/debug/superplexr-desktop"
 PORT=17377; ROOT=/tmp/spxreplay; rm -rf "$ROOT" "$ROOT.sock"; mkdir -p "$ROOT"
 "$DAEMON" --internal-daemon --socket "$ROOT.sock" --state-dir "$ROOT" --gateway 127.0.0.1:$PORT > "$ROOT.log" 2>&1 &
 echo $! > "$ROOT.pid"

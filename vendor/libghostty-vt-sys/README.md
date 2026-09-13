@@ -2,9 +2,9 @@
 
 Raw FFI bindings for libghostty-vt.
 
-This is Ultraplexr's reviewed build fork. See [ULTRAPLEXR.md](ULTRAPLEXR.md)
+This is SuperPlexr's reviewed build fork. See [SUPERPLEXR.md](SUPERPLEXR.md)
 for upstream provenance and local changes. Native build paths described here
-are not Ultraplexr platform-acceptance claims.
+are not SuperPlexr platform-acceptance claims.
 
 - Fetches and builds `libghostty-vt.a` from ghostty sources via Zig by default.
 - Exposes checked-in generated bindings in `src/bindings.rs`.

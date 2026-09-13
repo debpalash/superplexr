@@ -2,10 +2,10 @@
 set -eu
 
 workspace=${1:-.}
-duration=${ULTRAPLEXR_SOAK_SECONDS:-60}
-session_count=${ULTRAPLEXR_SOAK_SESSIONS:-12}
-binary_dir=${ULTRAPLEXR_SOAK_BINARY_DIR:-$workspace/target/release}
-runtime_dir=$(mktemp -d "${TMPDIR:-/tmp}/ultraplexr-soak.XXXXXX")
+duration=${SUPERPLEXR_SOAK_SECONDS:-60}
+session_count=${SUPERPLEXR_SOAK_SESSIONS:-12}
+binary_dir=${SUPERPLEXR_SOAK_BINARY_DIR:-$workspace/target/release}
+runtime_dir=$(mktemp -d "${TMPDIR:-/tmp}/superplexr-soak.XXXXXX")
 socket="$runtime_dir/control.sock"
 state="$runtime_dir/state"
 server_log="$runtime_dir/server.log"
@@ -21,15 +21,15 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-cli="$binary_dir/ultraplexr"
-server="$binary_dir/ultraplexr-server"
+cli="$binary_dir/superplexr"
+server="$binary_dir/superplexr-server"
 test -x "$cli"
 test -x "$server"
 case "$duration" in
-    *[!0-9]*|'') echo "ULTRAPLEXR_SOAK_SECONDS must be a positive integer" >&2; exit 1 ;;
+    *[!0-9]*|'') echo "SUPERPLEXR_SOAK_SECONDS must be a positive integer" >&2; exit 1 ;;
 esac
 case "$session_count" in
-    *[!0-9]*|'') echo "ULTRAPLEXR_SOAK_SESSIONS must be a positive integer" >&2; exit 1 ;;
+    *[!0-9]*|'') echo "SUPERPLEXR_SOAK_SESSIONS must be a positive integer" >&2; exit 1 ;;
 esac
 test "$duration" -gt 0
 test "$session_count" -gt 0

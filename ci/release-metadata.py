@@ -53,7 +53,7 @@ def generate(workspace, output):
     generate_from_metadata(workspace, output, metadata)
 
 
-def generate_from_metadata(workspace, output, metadata, name="ultraplexr-cargo-lock", scope_digest=None):
+def generate_from_metadata(workspace, output, metadata, name="superplexr-cargo-lock", scope_digest=None):
     """Render supplied package evidence without resolving another Cargo graph."""
     output.mkdir(parents=True, exist_ok=True)
     lock_digest = hashlib.sha256((workspace / "Cargo.lock").read_bytes()).hexdigest()
@@ -112,17 +112,17 @@ def generate_from_metadata(workspace, output, metadata, name="ultraplexr-cargo-l
         "dataLicense": "CC0-1.0",
         "SPDXID": "SPDXRef-DOCUMENT",
         "name": name,
-        "documentNamespace": f"https://ultraplexr.local/spdx/{scope_digest or lock_digest}",
+        "documentNamespace": f"https://superplexr.local/spdx/{scope_digest or lock_digest}",
         "creationInfo": {
             "created": created_at(),
-            "creators": ["Organization: ultraplexr contributors"],
+            "creators": ["Organization: superplexr contributors"],
         },
         "packages": packages,
         "relationships": relationships,
     }
     if metadata.get("build_inputs_only"):
         document["comment"] = "Observed Cargo build inputs, including build scripts and procedural macros; not a runtime-only dependency graph or system-library inventory."
-    (output / "ultraplexr.spdx.json").write_text(
+    (output / "superplexr.spdx.json").write_text(
         json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     generate_notices(metadata, output / "THIRD_PARTY_NOTICES.txt")
@@ -130,7 +130,7 @@ def generate_from_metadata(workspace, output, metadata, name="ultraplexr-cargo-l
 
 def generate_notices(metadata, destination):
     lines = [
-        "ultraplexr third-party dependency and notice bundle",
+        "superplexr third-party dependency and notice bundle",
         metadata.get("source_description", "Generated from Cargo's locked resolved graph."),
         "",
         "Dependency inventory",

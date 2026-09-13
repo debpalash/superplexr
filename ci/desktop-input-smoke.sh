@@ -7,8 +7,8 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 workspace=${1:-.}
-binary_dir=${ULTRAPLEXR_INPUT_BINARY_DIR:-$workspace/target/debug}
-smoke_root=$(mktemp -d "${TMPDIR:-/tmp}/ultraplexr-input-smoke.XXXXXX")
+binary_dir=${SUPERPLEXR_INPUT_BINARY_DIR:-$workspace/target/debug}
+smoke_root=$(mktemp -d "${TMPDIR:-/tmp}/superplexr-input-smoke.XXXXXX")
 socket_path=$smoke_root/control.sock
 state_path=$smoke_root/state
 server_log=$smoke_root/server.log
@@ -25,18 +25,18 @@ cleanup() {
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
   fi
-  if [[ "$smoke_root" == "${TMPDIR:-/tmp}"/ultraplexr-input-smoke.* ]]; then
+  if [[ "$smoke_root" == "${TMPDIR:-/tmp}"/superplexr-input-smoke.* ]]; then
     find "$smoke_root" -depth -delete 2>/dev/null || true
   fi
 }
 trap cleanup EXIT INT TERM
 
-if [[ "${ULTRAPLEXR_INPUT_SKIP_BUILD:-0}" != "1" ]]; then
-  cargo build -p ultraplexr-server -p ultraplexr-cli -p ultraplexr-desktop
+if [[ "${SUPERPLEXR_INPUT_SKIP_BUILD:-0}" != "1" ]]; then
+  cargo build -p superplexr-server -p superplexr-cli -p superplexr-desktop
 fi
-server=$binary_dir/ultraplexr-server
-cli=$binary_dir/ultraplexr
-desktop=$binary_dir/ultraplexr-desktop
+server=$binary_dir/superplexr-server
+cli=$binary_dir/superplexr
+desktop=$binary_dir/superplexr-desktop
 
 "$server" --socket "$socket_path" --state-dir "$state_path" >"$server_log" 2>&1 &
 server_pid=$!
@@ -83,8 +83,8 @@ done
 
 # Post upinput as genuine macOS keyboard events directly to the GPUI process.
 # Key codes are physical ANSI positions: u, p, i, n, p, u, t.
-ULTRAPLEXR_TARGET_PID=$desktop_pid swift -e 'import Foundation; import CoreGraphics
-let pid = pid_t(Int(ProcessInfo.processInfo.environment["ULTRAPLEXR_TARGET_PID"]!)!)
+SUPERPLEXR_TARGET_PID=$desktop_pid swift -e 'import Foundation; import CoreGraphics
+let pid = pid_t(Int(ProcessInfo.processInfo.environment["SUPERPLEXR_TARGET_PID"]!)!)
 let source = CGEventSource(stateID: .hidSystemState)!
 for keyCode: CGKeyCode in [32, 35, 34, 45, 35, 32, 17] {
     CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true)!.postToPid(pid)

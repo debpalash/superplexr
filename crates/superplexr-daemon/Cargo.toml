@@ -1,0 +1,15 @@
+[package]
+name = "superplexr-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "The superplexr runtime alone: a hostable daemon with no desktop attached"
+
+[[bin]]
+name = "superplexr-daemon"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+superplexr-server = { path = "../superplexr-server" }

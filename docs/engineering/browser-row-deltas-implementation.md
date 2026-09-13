@@ -4,7 +4,7 @@ Status: source implemented; unbuilt and untested. Tests, builds, browser runs,
 and performance/resource measurement remain deferred at the owner's request.
 
 The bundled browser opts into `row-delta-v1` using the authenticated frame GET's
-`X-Ultraplexr-Frames` header. Callers without the header keep full-frame SSE.
+`X-Superplexr-Frames` header. Callers without the header keep full-frame SSE.
 This is an optional browser transport encoding, not a native protocol-version
 change, input channel, durable resume token, or new runtime authority.
 

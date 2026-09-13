@@ -2,7 +2,7 @@
 # End-to-end for Web Push: node plays the push service and the browser; the
 # runtime encrypts (RFC 8291), signs (RFC 8292) and delivers with curl.
 set -u
-REPO="${1:-$(cd "$(dirname "$0")/.." && pwd)}"; BIN="$REPO/target/debug/ultraplexr"; DAEMON="$REPO/target/debug/ultraplexr-desktop"
+REPO="${1:-$(cd "$(dirname "$0")/.." && pwd)}"; BIN="$REPO/target/debug/superplexr"; DAEMON="$REPO/target/debug/superplexr-desktop"
 PORT=17378; PUSHPORT=17390; ROOT=/tmp/spxpush; rm -rf "$ROOT" "$ROOT.sock"; mkdir -p "$ROOT/push"
 # A certificate for the stand-in push service; the runtime trusts it via push/ca.pem.
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout "$ROOT/push-key.pem" -out "$ROOT/push/ca.pem" -days 2 -subj "/CN=127.0.0.1" -addext "subjectAltName=IP:127.0.0.1" >/dev/null 2>&1 || { echo "openssl could not make a certificate"; exit 1; }

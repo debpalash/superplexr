@@ -6250,7 +6250,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ultraplexr-cli"
+name = "superplexr-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
@@ -6259,18 +6259,18 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
- "ultraplexr-client",
- "ultraplexr-core",
- "ultraplexr-plugin",
- "ultraplexr-protocol",
- "ultraplexr-server",
- "ultraplexr-terminal",
- "ultraplexr-verification",
+ "superplexr-client",
+ "superplexr-core",
+ "superplexr-plugin",
+ "superplexr-protocol",
+ "superplexr-server",
+ "superplexr-terminal",
+ "superplexr-verification",
  "uuid",
 ]
 
 [[package]]
-name = "ultraplexr-client"
+name = "superplexr-client"
 version = "0.1.0"
 dependencies = [
  "libc",
@@ -6279,14 +6279,14 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.20",
- "ultraplexr-core",
- "ultraplexr-protocol",
- "ultraplexr-terminal",
+ "superplexr-core",
+ "superplexr-protocol",
+ "superplexr-terminal",
  "uuid",
 ]
 
 [[package]]
-name = "ultraplexr-core"
+name = "superplexr-core"
 version = "0.1.0"
 dependencies = [
  "serde",
@@ -6296,15 +6296,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "ultraplexr-daemon"
+name = "superplexr-daemon"
 version = "0.1.0"
 dependencies = [
  "clap",
- "ultraplexr-server",
+ "superplexr-server",
 ]
 
 [[package]]
-name = "ultraplexr-desktop"
+name = "superplexr-desktop"
 version = "0.1.0"
 dependencies = [
  "axum",
@@ -6320,18 +6320,18 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tower",
- "ultraplexr-client",
- "ultraplexr-core",
- "ultraplexr-observer",
- "ultraplexr-protocol",
- "ultraplexr-server",
- "ultraplexr-terminal",
- "ultraplexr-verification",
+ "superplexr-client",
+ "superplexr-core",
+ "superplexr-observer",
+ "superplexr-protocol",
+ "superplexr-server",
+ "superplexr-terminal",
+ "superplexr-verification",
  "uuid",
 ]
 
 [[package]]
-name = "ultraplexr-mcp"
+name = "superplexr-mcp"
 version = "0.1.0"
 dependencies = [
  "clap",
@@ -6339,13 +6339,13 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror 2.0.20",
- "ultraplexr-client",
- "ultraplexr-core",
- "ultraplexr-protocol",
+ "superplexr-client",
+ "superplexr-core",
+ "superplexr-protocol",
 ]
 
 [[package]]
-name = "ultraplexr-observer"
+name = "superplexr-observer"
 version = "0.1.0"
 dependencies = [
  "axum",
@@ -6355,26 +6355,26 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tower",
- "ultraplexr-client",
- "ultraplexr-core",
- "ultraplexr-protocol",
- "ultraplexr-terminal",
+ "superplexr-client",
+ "superplexr-core",
+ "superplexr-protocol",
+ "superplexr-terminal",
  "uuid",
 ]
 
 [[package]]
-name = "ultraplexr-plugin"
+name = "superplexr-plugin"
 version = "0.1.0"
 dependencies = [
  "libc",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
- "ultraplexr-core",
+ "superplexr-core",
 ]
 
 [[package]]
-name = "ultraplexr-protocol"
+name = "superplexr-protocol"
 version = "0.1.0"
 dependencies = [
  "prost",
@@ -6382,25 +6382,25 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "tokio",
- "ultraplexr-core",
- "ultraplexr-terminal",
+ "superplexr-core",
+ "superplexr-terminal",
  "uuid",
  "zstd",
 ]
 
 [[package]]
-name = "ultraplexr-runtime"
+name = "superplexr-runtime"
 version = "0.1.0"
 dependencies = [
  "libc",
  "portable-pty",
  "thiserror 2.0.20",
- "ultraplexr-core",
- "ultraplexr-terminal",
+ "superplexr-core",
+ "superplexr-terminal",
 ]
 
 [[package]]
-name = "ultraplexr-server"
+name = "superplexr-server"
 version = "0.1.0"
 dependencies = [
  "clap",
@@ -6414,17 +6414,17 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-rustls",
- "ultraplexr-client",
- "ultraplexr-core",
- "ultraplexr-plugin",
- "ultraplexr-protocol",
- "ultraplexr-runtime",
- "ultraplexr-terminal",
+ "superplexr-client",
+ "superplexr-core",
+ "superplexr-plugin",
+ "superplexr-protocol",
+ "superplexr-runtime",
+ "superplexr-terminal",
  "uuid",
 ]
 
 [[package]]
-name = "ultraplexr-terminal"
+name = "superplexr-terminal"
 version = "0.1.0"
 dependencies = [
  "libghostty-vt",
@@ -6435,7 +6435,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ultraplexr-tui"
+name = "superplexr-tui"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
@@ -6444,17 +6444,17 @@ dependencies = [
  "portable-pty",
  "signal-hook",
  "thiserror 2.0.20",
- "ultraplexr-client",
- "ultraplexr-core",
- "ultraplexr-protocol",
- "ultraplexr-server",
- "ultraplexr-terminal",
+ "superplexr-client",
+ "superplexr-core",
+ "superplexr-protocol",
+ "superplexr-server",
+ "superplexr-terminal",
  "unicode-width",
  "uuid",
 ]
 
 [[package]]
-name = "ultraplexr-verification"
+name = "superplexr-verification"
 version = "0.1.0"
 dependencies = [
  "libc",
@@ -6463,10 +6463,10 @@ dependencies = [
  "sha2",
  "thiserror 2.0.20",
  "tokio",
- "ultraplexr-client",
- "ultraplexr-core",
- "ultraplexr-protocol",
- "ultraplexr-terminal",
+ "superplexr-client",
+ "superplexr-core",
+ "superplexr-protocol",
+ "superplexr-terminal",
  "uuid",
 ]
 

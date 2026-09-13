@@ -18,7 +18,7 @@ step("1. the page and its scripts are served with a strict CSP");
 const page = await fetch(`${web}/`);
 const csp = page.headers.get("content-security-policy") ?? "";
 const html = await page.text();
-if (!html.includes("ultraplexr") || !csp.includes("default-src 'self'")) fail(`page ${page.status} csp=${csp}`);
+if (!html.includes("superplexr") || !csp.includes("default-src 'self'")) fail(`page ${page.status} csp=${csp}`);
 const js = await fetch(`${web}/app.js`);
 if (!(js.headers.get("content-type") ?? "").startsWith("text/javascript")) fail("app.js content type");
 const missing = await fetch(`${web}/../Cargo.toml`);

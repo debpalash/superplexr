@@ -1,0 +1,20 @@
+[package]
+name = "superplexr-verification"
+description = "Bounded check execution and evidence collection for SuperPlexr clients"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+superplexr-client = { path = "../superplexr-client" }
+superplexr-core = { path = "../superplexr-core" }
+superplexr-protocol = { path = "../superplexr-protocol" }
+superplexr-terminal = { path = "../superplexr-terminal" }
