@@ -753,33 +753,6 @@ fn format_token_count(tokens: u64) -> String {
 }
 
 #[cfg(not(test))]
-fn result_metric(label: &str, value: &str, color: ColorToken) -> AnyElement {
-    div()
-        .p_2()
-        .rounded(ui_size(4.0))
-        .bg(rgb(DECK))
-        .child(
-            div()
-                .mb_1()
-                .font_family(UI_FONT)
-                .text_xs()
-                .text_color(rgb(TRACE))
-                .child(label.to_owned()),
-        )
-        .child(
-            div()
-                .font_family(PRODUCT_FONT)
-                .text_sm()
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(color))
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .child(value.to_owned()),
-        )
-        .into_any_element()
-}
-
-#[cfg(not(test))]
 fn status_color_for_run(status: superplexr_core::RunStatus) -> ColorToken {
     match status {
         superplexr_core::RunStatus::Pending => TRACE,
@@ -1997,8 +1970,9 @@ impl SuperplexrDesktop {
                                 *status = terminal.status;
                             }
                             if let Some(surface) = desktop.surfaces.get(index).cloned() {
-                                surface.update(cx, |surface, _| {
-                                    surface.synchronize_catalog_labels(&terminal)
+                                surface.update(cx, |surface, cx| {
+                                    surface.synchronize_catalog_labels(&terminal);
+                                    surface.synchronize_process_status(terminal.status, cx);
                                 });
                             }
                             if terminal.status == TerminalSessionStatus::Running
@@ -2213,8 +2187,9 @@ impl SuperplexrDesktop {
             {
                 self.surface_foreground_processes[index] = terminal.foreground_process.clone();
                 if let Some(surface) = self.surfaces.get(index).cloned() {
-                    surface.update(cx, |surface, _| {
-                        surface.synchronize_catalog_labels(&terminal)
+                    surface.update(cx, |surface, cx| {
+                        surface.synchronize_catalog_labels(&terminal);
+                        surface.synchronize_process_status(terminal.status, cx);
                     });
                 }
                 self.surface_cwds[index] = terminal.cwd.clone();
@@ -2247,14 +2222,16 @@ impl SuperplexrDesktop {
             let session = self.control.terminal(session_id);
             let id = format!("terminal-{}", short_id(session_id));
             let surface = cx.new(|surface_cx| {
-                TerminalSurface::live(
+                let mut surface = TerminalSurface::live(
                     &id,
                     session,
                     terminal.status != TerminalSessionStatus::Running,
                     window,
                     surface_cx,
                 )
-                .expect("discovered daemon terminal must attach")
+                .expect("discovered daemon terminal must attach");
+                surface.synchronize_process_status(terminal.status, surface_cx);
+                surface
             });
             surface.update(cx, |surface, _| {
                 surface.synchronize_catalog_labels(&terminal)
@@ -6632,23 +6609,22 @@ impl SuperplexrDesktop {
             .child(
                 div()
                     .w_full()
-                    .max_w(ui_size(760.0))
-                    .rounded(ui_size(6.0))
+                    .max_w(ui_size(720.0))
+                    .rounded(ui_size(4.0))
                     .border_1()
-                    .border_color(rgb(if succeeded { RELAY } else { FAULT }))
+                    .border_color(rgb(HAIRLINE))
                     .bg(rgb(PANEL))
-                    .shadow_lg()
                     .child(
                         div()
-                            .h(ui_size(4.0))
+                            .h(ui_size(2.0))
                             .bg(rgb(if succeeded { SUCCESS } else { FAULT })),
                     )
                     .child(
                         div()
-                            .p(ui_size(24.0))
+                            .p(ui_size(28.0))
                             .flex()
                             .flex_col()
-                            .gap(ui_size(18.0))
+                            .gap(ui_size(16.0))
                             .child(
                                 div()
                                     .flex()
@@ -6671,13 +6647,9 @@ impl SuperplexrDesktop {
                                     .child(
                                         div()
                                             .ml_auto()
-                                            .px_2()
-                                            .py_1()
-                                            .rounded(ui_size(12.0))
-                                            .bg(rgb(ACTIVE))
                                             .font_family(UI_FONT)
                                             .text_xs()
-                                            .text_color(rgb(CHALK))
+                                            .text_color(rgb(RELAY))
                                             .child(review),
                                     ),
                             )
@@ -6692,25 +6664,38 @@ impl SuperplexrDesktop {
                             )
                             .child(
                                 div()
-                                    .grid()
-                                    .grid_cols(4)
-                                    .gap_3()
-                                    .child(result_metric(
-                                        "Outcome",
-                                        outcome,
-                                        if succeeded { SUCCESS } else { FAULT },
-                                    ))
-                                    .child(result_metric("Agent", engine, RELAY))
-                                    .child(result_metric("Token use", &token_text, token_color))
-                                    .child(result_metric("Project", &project, TRACE)),
+                                    .flex()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .gap_2()
+                                    .font_family(UI_FONT)
+                                    .text_xs()
+                                    .text_color(rgb(TRACE))
+                                    .child(
+                                        div()
+                                            .text_color(rgb(if succeeded {
+                                                SUCCESS
+                                            } else {
+                                                FAULT
+                                            }))
+                                            .child(outcome.to_owned()),
+                                    )
+                                    .child("·")
+                                    .child(engine.to_owned())
+                                    .child("·")
+                                    .child(project)
+                                    .child("·")
+                                    .child(
+                                        div()
+                                            .text_color(rgb(token_color))
+                                            .child(format!("{token_text} tokens")),
+                                    ),
                             )
                             .child(
                                 div()
-                                    .p_3()
-                                    .rounded(ui_size(4.0))
-                                    .bg(rgb(DECK))
-                                    .border_1()
-                                    .border_color(rgb(HAIRLINE))
+                                    .pl_3()
+                                    .border_l_2()
+                                    .border_color(rgb(if succeeded { RELAY } else { FAULT }))
                                     .child(
                                         div()
                                             .mb_1()
@@ -6764,7 +6749,8 @@ impl SuperplexrDesktop {
                                             .py_2()
                                             .rounded(ui_size(4.0))
                                             .cursor_pointer()
-                                            .bg(rgb(ACTIVE))
+                                            .border_1()
+                                            .border_color(rgb(HAIRLINE))
                                             .font_family(UI_FONT)
                                             .text_xs()
                                             .text_color(rgb(RELAY))
@@ -6818,139 +6804,119 @@ impl SuperplexrDesktop {
             .size_full()
             .min_h_0()
             .min_w_0()
-            .child(
-                div()
-                    .id(("pane-header", terminal))
-                    .debug_selector(move || format!("pane-header-{terminal}"))
-                    .role(Role::Tab)
-                    .aria_label(accessibility_label)
-                    .aria_selected(active)
-                    .relative()
-                    .h(ui_size(22.0))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap(ui_size(6.0))
-                    .px(ui_size(8.0))
-                    .bg(rgb(PANEL))
-                    .border_b_1()
-                    .border_color(rgb(HAIRLINE))
-                    .font_family(UI_FONT)
-                    .text_size(ui_size(10.0))
-                    .text_color(rgb(if active { CHALK } else { TRACE }))
-                    .when(ended, |header| header.opacity(0.7))
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |desktop, _, window, cx| {
-                        let session_index = desktop.workspace().selected_session;
-                        desktop.select_terminal_in_session(session_index, terminal, window, cx);
-                    }))
-                    .when(active, |header| {
-                        header.child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .top_0()
-                                .bottom_0()
-                                .w(ui_size(2.0))
-                                .bg(rgb(RELAY)),
-                        )
-                    })
-                    .child(
-                        div()
-                            .size(ui_size(6.0))
-                            .flex_none()
-                            .rounded_full()
-                            .bg(rgb(status.color())),
-                    )
-                    .when_some(agent, |header, agent| {
-                        header.child(
-                            gpui::svg()
-                                .path(agent.icon_path())
-                                .size(ui_size(11.0))
-                                .flex_none()
-                                .text_color(rgb(if active { CHALK } else { TRACE })),
-                        )
-                    })
-                    .child(
-                        div()
-                            .flex_none()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .max_w(ui_size(220.0))
-                            .font_weight(if active {
-                                FontWeight::SEMIBOLD
-                            } else {
-                                FontWeight::NORMAL
-                            })
-                            .child(title),
-                    )
-                    .when_some(directory, |header, directory| {
-                        header.child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .text_size(ui_size(9.0))
-                                .text_color(rgb(TRACE))
-                                .child(directory),
-                        )
-                    })
-                    .child(div().flex_1())
-                    .when_some(
-                        finished_run.as_ref().filter(|_| history_open),
-                        |header, run| {
-                            let run_id = run.id;
+            .when(!show_result, |pane| {
+                pane.child(
+                    div()
+                        .id(("pane-header", terminal))
+                        .debug_selector(move || format!("pane-header-{terminal}"))
+                        .role(Role::Tab)
+                        .aria_label(accessibility_label)
+                        .aria_selected(active)
+                        .relative()
+                        .h(ui_size(22.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .gap(ui_size(6.0))
+                        .px(ui_size(8.0))
+                        .bg(rgb(PANEL))
+                        .border_b_1()
+                        .border_color(rgb(HAIRLINE))
+                        .font_family(UI_FONT)
+                        .text_size(ui_size(10.0))
+                        .text_color(rgb(if active { CHALK } else { TRACE }))
+                        .when(ended, |header| header.opacity(0.7))
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |desktop, _, window, cx| {
+                            let session_index = desktop.workspace().selected_session;
+                            desktop.select_terminal_in_session(session_index, terminal, window, cx);
+                        }))
+                        .when(active, |header| {
                             header.child(
                                 div()
-                                    .id(("pane-result", terminal))
-                                    .px_2()
-                                    .h(ui_size(18.0))
-                                    .flex()
-                                    .items_center()
-                                    .rounded(ui_size(3.0))
-                                    .cursor_pointer()
-                                    .bg(rgb(ACTIVE))
-                                    .text_color(rgb(RELAY))
-                                    .on_click(cx.listener(move |desktop, _, _, cx| {
-                                        cx.stop_propagation();
-                                        desktop.finished_history_open.remove(&run_id);
-                                        cx.notify();
-                                    }))
-                                    .child("Result"),
+                                    .absolute()
+                                    .left_0()
+                                    .top_0()
+                                    .bottom_0()
+                                    .w(ui_size(2.0))
+                                    .bg(rgb(RELAY)),
                             )
-                        },
-                    )
-                    .child(
-                        div()
-                            .id(("pane-focus", terminal))
-                            .role(Role::Button)
-                            .aria_label(if focused_layout {
-                                "Back to grid layout"
-                            } else {
-                                "Focus this terminal"
-                            })
-                            .size(ui_size(18.0))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(ui_size(3.0))
-                            .cursor_pointer()
-                            .text_color(rgb(if focused_layout { RELAY } else { TRACE }))
-                            .hover(|button| button.bg(rgb(ACTIVE)).text_color(rgb(CHALK)))
-                            .on_click(cx.listener(move |desktop, _, window, cx| {
-                                cx.stop_propagation();
-                                desktop.focus_terminal(terminal, window, cx);
-                            }))
-                            .child(if focused_layout { "⤡" } else { "⤢" }),
-                    )
-                    .when(ended && !self.shared_mode, |header| {
-                        header.child(
+                        })
+                        .child(
                             div()
-                                .id(("pane-close", terminal))
+                                .size(ui_size(6.0))
+                                .flex_none()
+                                .rounded_full()
+                                .bg(rgb(status.color())),
+                        )
+                        .when_some(agent, |header, agent| {
+                            header.child(
+                                gpui::svg()
+                                    .path(agent.icon_path())
+                                    .size(ui_size(11.0))
+                                    .flex_none()
+                                    .text_color(rgb(if active { CHALK } else { TRACE })),
+                            )
+                        })
+                        .child(
+                            div()
+                                .flex_none()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .max_w(ui_size(220.0))
+                                .font_weight(if active {
+                                    FontWeight::SEMIBOLD
+                                } else {
+                                    FontWeight::NORMAL
+                                })
+                                .child(title),
+                        )
+                        .when_some(directory, |header, directory| {
+                            header.child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_size(ui_size(9.0))
+                                    .text_color(rgb(TRACE))
+                                    .child(directory),
+                            )
+                        })
+                        .child(div().flex_1())
+                        .when_some(
+                            finished_run.as_ref().filter(|_| history_open),
+                            |header, run| {
+                                let run_id = run.id;
+                                header.child(
+                                    div()
+                                        .id(("pane-result", terminal))
+                                        .px_2()
+                                        .h(ui_size(18.0))
+                                        .flex()
+                                        .items_center()
+                                        .rounded(ui_size(3.0))
+                                        .cursor_pointer()
+                                        .bg(rgb(ACTIVE))
+                                        .text_color(rgb(RELAY))
+                                        .on_click(cx.listener(move |desktop, _, _, cx| {
+                                            cx.stop_propagation();
+                                            desktop.finished_history_open.remove(&run_id);
+                                            cx.notify();
+                                        }))
+                                        .child("Result"),
+                                )
+                            },
+                        )
+                        .child(
+                            div()
+                                .id(("pane-focus", terminal))
                                 .role(Role::Button)
-                                .aria_label("Close terminal")
+                                .aria_label(if focused_layout {
+                                    "Back to grid layout"
+                                } else {
+                                    "Focus this terminal"
+                                })
                                 .size(ui_size(18.0))
                                 .flex_none()
                                 .flex()
@@ -6958,16 +6924,38 @@ impl SuperplexrDesktop {
                                 .justify_center()
                                 .rounded(ui_size(3.0))
                                 .cursor_pointer()
-                                .text_color(rgb(TRACE))
+                                .text_color(rgb(if focused_layout { RELAY } else { TRACE }))
                                 .hover(|button| button.bg(rgb(ACTIVE)).text_color(rgb(CHALK)))
-                                .on_click(cx.listener(move |desktop, _, _, cx| {
+                                .on_click(cx.listener(move |desktop, _, window, cx| {
                                     cx.stop_propagation();
-                                    desktop.close_terminal(terminal, cx);
+                                    desktop.focus_terminal(terminal, window, cx);
                                 }))
-                                .child("×"),
+                                .child(if focused_layout { "⤡" } else { "⤢" }),
                         )
-                    }),
-            )
+                        .when(ended && !self.shared_mode, |header| {
+                            header.child(
+                                div()
+                                    .id(("pane-close", terminal))
+                                    .role(Role::Button)
+                                    .aria_label("Close terminal")
+                                    .size(ui_size(18.0))
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(ui_size(3.0))
+                                    .cursor_pointer()
+                                    .text_color(rgb(TRACE))
+                                    .hover(|button| button.bg(rgb(ACTIVE)).text_color(rgb(CHALK)))
+                                    .on_click(cx.listener(move |desktop, _, _, cx| {
+                                        cx.stop_propagation();
+                                        desktop.close_terminal(terminal, cx);
+                                    }))
+                                    .child("×"),
+                            )
+                        }),
+                )
+            })
             .child(if show_result {
                 #[cfg(not(test))]
                 {
@@ -8189,14 +8177,16 @@ fn create_surfaces(window: &mut Window, cx: &mut App, control: &ControlClient) -
             )| {
                 let id = format!("terminal-{}", index + 1);
                 let surface = cx.new(|surface_cx| {
-                    TerminalSurface::live(
+                    let mut surface = TerminalSurface::live(
                         &id,
                         session,
                         status != TerminalSessionStatus::Running,
                         window,
                         surface_cx,
                     )
-                    .expect("live terminal must initialize")
+                    .expect("live terminal must initialize");
+                    surface.synchronize_process_status(status, surface_cx);
+                    surface
                 });
                 LiveSurface {
                     session_id,
@@ -8475,7 +8465,7 @@ fn main() {
         });
 }
 
-fn normalized_runtime_label(explicit: Option<String>, attached_runtime: bool) -> String {
+fn normalized_runtime_label(explicit: Option<String>, _attached_runtime: bool) -> String {
     explicit
         .as_deref()
         .map(str::trim)
@@ -8487,7 +8477,7 @@ fn normalized_runtime_label(explicit: Option<String>, attached_runtime: bool) ->
                 .take(16)
                 .collect()
         })
-        .unwrap_or_else(|| if attached_runtime { "REMOTE" } else { "LOCAL" }.to_owned())
+        .unwrap_or_else(|| "LOCAL".to_owned())
 }
 
 #[cfg(not(test))]
@@ -8562,14 +8552,14 @@ mod tests {
     #[test]
     fn runtime_identity_is_bounded_and_never_blank() {
         assert_eq!(normalized_runtime_label(None, false), "LOCAL");
-        assert_eq!(normalized_runtime_label(None, true), "REMOTE");
+        assert_eq!(normalized_runtime_label(None, true), "LOCAL");
         assert_eq!(
             normalized_runtime_label(Some("  staging west cluster  ".to_owned()), true),
             "STAGING WEST CLU"
         );
         assert_eq!(
             normalized_runtime_label(Some("   ".to_owned()), true),
-            "REMOTE"
+            "LOCAL"
         );
     }
 

@@ -18,7 +18,7 @@ use superplexr_client::DaemonSession;
 use superplexr_client::EventSubscription;
 #[cfg(not(test))]
 use superplexr_client::{TerminalInput as QueuedInput, TerminalStreamUpdate};
-use superplexr_protocol::ServerEvent;
+use superplexr_protocol::{ServerEvent, TerminalSessionStatus};
 #[cfg(test)]
 use superplexr_terminal::TerminalError;
 use superplexr_terminal::{
@@ -121,6 +121,33 @@ struct TerminalGeometry {
 }
 
 impl TerminalSurface {
+    /// Reconciles the daemon's durable process state into this rendered surface.
+    /// Restored sessions do not replay their exit event, so metadata is the
+    /// authoritative source after an app launch or reconnect.
+    pub(crate) fn synchronize_process_status(
+        &mut self,
+        status: TerminalSessionStatus,
+        cx: &mut Context<Self>,
+    ) {
+        let success = match status {
+            TerminalSessionStatus::Running => return,
+            TerminalSessionStatus::Exited => true,
+            TerminalSessionStatus::Failed => false,
+        };
+        self.writable = false;
+        self.historical = true;
+        self.pending_paste = None;
+        self.composition.clear();
+        self.ended = Some(success);
+        self.last_error = None;
+        self.last_encoded = if success {
+            "completed · terminal history retained".to_owned()
+        } else {
+            "failed · terminal history retained".to_owned()
+        };
+        cx.notify();
+    }
+
     #[cfg(not(test))]
     pub(crate) fn synchronize_catalog_labels(
         &mut self,
@@ -2301,7 +2328,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn exited_read_only_terminal_does_not_offer_live_control(cx: &mut TestAppContext) {
+    fn restored_exited_terminal_is_a_finished_surface(cx: &mut TestAppContext) {
         let (surface, cx) = cx.add_window_view(|window, cx| {
             TerminalSurface::new(window, cx).expect("terminal fixture should initialize")
         });
@@ -2309,13 +2336,17 @@ mod tests {
             surface.update(cx, |surface, cx| {
                 surface.writable = false;
                 surface.historical = true;
-                surface.ended = Some(true);
+                surface.synchronize_process_status(
+                    superplexr_protocol::TerminalSessionStatus::Exited,
+                    cx,
+                );
                 surface.last_encoded = "retained history".to_owned();
                 cx.notify();
             });
         });
         cx.update(|window, cx| window.draw(cx).clear(cx));
 
+        assert!(surface.read_with(cx, |surface, _| surface.has_ended()));
         assert!(
             cx.debug_bounds("request-terminal-control").is_none(),
             "an exited terminal cannot grant control and must not offer the action"
