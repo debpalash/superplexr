@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>The native agent multiplexer.</strong><br>
+  <strong>A GPUI experiment in native agent multiplexing.</strong><br>
   Run coding agents in parallel. Keep every terminal, decision, and result in one durable workspace.
 </p>
 
@@ -18,9 +18,11 @@
   <img src="docs/assets/launch/superplexr-desktop-demo.gif" alt="SuperPlexr native desktop switching between its terminal waterfall, command deck, and focus mode" width="100%">
 </p>
 
-SuperPlexr is an open-source desktop app for launching, supervising, and reviewing
+SuperPlexr is an experimental desktop app built with Rust and GPUI for launching, supervising, and reviewing
 multiple terminal-based coding agents. Think tmux for agent work, with Missions,
 attention, durable state, and verification built in.
+
+This is a GPUI experiment and source preview, with rough edges and ongoing changes.
 
 ## Why SuperPlexr
 
