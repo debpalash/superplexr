@@ -20,6 +20,7 @@ import tomllib
 EXECUTABLES = {
     "superplexr": "superplexr-cli",
     "superplexr-server": "superplexr-server",
+    "superplexr-daemon": "superplexr-daemon",
     "superplexr-desktop": "superplexr-desktop",
     "superplexr-tui": "superplexr-tui",
     "superplexr-observer": "superplexr-observer",

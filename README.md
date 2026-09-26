@@ -61,6 +61,12 @@ SuperPlexr stays local by default and does not require a cloud service.
 
 ## Run it
 
+Experimental binaries for macOS and Linux (x86-64 and ARM64) are published by
+the [release action](https://github.com/debpalash/superplexr/actions/workflows/release.yml).
+Each platform archive contains all eight executables; macOS also has an app bundle.
+See [Releases](https://github.com/debpalash/superplexr/releases) for available builds
+and [release notes](docs/release-notes.md) for requirements and limitations.
+
 SuperPlexr `0.1.0` is a source preview. The macOS build is usable today. Linux
 desktop code is present, with Wayland, X11, and packaging release gates still open.
 

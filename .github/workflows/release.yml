@@ -1,0 +1,156 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Validate release version
+        id: version
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, subprocess, tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
+          tag = f'v{version}'
+          if os.environ['GITHUB_REF_TYPE'] == 'tag' and os.environ['GITHUB_REF_NAME'] != tag:
+              raise SystemExit(f'Release tag must match Cargo.toml: {tag}')
+          existing = subprocess.run(['git', 'rev-parse', '--verify', f'refs/tags/{tag}^{{commit}}'], capture_output=True, text=True)
+          if existing.returncode == 0 and existing.stdout.strip() != os.environ['GITHUB_SHA']:
+              raise SystemExit(f'{tag} already points to another commit; bump the version')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f'tag={tag}\n')
+          PY
+
+  build:
+    needs: prepare
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_BUILD_JOBS: '2'
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+      LIBGHOSTTY_VT_SYS_CPU: baseline
+      RELEASE_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.11'
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+        with:
+          version: 0.16.0
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes build-essential clang cmake pkg-config \
+            libfontconfig-dev libglib2.0-dev libssl-dev libvulkan1 libwayland-dev \
+            libx11-xcb-dev libxkbcommon-x11-dev ncurses-bin
+      - name: Provision pinned Ghostty source
+        shell: bash
+        run: |
+          curl --fail --location --retry 3 --proto '=https' --tlsv1.2 \
+            --output "$RUNNER_TEMP/ghostty.tar.gz" \
+            https://github.com/ghostty-org/ghostty/archive/22d13172cde98a0a4dda05d3d6a3fcb0dd8ed018.tar.gz
+          echo "5fdb21d3744ce76dfaefb0e25fd113540906939752627a4193b88520e126c389  $RUNNER_TEMP/ghostty.tar.gz" | shasum -a 256 --check
+          mkdir "$RUNNER_TEMP/ghostty-source"
+          tar -xzf "$RUNNER_TEMP/ghostty.tar.gz" --strip-components=1 --directory "$RUNNER_TEMP/ghostty-source"
+          echo "GHOSTTY_SOURCE_DIR=$RUNNER_TEMP/ghostty-source" >> "$GITHUB_ENV"
+          echo "SOURCE_DATE_EPOCH=$(git show -s --format=%ct HEAD)" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=--remap-path-prefix=$GITHUB_WORKSPACE=/src/superplexr --remap-path-prefix=$HOME=/build" >> "$GITHUB_ENV"
+      - name: Verify toolchain and packaging checks
+        shell: bash
+        run: |
+          rustup show active-toolchain
+          rustup target add "$RELEASE_TARGET"
+          rustc --version
+          zig version
+          python3 -m unittest discover -s ci -p '*_tests.py'
+      - name: Build all eight binaries
+        run: python3 ci/build-profile.py all --online --target "$RELEASE_TARGET" --output "$RUNNER_TEMP/bundle"
+      - name: Check executable startup and shared libraries
+        shell: bash
+        run: |
+          for binary in superplexr superplexr-server superplexr-daemon superplexr-desktop superplexr-tui superplexr-observer superplexr-mcp; do
+            "$RUNNER_TEMP/bundle/bin/$binary" --help >/dev/null
+          done
+          # The agent-status plugin speaks a framed protocol, not a CLI.
+          test -x "$RUNNER_TEMP/bundle/bin/superplexr-agent-status-plugin"
+          if [ "$RUNNER_OS" = Linux ]; then
+            for binary in "$RUNNER_TEMP/bundle/bin/"*; do
+              dependencies=$(ldd "$binary")
+              printf '%s\n' "$dependencies"
+              if printf '%s\n' "$dependencies" | grep -q 'not found'; then exit 1; fi
+            done
+          fi
+      - name: Package release archives
+        run: python3 ci/package-release.py --bundle "$RUNNER_TEMP/bundle" --target "$RELEASE_TARGET" --output dist/release
+      - name: Upload platform artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: release-*
+          path: dist/release
+          merge-multiple: true
+      - name: Verify complete artifact set and generate checksums
+        run: python3 ci/package-release.py --verify-release dist/release
+      - name: Publish experimental release atomically
+        shell: bash
+        run: |
+          # Published releases are immutable here; reruns may only resume a draft.
+          if gh release view "$RELEASE_TAG" --json isDraft > "$RUNNER_TEMP/release.json" 2>/dev/null; then
+            jq -e '.isDraft == true' "$RUNNER_TEMP/release.json"
+          else
+            gh release create "$RELEASE_TAG" --target "$GITHUB_SHA" --draft --prerelease \
+              --title "SuperPlexr $RELEASE_TAG — GPUI experiment" --notes-file docs/release-notes.md
+          fi
+          gh release upload "$RELEASE_TAG" dist/release/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease --latest=false

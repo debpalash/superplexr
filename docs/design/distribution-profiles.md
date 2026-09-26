@@ -13,7 +13,7 @@ steps. Bundles are not certified releases.
 | `web` | CLI, observer gateway | Browser access through the existing scoped localhost gateway. No public TLS service implied. |
 | `desktop` | CLI, server, desktop | Native client with convenient local-host startup. |
 | `automation` | CLI, server, MCP, agent-status plugin | Host plus opt-in agent integrations. Included integrations do not start automatically. |
-| `all` | All of the above | Development installation with every interface. |
+| `all` | All of the above, plus hosted daemon | Development installation with all eight executables. |
 
 The profiles select Cargo packages explicitly, so terminal/host/web builds do not
 select the desktop package. They do not yet feature-gate all libraries inside
