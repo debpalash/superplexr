@@ -33,6 +33,31 @@ jobs:
           mkdir "$GHOSTTY_SOURCE_DIR"
           tar -xzf "$RUNNER_TEMP/ghostty.tar.gz" --strip-components=1 \
             --directory "$GHOSTTY_SOURCE_DIR"
+      - name: Prefetch pinned Ghostty zlib
+        shell: bash
+        run: |
+          # Include zlib's lazy archive, without fetching the whole Ghostty graph
+          # or running build scripts. Zig verifies the existing manifest hash.
+          cd "$GHOSTTY_SOURCE_DIR/pkg/zlib"
+          log=$(mktemp)
+          trap 'rm -f "$log"' EXIT
+          for attempt in 1 2 3; do
+            if zig build --fetch=all --color off >"$log" 2>&1; then
+              cat "$log"
+              break
+            else
+              status=$?
+            fi
+            cat "$log" >&2
+            # Retry only the observed transient fetch timeout. Hash mismatches
+            # and other failures must remain immediately visible and fatal.
+            if [ "$attempt" -eq 3 ] \
+              || ! grep -qE 'error: HTTP response read failure: Timeout$' "$log" \
+              || grep 'error:' "$log" | grep -vE 'error: HTTP response read failure: Timeout$' >/dev/null; then
+              exit "$status"
+            fi
+            sleep 5
+          done
       - name: Record toolchain
         run: |
           rustc --version

@@ -4,13 +4,15 @@ use crate::{
     AboutSuperplexr, ActivateLastWorkspace, ActivateWorkspace1, ActivateWorkspace2,
     ActivateWorkspace3, ActivateWorkspace4, ActivateWorkspace5, ActivateWorkspace6,
     ActivateWorkspace7, ActivateWorkspace8, CloseActiveWorkspace, CopyTerminal, DecreaseAppZoom,
-    DuplicateWorkspace, HideApplication, HideOtherApplications, IncreaseAppZoom, MinimizeWindow,
-    NewSession, NewTerminal, NewWorkspace, NextSession, NextWorkspace, OpenGraphInspector,
-    OpenPluginManager, OpenProviderSettings, PasteTerminal, PreviousSession, PreviousWorkspace,
-    QuitApplication, ReloadTheme, RenameWorkspace, ResetAppZoom, RestoreClosedWorkspace,
-    ShowAllApplications, ToggleCommandDeck, ToggleFocusMode, ToggleFullScreen, ToggleSidebar,
-    ToggleWorkspacePin, UseGraphiteTheme, UsePaperTheme, ZoomWindow, theme::ThemeSelection,
+    DuplicateWorkspace, IncreaseAppZoom, MinimizeWindow, NewSession, NewTerminal, NewWorkspace,
+    NextSession, NextWorkspace, OpenGraphInspector, OpenPluginManager, OpenProviderSettings,
+    PasteTerminal, PreviousSession, PreviousWorkspace, QuitApplication, ReloadTheme,
+    RenameWorkspace, ResetAppZoom, RestoreClosedWorkspace, ToggleCommandDeck, ToggleFocusMode,
+    ToggleFullScreen, ToggleSidebar, ToggleWorkspacePin, UseGraphiteTheme, UsePaperTheme,
+    ZoomWindow, theme::ThemeSelection,
 };
+#[cfg(target_os = "macos")]
+use crate::{HideApplication, HideOtherApplications, ShowAllApplications};
 
 pub(crate) fn native_menus(theme: &ThemeSelection) -> Vec<Menu> {
     vec![
@@ -105,7 +107,7 @@ pub(crate) fn native_menus(theme: &ThemeSelection) -> Vec<Menu> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{OwnedMenuItem, SystemMenuType};
+    use gpui::OwnedMenuItem;
 
     #[test]
     fn native_menu_exposes_the_complete_application_hierarchy() {
@@ -141,7 +143,7 @@ mod tests {
         #[cfg(target_os = "macos")]
         assert!(app_items.iter().any(|item| matches!(
             item,
-            OwnedMenuItem::SystemMenu(menu) if menu.menu_type == SystemMenuType::Services
+            OwnedMenuItem::SystemMenu(menu) if menu.menu_type == gpui::SystemMenuType::Services
         )));
 
         let edit_items = &menus[2].items;
